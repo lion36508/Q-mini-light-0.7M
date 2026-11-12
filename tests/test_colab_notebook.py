@@ -20,11 +20,11 @@ def test_colab_expensive_stages_fail_closed_without_gpu_and_preflight_memory():
     notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
-    five_m_stage = "".join(notebook["cells"][8]["source"])
+    light_stage = "".join(notebook["cells"][8]["source"])
     long_stage = "".join(notebook["cells"][10]["source"])
     sft_stage = "".join(notebook["cells"][12]["source"])
 
-    assert "if not torch.cuda.is_available():" in five_m_stage
+    assert "if not torch.cuda.is_available():" in light_stage
     assert "if not torch.cuda.is_available():" in long_stage
     assert "torch.cuda.mem_get_info(0)" in long_stage
     assert "LONG_MIN_FREE_GPU_GIB = 8.0" in long_stage
@@ -55,10 +55,10 @@ def test_colab_training_targets_do_not_change_checkpoint_run_identity():
     assert "'target_tokens': ACTUAL_TOKENS" not in long_identity
     assert "args.append('--extend-schedule')" in long_stage
 
-    five_m_stage = "".join(notebook["cells"][8]["source"])
-    five_m_identity = five_m_stage.split("identity_5m = {", 1)[1].split("KEY_5M =", 1)[0]
-    assert "'steps': INTERMEDIATE_5M_STEPS" not in five_m_identity
-    assert "ARGS_5M.append('--extend-schedule')" in five_m_stage
+    light_stage = "".join(notebook["cells"][8]["source"])
+    five_m_identity = light_stage.split("identity_light = {", 1)[1].split("KEY_5M =", 1)[0]
+    assert "'steps': INTERMEDIATE_LIGHT_STEPS" not in five_m_identity
+    assert "ARGS_LIGHT.append('--extend-schedule')" in light_stage
 
     sft_stage = "".join(notebook["cells"][12]["source"])
     sft_identity = sft_stage.split("json.dumps({", 1)[1].split("SFT_KEY =", 1)[0]
@@ -70,7 +70,7 @@ def test_sft_never_silently_selects_the_tiny_smoke_checkpoint():
     notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
     sft_stage = ''.join(notebook['cells'][12]['source'])
     assert 'SFT_SOURCE_OVERRIDE = None' in sft_stage
-    assert 'SFT_MINIMUM_SOURCE_PARAMETERS = 50_000_000' in sft_stage
+    assert 'SFT_MINIMUM_SOURCE_PARAMETERS = 500_000' in sft_stage
     assert 'base_*/final_model/model_manifest.json' in sft_stage
     assert 'qmini-final-model-v2' in sft_stage
     assert "SFT_SOURCE = SMOKE/'final_model'" not in sft_stage
@@ -217,3 +217,19 @@ def test_training_runner_is_separate_and_has_verified_resume_controls():
     assert activation.index("restore_latest_checkpoint") < activation.index("train_model(")
 
 
+
+
+def test_light_profile_reduces_size_but_keeps_core_model_mechanisms():
+    from qmini.config import QMiniConfig
+
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "qmini_light_0.7m.json"
+    config = QMiniConfig.from_json(config_path)
+    assert config.estimated_parameter_count() == 705_742
+    assert config.d_model == 64
+    assert config.d_hidden == 128
+    assert config.n_layers == 6
+    assert config.n_experts == 2
+    assert config.top_k == 1
+    assert config.use_state_space is True
+    assert config.gradient_checkpointing is True
+    assert config.max_thinking_steps == 4
