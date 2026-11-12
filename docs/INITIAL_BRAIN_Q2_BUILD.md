@@ -4,14 +4,14 @@ This process creates an **untrained, random-initialized Q-Mini model** whose del
 
 ## Google Colab
 
-For the automated build-only workflow, open [Q-Mini Initial Brain Builder](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Initial_Brain_Build.ipynb) in Colab and run the cells from top to bottom. It defaults to the repository's 5B-class configuration, checks available RAM and storage, builds locally, verifies the Q2-v2 archive, and publishes a hash-checked copy to Drive. It does not train the model.
+For the automated build-only workflow, open [Q-Mini Light 0.7M Initial Brain Builder](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Initial_Brain_Build.ipynb) in Colab and run the cells from top to bottom. It defaults to the repository's 0.7M-class configuration, checks available RAM and storage, builds locally, verifies the Q2-v2 archive, and publishes a hash-checked copy to Drive. It does not train the model.
 
 Mount Drive and clone the repository:
 
 ```python
 from google.colab import drive
 drive.mount("/content/drive")
-!git clone https://github.com/lion36508/Q-Mini.git
+!git clone https://github.com/lion36508/Q-mini-light-0.7M.git
 %cd Q-Mini
 !pip install -e .
 ```
@@ -21,8 +21,8 @@ Run the build into a new, unique folder. The builder refuses to overwrite an exi
 ```bash
 REVISION=$(git rev-parse HEAD)
 qmini build-initial \
-  --config configs/qmini_5b.json \
-  --output-dir /content/drive/MyDrive/QMini/initial_brains/QMini-5B-Q2v2-initial-001 \
+  --config configs/qmini_light_0.7m.json \
+  --output-dir /content/drive/MyDrive/QMini/initial_brains/QMini-0.7M-Q2v2-initial-001 \
   --source-revision "$REVISION"
 ```
 
@@ -30,7 +30,7 @@ Verify the artifact:
 
 ```bash
 qmini verify-export \
-  --path /content/drive/MyDrive/QMini/initial_brains/QMini-5B-Q2v2-initial-001/model.qmini.npz
+  --path /content/drive/MyDrive/QMini/initial_brains/QMini-0.7M-Q2v2-initial-001/model.qmini.npz
 ```
 
 ## Output
@@ -39,7 +39,7 @@ qmini verify-export \
 - model.qmini.npz — Q2-v2 two-bit matrix weights, FP32 row scales and FP16 one-dimensional parameters.
 - model_manifest.json — parameter count, Q2-v2 contract, artifact size and SHA-256, source revision, and explicit zero training/optimizer steps.
 
-The builder creates model components sequentially in the same order as QMiniMoE initialization. It packs each component before releasing it, verifies the Q2 archive, and uses the packed/meta loader to validate every expected parameter name and shape without allocating all dense 5B weights.
+The builder creates model components sequentially in the same order as QMiniMoE initialization. It packs each component before releasing it, verifies the Q2 archive, and uses the packed/meta loader to validate every expected parameter name and shape without allocating all dense 0.7M weights.
 
 ## Precision contract
 
@@ -47,6 +47,6 @@ Q2-v2 is the production/deployment matrix-weight format. During later Quantizati
 
 ## Training is a separate stage
 
-The initial artifact is not trained and does not include a tokenizer. The later training workflow must provide matching Q-Mini data streams and tokenizer. QAT training materializes trainable master parameters; the 5B profile cannot be trained by the current single-device Colab trainer. Distributed FSDP/ZeRO training remains a separate prerequisite tracked in issue #18. A packed 2-bit artifact does not make training fit into 2-bit memory.
+The initial artifact is not trained and does not include a tokenizer. The later training workflow must provide matching Q-Mini data streams and tokenizer. QAT training materializes trainable master parameters; the 0.7M profile cannot be trained by the current single-device Colab trainer. Distributed FSDP/ZeRO training remains a separate prerequisite tracked in issue #18. A packed 2-bit artifact does not make training fit into 2-bit memory.
 
 Do not delete older FP32 shards as part of this migration. Keep them as a separate backup/diagnostic artifact until the new Q2-v2 output has been independently verified.

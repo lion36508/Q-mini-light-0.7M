@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="qmini", description="Q-Mini model, dataset and training pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
     audit = commands.add_parser("audit", help="inspect model configuration and runtime")
-    audit.add_argument("--config", default="configs/qmini_base.json")
+    audit.add_argument("--config", default="configs/qmini_light_0.7m.json")
     def do_audit(args):
         cfg = QMiniConfig.from_json(args.config)
         parameters = cfg.estimated_parameter_count()
@@ -168,7 +168,7 @@ def main() -> int:
     tok = commands.add_parser("tokenizer", help="train a local BPE tokenizer")
     tok.add_argument("--data-dir", nargs="+", required=True); tok.add_argument("--output", required=True)
     tok.add_argument("--vocab-size", type=int, default=4096); tok.add_argument("--min-frequency", type=int, default=2)
-    tok.add_argument("--base-config", default="configs/qmini_base.json"); tok.add_argument("--config-output", required=True)
+    tok.add_argument("--base-config", default="configs/qmini_light_0.7m.json"); tok.add_argument("--config-output", required=True)
     tok.add_argument("--valid-fraction", type=float, default=0.02,
         help="use the same document holdout fraction as data preparation")
     tok.add_argument(

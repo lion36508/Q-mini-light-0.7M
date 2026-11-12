@@ -16,7 +16,7 @@ The model builder has no training-enable switch and does not construct an optimi
 - `training_state/training_progress.json` — the one current progress record, initially step 0
 - `BUILD_REPORT.json` — model, data, tokenizer, precision and build evidence
 
-The package is stored at `MyDrive/QMini/training_ready/QMini-152M-Q2v2-<fingerprint>/`.
+The package is stored at `MyDrive/QMini/training_ready/QMini-Light-0.7M-Q2v2-<fingerprint>/`.
 
 ## Stage B — start/resume training separately
 
@@ -24,7 +24,7 @@ Open [QMini Training Runner](https://colab.research.google.com/github/lion36508/
 
 Training is off by default. Set `START_TRAINING = True` only when ready. The runner creates its working checkpoint on Colab's local disk and uses the Drive folder `training_state/` as the durable checkpoint mirror.
 
-The runner's default training profile is the repository's 152M-class hybrid configuration, with a 100-step checkpoint interval. This bounds the amount of training that must be repeated after a sudden interruption; use a smaller interval only after considering the additional Drive upload volume. Adjust the total optimizer-step target to the complete target number, not an additional number of steps. On resume, keep the data, tokenizer, batch size, sequence length, gradient accumulation and learning-rate contract identical. Increasing the target deliberately extends the schedule.
+The runner's default training profile is the repository's 0.7M-class hybrid configuration, with a 100-step checkpoint interval. This bounds the amount of training that must be repeated after a sudden interruption; use a smaller interval only after considering the additional Drive upload volume. Adjust the total optimizer-step target to the complete target number, not an additional number of steps. On resume, keep the data, tokenizer, batch size, sequence length, gradient accumulation and learning-rate contract identical. Increasing the target deliberately extends the schedule.
 
 ## Checkpoint and interruption protocol
 
@@ -47,7 +47,7 @@ The progress state values include `not_started`, `checkpointed`, and `completed`
 - The architecture remains attention-free: causal convolution + gated diagonal state-space + sparse Top-1 MoE. No Transformer attention or Q/K/V attention is added.
 - No external pretrained model weights are downloaded or loaded.
 - Q2-v2 matrix symbols are 2-bit. Row scales are FP32, one-dimensional parameters are FP16, and current QAT master parameters and AdamW optimizer state are FP32. This is not an all-state 2-bit trainer.
-- The current single-device trainer is for the 152M-class Colab research configuration, subject to actual VRAM. It is not a 5B distributed trainer. FSDP/ZeRO sharded optimizer/checkpoint support remains a separate implementation requirement.
+- The current single-device trainer is configured for the 0.7M Light model, subject to actual VRAM. It is not a 5B distributed trainer. FSDP/ZeRO sharded optimizer/checkpoint support remains a separate implementation requirement.
 - A saved checkpoint proves resumable training state, not assistant quality. Language capability still requires real licensed data, training, and independent held-out evaluations.
 
 

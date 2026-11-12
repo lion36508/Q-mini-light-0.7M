@@ -99,10 +99,10 @@ def test_colab_runs_random_brain_architecture_preflight_before_dataset_loading()
     tokenizer_data_stage = "".join(notebook["cells"][4]["source"])
 
     assert "qmini.cli','preflight'" in preflight
-    assert "qmini_research_152m.json" in preflight
+    assert "qmini_light_0.7m.json" in preflight
     assert "'--sequence-length','8'" in preflight
     assert "if torch.cuda.is_available():" in preflight
-    assert "qmini_research_152m.json" in preflight
+    assert "qmini_light_0.7m.json" in preflight
     assert "qmini_smoke.json" in preflight
     assert "PREFLIGHT_DEVICE = 'cpu'" in preflight
     assert "'--device',PREFLIGHT_DEVICE" in preflight
@@ -150,7 +150,7 @@ def test_training_ready_builder_bundles_dormant_training_runtime_and_never_start
     settings = code_cells[0]
     build = code_cells[4]
     final_guard = code_cells[5]
-    assert 'MODEL_CONFIG_REL = "configs/qmini_research_152m.json"' in settings
+    assert 'MODEL_CONFIG_REL = "configs/qmini_light_0.7m.json"' in settings
     assert "RUN_TRAINING_NOW" not in settings
     assert "build-initial" in build
     assert "verify_packed_export" in build

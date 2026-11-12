@@ -1,10 +1,10 @@
-# Q-Mini — Attention-Free CausalConv + State-Space MoE Language Model
+# Q-Mini Light 0.7M — Attention-Free CausalConv + State-Space MoE Language Model
 
 **Q-Mini is a from-scratch language-model research project aimed at becoming a compact, capable, offline-friendly text assistant.** It is not an Android app, a hosted-chatbot wrapper, or a fine-tune of downloaded pretrained weights. The model starts from random initialization. PyTorch supplies tensor operations, automatic differentiation and optimization; the tokenizer is trained locally from permitted corpus data.
 
 > **Current status:** the repository contains an executable small-model baseline, training and data pipeline, reference text generation, packed-weight export utilities, a C++ projection primitive, tests and CI. It does **not** yet contain a trained, generally capable assistant, a complete packed-integer runtime, a finished Android app, persistent personal memory or unrestricted autonomous tool execution. This README separates implemented code from long-term goals.
 
-[![Q-Mini CI](https://github.com/lion36508/Q-Mini/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-Mini/actions/workflows/tests.yml)
+[![Q-Mini CI](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml)
 
 ## Build an untrained Q2-v2 initial brain
 
@@ -88,7 +88,7 @@ With kernel width 10 and the configured dilations, the six main blocks have a th
 
 ### Higher-capacity training profile
 
-The compact configs/qmini_base.json profile is retained for CPU smoke tests and low-resource development. The historical convolution-only profile is configs/qmini_research_134m.json. The updated Colab pipeline uses configs/qmini_research_152m.json, a hybrid profile:
+The compact configs/qmini_base.json profile is retained for CPU smoke tests and low-resource development. The historical convolution-only profile is configs/qmini_research_134m.json. The updated Colab pipeline uses configs/qmini_light_0.7m.json, a hybrid profile:
 
 | Setting | Research profile |
 |---|---:|
@@ -242,7 +242,7 @@ The notebook and CLI contain the tokenizer, data preparation, training, resume, 
 - qmini/memory.py — opt-in local SQLite/FTS5 memory with explicit CRUD and JSON export.
 - qmini/native_kernel.cpp, qmini/native.py — packed INT8-by-Q2 CPU projection, AArch64/NEON path, scalar fallback and versioned Q2 ABI detection.
 - scripts/benchmark.py — repeatable full-forward, streaming prefill and cached autoregressive decode benchmark.
-- configs/ — compact base, 5M, historical 134M, hybrid 152M, 5B capacity and smoke configurations.
+- configs/ — compact base, 5M, historical 134M, hybrid 0.7M, 5B capacity and smoke configurations.
 - tests/ — model, causality, quantization, data, training, export and native tests.
 - docs/ — architecture, training, evaluation and project scope.
 - colab/ — Colab training notebook.
@@ -279,20 +279,20 @@ No Transformer self-attention, Q/K/V projections or dot-product attention are in
 
 | Profile | Total parameters | Unique Top-1 active parameters/token | Purpose |
 |---|---:|---:|---|
-| `qmini_5m.json` | 5,245,996 | 3,070,636 | Small-scale development |
+| `qmini_light_0.7m.json` | **705,742** | Lightweight default training target |\n| `qmini_5m.json` | 5,245,996 | 3,070,636 | Small-scale development |
 | `qmini_research_134m.json` | 134,426,200 | 33,372,632 | Historical convolution-only baseline |
-| `qmini_research_152m.json` | 152,483,800 | 51,430,232 | Hybrid GPU research profile |
+| `qmini_research_0.7m.json` | 152,483,800 | 51,430,232 | Hybrid GPU research profile |
 | `qmini_5b.json` | 5,132,630,288 | 852,873,488 | Capacity design, not currently distributed-training-ready |
 
 The CLI can inspect a config without allocating the model:
 
 ```bash
 python -m qmini.cli plan --config configs/qmini_5m.json
-python -m qmini.cli plan --config configs/qmini_research_152m.json
+python -m qmini.cli plan --config configs/qmini_light_0.7m.json
 python -m qmini.cli plan --config configs/qmini_5b.json
 ```
 
-FP32 parameter/gradient/AdamW-state lower bounds are approximately 83.9 MB for 5M, 2.44 GB for 152M and 82.1 GB for 5B. These figures exclude activation memory, CUDA workspaces, fragmentation and communication. The 5B profile is not a single-H100 training recipe: this repository still has no FSDP/ZeRO, expert parallelism or tensor parallelism.
+FP32 parameter/gradient/AdamW-state lower bounds are approximately 83.9 MB for 5M, 2.44 GB for 0.7M and 82.1 GB for 5B. These figures exclude activation memory, CUDA workspaces, fragmentation and communication. The 5B profile is not a single-H100 training recipe: this repository still has no FSDP/ZeRO, expert parallelism or tensor parallelism.
 
 ## 14. Training budget and staged instruction fine-tuning
 
@@ -352,7 +352,7 @@ The default \`--near-duplicate-hamming-distance 0\` keeps exact-deduplication be
 
 ## Colab training and SFT stages
 
-The notebook now defaults to a small, reproducible learning-proof run: fixed-seed held-out NLL is measured before and after training. The 152M long run requires explicit \`RUN_LONG_TRAINING = True\` opt-in and has no arbitrary 2,000-step cap. Set LONG_OPTIMIZER_STEPS_OVERRIDE to choose the total optimizer-step target, or leave it None to use the documented token-budget heuristic. Increasing the target reuses the same Drive checkpoint and extends the saved learning-rate schedule. Optional assistant SFT is also disabled by default; when enabled, it uses a separate licensed dataset, response-only masks, a tokenizer-bound Q-Mini checkpoint and fresh optimizer state. The notebook never downloads pretrained weights. A small learning-proof or smoke run is not evidence of general assistant quality.
+The notebook now defaults to a small, reproducible learning-proof run: fixed-seed held-out NLL is measured before and after training. The 0.7M long run requires explicit \`RUN_LONG_TRAINING = True\` opt-in and has no arbitrary 2,000-step cap. Set LONG_OPTIMIZER_STEPS_OVERRIDE to choose the total optimizer-step target, or leave it None to use the documented token-budget heuristic. Increasing the target reuses the same Drive checkpoint and extends the saved learning-rate schedule. Optional assistant SFT is also disabled by default; when enabled, it uses a separate licensed dataset, response-only masks, a tokenizer-bound Q-Mini checkpoint and fresh optimizer state. The notebook never downloads pretrained weights. A small learning-proof or smoke run is not evidence of general assistant quality.
 
 ## Experimental quantization ablation
 
