@@ -66,7 +66,9 @@ jobs:
                   if cell.get("cell_type") == "code":
                       source = cell.get("source", [])
                       source = source if isinstance(source, str) else "".join(source)
-                      ast.parse(source, filename=f"{path}:cell-{index}")
+                      parsed = ast.parse(source, filename=f"{path}:cell-{index}")
+                      if not parsed.body:
+                          raise SystemExit(f"Empty or comment-only code cell: {path}:cell-{index}")
                       count += 1
               if count < 1:
                   raise SystemExit(f"No executable cells in {path}")
