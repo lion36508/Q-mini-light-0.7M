@@ -14,7 +14,7 @@ For the step-zero two-bit Q2-v2 build of the 0.7M Light model, use [the initial-
 
 Use [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb) to create the model package, tokenizer, prepared corpus and a **dormant bundled training runtime** in Google Drive. It never starts training.
 
-Later, open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Training_Runner.ipynb) and explicitly set `START_TRAINING = True`. It resumes from the newest verified Drive checkpoint and updates a single progress record after each verified save. See [the lifecycle and recovery documentation](docs/COLAB_TRAINING_READY_BUILD.md).
+Later, open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Runner.ipynb) and explicitly set `START_TRAINING = True`. It resumes from the newest verified Drive checkpoint and updates a single progress record after each verified save. See [the lifecycle and recovery documentation](docs/COLAB_TRAINING_READY_BUILD.md).
 
 ## 1. Project vision
 
