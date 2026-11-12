@@ -24,7 +24,7 @@ Open [QMini Training Runner](https://colab.research.google.com/github/lion36508/
 
 Training is off by default. Set `START_TRAINING = True` only when ready. The runner creates its working checkpoint on Colab's local disk and uses the Drive folder `training_state/` as the durable checkpoint mirror.
 
-The runner's default training profile is the repository's 0.7M-class hybrid configuration, with a 100-step checkpoint interval. This bounds the amount of training that must be repeated after a sudden interruption; use a smaller interval only after considering the additional Drive upload volume. Adjust the total optimizer-step target to the complete target number, not an additional number of steps. On resume, keep the data, tokenizer, batch size, sequence length, gradient accumulation and learning-rate contract identical. Increasing the target deliberately extends the schedule.
+The runner's default training profile is the repository's 0.7M-class hybrid configuration, with a 10-step checkpoint interval. This bounds the amount of training that must be repeated after a sudden interruption; use a smaller interval only after considering the additional Drive upload volume. Adjust the total optimizer-step target to the complete target number, not an additional number of steps. On resume, keep the data, tokenizer, batch size, sequence length, gradient accumulation and learning-rate contract identical. Increasing the target deliberately extends the schedule.
 
 ## Checkpoint and interruption protocol
 
@@ -38,7 +38,7 @@ Publishing is ordered: upload each file to a temporary name, fsync it, verify it
 
 The last two complete checkpoint generations are kept for rollback. A partial upload is ignored. If the latest generation is damaged, restore falls back to the previous verified generation. A session lease/heartbeat prevents two active Colab notebooks from writing to the same checkpoint store; an abandoned lease is recoverable after three minutes without a heartbeat.
 
-A runtime loss between save intervals can lose the work since the last verified checkpoint. The default interval limits this window to at most 99 completed steps, subject to interruption timing. An unavailable Drive mount stops the save path rather than advancing the progress number without a verified copy.
+A runtime loss between save intervals can lose the work since the last verified checkpoint. The default interval limits this window to at most 9 completed steps, subject to interruption timing. An unavailable Drive mount stops the save path rather than advancing the progress number without a verified copy.
 
 The progress state values include `not_started`, `checkpointed`, and `completed`. `completed` is written only after the final trained Q2-v2 export has also been copied and hash-verified in Drive. The initial model remains unchanged; trained deployment exports are saved separately under `trained_models/`.
 
