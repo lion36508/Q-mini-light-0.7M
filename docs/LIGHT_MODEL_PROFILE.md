@@ -11,7 +11,7 @@ This repository is the isolated lightweight development track. Its active model 
 | Model width | 64 |
 | Expert hidden width | 128 |
 | Main causal blocks | 6 |
-| Experts per block | 2 |
+| Experts per block | 2 (Top-1 routing retained) |
 | Routing | Top-1 |
 | Context limit | 4,096 tokens |
 | Causal convolution kernel | 10 |
@@ -21,7 +21,7 @@ This repository is the isolated lightweight development track. Its active model 
 | Matrix-weight format | Q2-v2, four-level 2-bit codebook |
 | Activation path | Signed INT8 fake quantization |
 
-The model keeps the same implementation family as Q-Mini: text-only causal sequence processing, no Transformer self-attention or Q/K/V attention, the gated diagonal state-space path, sparse Top-1 experts, shared refinement, Q2-v2 matrix quantization, local tokenizer/data preparation, resumable checkpoints, evaluation and the existing CI/test suite. The width, hidden size, layer count, expert count and vocabulary are smaller to reach the Light parameter budget.
+The Light profile reduces the 5B-scale width, hidden size and expert count rather than deleting the mechanisms. It keeps both experts active as a Top-1 sparse-routing design (16 experts become 2), and preserves the gated diagonal state-space path, four-step shared refinement, Q2-v2 quantization and checkpoint recovery. The model keeps the same implementation family as Q-Mini: text-only causal sequence processing, no Transformer self-attention or Q/K/V attention, the gated diagonal state-space path, sparse Top-1 experts, shared refinement, Q2-v2 matrix quantization, local tokenizer/data preparation, resumable checkpoints, evaluation and the existing CI/test suite. The width, hidden size, layer count, expert count and vocabulary are smaller to reach the Light parameter budget.
 
 ## Isolation and defaults
 
