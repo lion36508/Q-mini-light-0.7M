@@ -62,7 +62,7 @@ The Light configuration reduces capacity while keeping the important model mecha
 | Main causal blocks | 6 |
 | Experts per block | 2 |
 | Active experts per token | Top-1 |
-| Maximum context | 4,096 tokens |
+| Maximum context | 512 tokens |
 | Convolution kernel width | 10 |
 | Convolution dilations | 1, 2, 4, 8, 16, 32 |
 | Gated diagonal state-space | Enabled |
@@ -90,7 +90,7 @@ Token IDs
   -> Next-token logits
 ~~~
 
-With kernel width 10 and the configured dilations, the six convolution blocks have a theoretical receptive field of 568 tokens. The Light profile uses a 4,096-token context, with the gated diagonal state-space path providing the recurrent long-range sequence state. Parameter count must always be read from the instantiated model using the sum of parameter tensor sizes; configuration changes alter the total.
+With kernel width 10 and the configured dilations, the six convolution blocks have a theoretical receptive field of 568 tokens. The Light profile uses a 512-token context, with the gated diagonal state-space path providing the recurrent long-range sequence state. Parameter count must always be read from the instantiated model using the sum of parameter tensor sizes; configuration changes alter the total.
 
 
 ### Q-Mini Light 0.7M training profile
