@@ -56,7 +56,9 @@ jobs:
                   if cell.get("cell_type") == "code":
                       source = cell.get("source", [])
                       source = source if isinstance(source, str) else "".join(source)
-                      ast.parse(source, filename=f"{path}:cell-{index}")
+                      parsed = ast.parse(source, filename=f"{path}:cell-{index}")
+                      if not parsed.body:
+                          raise SystemExit(f"Empty or comment-only code cell: {path}:cell-{index}")
                       code_cells += 1
               if code_cells < 1:
                   raise SystemExit(f"Notebook contains no executable Python cells: {path}")
