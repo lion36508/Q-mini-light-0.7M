@@ -46,7 +46,9 @@ These are **training and product objectives**, not claims that the current rando
 
 ## 3. Current architecture baseline
 
-**Active Light profile:** 705,742 estimated parameters at a 4,096-token vocabulary. It retains causal depthwise convolution, the gated diagonal SSM, two-expert sparse Top-1 routing, shared refinement, Q2-v2 matrix quantization, INT8 activations, the training/checkpoint pipeline, evaluation and CI. The original 5B repository remains separate and is not selected or modified by the Light workflow.\n\nThe Light configuration reduces capacity while keeping the important model mechanisms. Larger configs in this repository are reference profiles only; the Light defaults select configs/qmini_light_0.7m.json.
+**Active Light profile:** 705,742 estimated parameters at a 4,096-token vocabulary. It retains causal depthwise convolution, the gated diagonal SSM, two-expert sparse Top-1 routing, shared refinement, Q2-v2 matrix quantization, INT8 activations, the training/checkpoint pipeline, evaluation and CI. The original 5B repository remains separate and is not selected or modified by the Light workflow.
+
+The Light configuration reduces capacity while keeping the important model mechanisms. Larger configs in this repository are reference profiles only; the Light defaults select configs/qmini_light_0.7m.json.
 
 | Component | Light profile |
 |---|---:|
