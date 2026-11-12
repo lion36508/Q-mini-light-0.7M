@@ -59,3 +59,7 @@ The progress state values include `not_started`, `checkpointed`, and `completed`
 - The training runner does not restore or mutate checkpoint state in its display/preflight cell. It acquires the writer lease first, then restores the latest complete Drive generation while holding that lease.
 - Resume compares data, tokenizer, config and optimizer settings while preserving the original step-zero model fingerprint. The original initialization lineage remains in later run manifests and checkpoints.
 - A Python exception marks the progress status as `interrupted` where Drive is reachable. A hard Colab runtime loss is detected on the next launch when the prior status remains `running` but no live lease can be acquired.
+
+## Private repository access from Colab
+
+The Training-Ready Builder clones this private repository. Give Colab access to GitHub and either provide a fine-grained token in the Colab secret QMINI_GITHUB_TOKEN or enter it at the hidden prompt. Restrict the token to this repository with Contents: Read-only permission. It is passed only to the Git process as a temporary authentication header and is not written into the notebook, Drive package or repository.
