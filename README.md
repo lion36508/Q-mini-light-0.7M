@@ -105,7 +105,7 @@ The active Colab profile is `configs/qmini_light_0.7m.json`. At the configured 4
 | Main causal blocks | 6 |
 | Experts per block | 2 |
 | Active experts | Top-1 |
-| Maximum context | 4,096 tokens |
+| Maximum context | 512 tokens |
 | Convolution kernel | 10 |
 | Dilations | 1, 2, 4, 8, 16, 32 |
 | Shared refinement | 1–4 passes |
