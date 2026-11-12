@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qmini"
+version = "0.1.0"
+description = "From-scratch two-bit Q2-v2 causal-convolution sparse-MoE language model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "torch>=2.10.0", "tokenizers>=0.15"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+colab = ["pyarrow>=15.0"]
+
+[project.scripts]
+qmini = "qmini.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qmini*", "scripts*"]
+
+[tool.setuptools.package-data]
+qmini = ["native_kernel.cpp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
