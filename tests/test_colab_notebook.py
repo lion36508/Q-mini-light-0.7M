@@ -234,6 +234,7 @@ def test_light_profile_reduces_size_but_keeps_core_model_mechanisms():
     assert config.use_state_space is True
     assert config.gradient_checkpointing is True
     assert config.max_thinking_steps == 4
+    assert config.max_context == 512
 
 
 def test_training_ready_and_runner_notebooks_contain_executable_code():
@@ -276,3 +277,9 @@ def test_training_runner_defaults_match_the_bundled_package_contract():
     assert 'runtime_dir / "TRAINING_DEFAULTS.json"' in package_builder
     assert '"checkpoint_every_optimizer_steps": 10' in package_builder
     assert "CHECKPOINT_EVERY = 10" in settings
+    assert "SEQUENCE_LENGTH = 512" in settings
+    builder_settings = "".join(builder["cells"][1]["source"])
+    assert "TRAIN_SEQUENCE_LENGTH = 512" in builder_settings
+    assert '"sequence_length": TRAIN_SEQUENCE_LENGTH' in package_builder
+    assert "config.max_context != 512" in validation
+    assert "packaged_sequence_length != config.max_context" in validation
