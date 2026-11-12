@@ -4,6 +4,14 @@ import pytest
 from qmini.config import QMiniConfig
 
 
+def test_default_and_light_profile_context_are_512():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert QMiniConfig().max_context == 512
+    light = QMiniConfig.from_json(root / "configs" / "qmini_light_0.7m.json")
+    assert light.max_context == 512
+
+
 def test_config_round_trip(tmp_path):
     original = QMiniConfig(
         vocab_size=512, d_model=32, d_hidden=48, n_layers=2,
