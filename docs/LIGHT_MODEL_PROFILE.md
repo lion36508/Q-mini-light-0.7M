@@ -35,4 +35,4 @@ The Light profile reduces the 5B-scale width, hidden size and expert count rathe
 
 Use the Training-Ready Builder to create a 0.7M package with its own tokenizer, dataset fingerprint, initial Q2 artifact and dormant runtime. Start actual training only from the separate runner after reviewing data licensing, GPU memory, free storage and the checkpoint/optimizer budget.
 
-The CI suite must pass before treating a code change as stable. Learning quality still needs fixed held-out data, measured post-training improvement, independent task/conversation benchmarks and real training runs.
+The 0.7M profile is small enough for the existing single-device trainer; FSDP/ZeRO is not required for this Light track. Keep distributed sharding work for the separate 5B-scale project. The Colab runner still uses a conservative free-GPU-memory preflight and keeps training disabled until a user explicitly activates it.\n\nThe CI suite must pass before treating a code change as stable. Learning quality still needs fixed held-out data, measured post-training improvement, independent task/conversation benchmarks and real training runs.
