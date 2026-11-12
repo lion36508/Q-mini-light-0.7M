@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -233,3 +234,45 @@ def test_light_profile_reduces_size_but_keeps_core_model_mechanisms():
     assert config.use_state_space is True
     assert config.gradient_checkpointing is True
     assert config.max_thinking_steps == 4
+
+
+def test_training_ready_and_runner_notebooks_contain_executable_code():
+    for name in (
+        "QMini_Training_Ready_Build.ipynb",
+        "QMini_Training_Runner.ipynb",
+    ):
+        notebook_path = Path(__file__).resolve().parents[1] / "colab" / name
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        code_cells = [
+            (index, cell)
+            for index, cell in enumerate(notebook["cells"])
+            if cell.get("cell_type") == "code"
+        ]
+        assert code_cells, name
+        for index, cell in code_cells:
+            source_parts = cell.get("source", [])
+            source = source_parts if isinstance(source_parts, str) else "".join(source_parts)
+            assert source.strip(), f"{name}:cell-{index} is empty"
+            parsed = ast.parse(source, filename=f"{name}:cell-{index}")
+            assert parsed.body, f"{name}:cell-{index} is comment-only or a no-op"
+
+
+def test_training_runner_defaults_match_the_bundled_package_contract():
+    root = Path(__file__).resolve().parents[1]
+    runner = json.loads(
+        (root / "colab" / "QMini_Training_Runner.ipynb").read_text(encoding="utf-8")
+    )
+    builder = json.loads(
+        (root / "colab" / "QMini_Training_Ready_Build.ipynb").read_text(encoding="utf-8")
+    )
+    settings = "".join(runner["cells"][1]["source"])
+    setup = "".join(runner["cells"][2]["source"])
+    validation = "".join(runner["cells"][3]["source"])
+    package_builder = "".join(builder["cells"][5]["source"])
+
+    assert 'TRAINING_DEFAULTS_PATH = RUNTIME_DIR / "TRAINING_DEFAULTS.json"' in setup
+    assert "TRAINING_DEFAULTS_PATH.is_file()" in setup
+    assert "training_defaults = json.loads(TRAINING_DEFAULTS_PATH.read_text" in validation
+    assert 'runtime_dir / "TRAINING_DEFAULTS.json"' in package_builder
+    assert '"checkpoint_every_optimizer_steps": 10' in package_builder
+    assert "CHECKPOINT_EVERY = 10" in settings
