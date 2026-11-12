@@ -5,7 +5,7 @@
   "n_layers": 6,
   "n_experts": 2,
   "top_k": 1,
-  "max_context": 4096,
+  "max_context": 512,
   "kernel_size": 10,
   "dilations": [1, 2, 4, 8, 16, 32],
   "max_thinking_steps": 4,
