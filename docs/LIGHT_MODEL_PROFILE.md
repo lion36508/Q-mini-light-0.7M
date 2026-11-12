@@ -13,7 +13,7 @@ This repository is the isolated lightweight development track. Its active model 
 | Main causal blocks | 6 |
 | Experts per block | 2 (Top-1 routing retained) |
 | Routing | Top-1 |
-| Context limit | 4,096 tokens |
+| Context limit | 512 tokens |
 | Causal convolution kernel | 10 |
 | Dilations | 1, 2, 4, 8, 16, 32 |
 | State-space path | Gated diagonal SSM enabled |
