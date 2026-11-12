@@ -2,9 +2,9 @@
 
 ## Stage A — build the model package (training stays off)
 
-Open [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Training_Ready_Build.ipynb).
+Open [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb).
 
-Place reviewed corpus files in `MyDrive/QMini/datasets/`. The notebook prepares the byte-level BPE tokenizer, train/validation token streams and loss masks, then builds the random-initialized Q2-v2 model. It bundles the current `qmini/` source tree—including the training loop and checkpoint manager—under `training_runtime/`.
+Place reviewed corpus files in `MyDrive/QMini-Light-0.7M/datasets/`. The notebook prepares the byte-level BPE tokenizer, train/validation token streams and loss masks, then builds the random-initialized Q2-v2 model. It bundles the current `qmini/` source tree—including the training loop and checkpoint manager—under `training_runtime/`.
 
 The model builder has no training-enable switch and does not construct an optimizer, run backward passes or update model weights. The package starts with:
 
@@ -16,7 +16,7 @@ The model builder has no training-enable switch and does not construct an optimi
 - `training_state/training_progress.json` — the one current progress record, initially step 0
 - `BUILD_REPORT.json` — model, data, tokenizer, precision and build evidence
 
-The package is stored at `MyDrive/QMini/training_ready/QMini-Light-0.7M-Q2v2-<fingerprint>/`.
+The package is stored at `MyDrive/QMini-Light-0.7M/training_ready/QMini-Light-0.7M-Q2v2-<fingerprint>/`.
 
 ## Stage B — start/resume training separately
 
@@ -47,7 +47,7 @@ The progress state values include `not_started`, `checkpointed`, and `completed`
 - The architecture remains attention-free: causal convolution + gated diagonal state-space + sparse Top-1 MoE. No Transformer attention or Q/K/V attention is added.
 - No external pretrained model weights are downloaded or loaded.
 - Q2-v2 matrix symbols are 2-bit. Row scales are FP32, one-dimensional parameters are FP16, and current QAT master parameters and AdamW optimizer state are FP32. This is not an all-state 2-bit trainer.
-- The current single-device trainer is configured for the 0.7M Light model, subject to actual VRAM. It is not a 5B distributed trainer. FSDP/ZeRO sharded optimizer/checkpoint support remains a separate implementation requirement.
+- The current single-device trainer is configured for the 0.7M Light model, subject to actual VRAM. The separate original Q-Mini 5B project is not modified or selected by this workflow. FSDP/ZeRO sharded optimizer/checkpoint support remains a separate implementation requirement.
 - A saved checkpoint proves resumable training state, not assistant quality. Language capability still requires real licensed data, training, and independent held-out evaluations.
 
 

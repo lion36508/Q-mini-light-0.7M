@@ -8,11 +8,11 @@
 
 ## Build an untrained Q2-v2 initial brain
 
-For the step-zero two-bit Q2-v2 build (without allocating the complete dense 5B model), use [the initial-brain Colab and CLI guide](docs/INITIAL_BRAIN_Q2_BUILD.md). Production matrix weights are exported as verified Q2-v2 (2 bits per symbol). The current QAT trainer still uses FP32 master parameters and optimizer state; this is a training-memory limitation, not a Q2 deployment artifact.
+For the step-zero two-bit Q2-v2 build of the 0.7M Light model, use [the initial-brain Colab and CLI guide](docs/INITIAL_BRAIN_Q2_BUILD.md). Production matrix weights are exported as verified Q2-v2 (2 bits per symbol). The current QAT trainer still uses FP32 master parameters and optimizer state; this is a training-memory limitation, not a Q2 deployment artifact.
 
-## Separate Q-Mini model build and training runner
+## Separate Light model build and training runner
 
-Use [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Training_Ready_Build.ipynb) to create the model package, tokenizer, prepared corpus and a **dormant bundled training runtime** in Google Drive. It never starts training.
+Use [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb) to create the model package, tokenizer, prepared corpus and a **dormant bundled training runtime** in Google Drive. It never starts training.
 
 Later, open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Training_Runner.ipynb) and explicitly set `START_TRAINING = True`. It resumes from the newest verified Drive checkpoint and updates a single progress record after each verified save. See [the lifecycle and recovery documentation](docs/COLAB_TRAINING_READY_BUILD.md).
 
@@ -46,7 +46,7 @@ These are **training and product objectives**, not claims that the current rando
 
 ## 3. Current architecture baseline
 
-The original compact convolution-only baseline remains available. New hybrid research profiles add a gated diagonal state-space path while preserving the no-Transformer-attention constraint. The 5M and 5B configs are capacity specifications, not trained checkpoints or production-readiness claims.
+**Light model profile:** approximately **0.706M parameters** (705,742 at the 4,096-token vocabulary). It keeps Q-Mini's causal-convolution + gated diagonal SSM + sparse Top-1 MoE design and Q2-v2 quantization. The 5B source repository remains separate and is not modified by this Light track.\n\nThe original compact convolution-only baseline remains available. New hybrid research profiles add a gated diagonal state-space path while preserving the no-Transformer-attention constraint. The 5M and 5B configs are capacity specifications, not trained checkpoints or production-readiness claims.
 
 | Component | Current baseline |
 |---|---:|
@@ -86,25 +86,26 @@ Token IDs
 With kernel width 10 and the configured dilations, the six main blocks have a theoretical receptive field of 568 tokens. The configured context is 512 tokens. Parameter count must always be read from the instantiated model using the sum of parameter tensor sizes; configuration changes alter the total.
 
 
-### Higher-capacity training profile
+### Q-Mini Light 0.7M training profile
 
-The compact configs/qmini_base.json profile is retained for CPU smoke tests and low-resource development. The historical convolution-only profile is configs/qmini_research_134m.json. The updated Colab pipeline uses configs/qmini_light_0.7m.json, a hybrid profile:
+The active Colab profile is `configs/qmini_light_0.7m.json`. At the configured 4,096-token vocabulary, the model has **705,742 estimated parameters** and retains the same architecture family as the main Q-Mini project.
 
-| Setting | Research profile |
+| Setting | Light profile |
 |---|---:|
-| Vocabulary target | 8,192 |
-| Model width | 640 |
-| Expert hidden width | 1,024 |
-| Main causal blocks | 10 |
-| Experts per block | 8 |
+| Vocabulary target | 4,096 |
+| Model width | 64 |
+| Expert hidden width | 128 |
+| Main causal blocks | 6 |
+| Experts per block | 2 |
 | Active experts | Top-1 |
-| Maximum context | 2,048 tokens |
+| Maximum context | 4,096 tokens |
 | Convolution kernel | 10 |
-| Dilations | 1 through 512, powers of two |
+| Dilations | 1, 2, 4, 8, 16, 32 |
 | Shared refinement | 1–4 passes |
+| Gated diagonal state-space | Enabled |
 | Q2 normalized weight codebook | {-1.0, -0.5, +0.5, +1.0} |
 
-At the full 8,192-token vocabulary the historical convolution-only shape has **134,426,200 parameters**, including its single shared refinement block. The audit command and CI assert the instantiated count; if the locally trained tokenizer produces a smaller vocabulary, the active config and actual count are correspondingly smaller. This is a 134M-class research model, not a claim of state-of-the-art assistant quality. That depends on corpus quality, tokens seen, training compute and held-out capability evaluation.
+The model is intentionally small for safer iteration and local/Colab experiments. The larger 5M, 134M, 152M and 5B configuration files remain available as copied reference profiles; the Light Colab workflow does not select them.
 
 ### Quantization — fixed production Q2-v2 format
 
@@ -279,20 +280,21 @@ No Transformer self-attention, Q/K/V projections or dot-product attention are in
 
 | Profile | Total parameters | Unique Top-1 active parameters/token | Purpose |
 |---|---:|---:|---|
-| `qmini_light_0.7m.json` | **705,742** | Lightweight default training target |\n| `qmini_5m.json` | 5,245,996 | 3,070,636 | Small-scale development |
-| `qmini_research_134m.json` | 134,426,200 | 33,372,632 | Historical convolution-only baseline |
-| `qmini_research_0.7m.json` | 152,483,800 | 51,430,232 | Hybrid GPU research profile |
-| `qmini_5b.json` | 5,132,630,288 | 852,873,488 | Capacity design, not currently distributed-training-ready |
+| `qmini_light_0.7m.json` | **705,742** | **589,710** | Active 0.7M Light default |
+| `qmini_5m.json` | 5,245,996 | 3,070,636 | Retained reference profile |
+| `qmini_research_134m.json` | 134,426,200 | 33,372,632 | Historical convolution-only profile |
+| `qmini_research_152m.json` | 152,483,800 | 51,430,232 | Larger hybrid reference profile |
+| `qmini_5b.json` | 5,132,630,288 | 852,873,488 | Capacity design; not selected by Light workflows |
 
 The CLI can inspect a config without allocating the model:
 
 ```bash
-python -m qmini.cli plan --config configs/qmini_5m.json
+python -m qmini.cli plan --config configs/qmini_light_0.7m.json\npython -m qmini.cli plan --config configs/qmini_5m.json
 python -m qmini.cli plan --config configs/qmini_light_0.7m.json
 python -m qmini.cli plan --config configs/qmini_5b.json
 ```
 
-FP32 parameter/gradient/AdamW-state lower bounds are approximately 83.9 MB for 5M, 2.44 GB for 0.7M and 82.1 GB for 5B. These figures exclude activation memory, CUDA workspaces, fragmentation and communication. The 5B profile is not a single-H100 training recipe: this repository still has no FSDP/ZeRO, expert parallelism or tensor parallelism.
+FP32 parameter/gradient/AdamW-state lower bounds are approximately 11.3 MB for Light 0.7M, 83.9 MB for 5M, 2.44 GB for 152M and 82.1 GB for 5B. These figures exclude activation memory, CUDA workspaces, fragmentation and communication. The 5B profile is not a single-H100 training recipe: this repository still has no FSDP/ZeRO, expert parallelism or tensor parallelism.
 
 ## 14. Training budget and staged instruction fine-tuning
 

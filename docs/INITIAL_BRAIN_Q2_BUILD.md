@@ -4,7 +4,7 @@ This process creates an **untrained, random-initialized Q-Mini model** whose del
 
 ## Google Colab
 
-For the automated build-only workflow, open [Q-Mini Light 0.7M Initial Brain Builder](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Initial_Brain_Build.ipynb) in Colab and run the cells from top to bottom. It defaults to the repository's 0.7M-class configuration, checks available RAM and storage, builds locally, verifies the Q2-v2 archive, and publishes a hash-checked copy to Drive. It does not train the model.
+For the automated build-only workflow, open [Q-Mini Light 0.7M Initial Brain Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Initial_Brain_Build.ipynb) in Colab and run the cells from top to bottom. It defaults to the repository's 0.7M-class configuration, checks available RAM and storage, builds locally, verifies the Q2-v2 archive, and publishes a hash-checked copy to Drive. It does not train the model.
 
 Mount Drive and clone the repository:
 
@@ -22,7 +22,7 @@ Run the build into a new, unique folder. The builder refuses to overwrite an exi
 REVISION=$(git rev-parse HEAD)
 qmini build-initial \
   --config configs/qmini_light_0.7m.json \
-  --output-dir /content/drive/MyDrive/QMini/initial_brains/QMini-0.7M-Q2v2-initial-001 \
+  --output-dir /content/drive/MyDrive/QMini-Light-0.7M/initial_brains/QMini-Light-0.7M-Q2v2-initial-001 \
   --source-revision "$REVISION"
 ```
 
@@ -30,7 +30,7 @@ Verify the artifact:
 
 ```bash
 qmini verify-export \
-  --path /content/drive/MyDrive/QMini/initial_brains/QMini-0.7M-Q2v2-initial-001/model.qmini.npz
+  --path /content/drive/MyDrive/QMini-Light-0.7M/initial_brains/QMini-Light-0.7M-Q2v2-initial-001/model.qmini.npz
 ```
 
 ## Output
