@@ -6,6 +6,10 @@
 
 [![Q-Mini CI](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml)
 
+## Private Colab access
+
+This repository is private. Open the notebooks while signed in to GitHub/Colab with access to this repository. The clone cells look for a Colab secret named QMINI_GITHUB_TOKEN; when it is not available, they ask for the token through a hidden prompt. Use a fine-grained token limited to this repository with Contents: Read-only permission. The token is passed to Git only as a temporary authentication header; it is not printed or saved in the notebook, repository or Drive.
+
 ## Build an untrained Q2-v2 initial brain
 
 For the step-zero two-bit Q2-v2 build of the 0.7M Light model, use [the initial-brain Colab and CLI guide](docs/INITIAL_BRAIN_Q2_BUILD.md). Production matrix weights are exported as verified Q2-v2 (2 bits per symbol). The current QAT trainer still uses FP32 master parameters and optimizer state; this is a training-memory limitation, not a Q2 deployment artifact.
