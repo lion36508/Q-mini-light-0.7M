@@ -20,7 +20,7 @@ The package is stored at `MyDrive/QMini-Light-0.7M/training_ready/QMini-Light-0.
 
 ## Stage B — start/resume training separately
 
-Open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-Mini/blob/main/colab/QMini_Training_Runner.ipynb). It imports the exact training code bundled with the selected package and checks the source-file hashes, model manifest, tokenizer, dataset, Q2 archive and GPU memory.
+Open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Runner.ipynb). It imports the exact training code bundled with the selected package and checks the source-file hashes, model manifest, tokenizer, dataset, Q2 archive and GPU memory.
 
 Training is off by default. Set `START_TRAINING = True` only when ready. The runner creates its working checkpoint on Colab's local disk and uses the Drive folder `training_state/` as the durable checkpoint mirror.
 
