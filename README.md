@@ -46,19 +46,20 @@ These are **training and product objectives**, not claims that the current rando
 
 ## 3. Current architecture baseline
 
-**Light model profile:** approximately **0.706M parameters** (705,742 at the 4,096-token vocabulary). It keeps Q-Mini's causal-convolution + gated diagonal SSM + sparse Top-1 MoE design and Q2-v2 quantization. The 5B source repository remains separate and is not modified by this Light track.\n\nThe original compact convolution-only baseline remains available. New hybrid research profiles add a gated diagonal state-space path while preserving the no-Transformer-attention constraint. The 5M and 5B configs are capacity specifications, not trained checkpoints or production-readiness claims.
+**Active Light profile:** 705,742 estimated parameters at a 4,096-token vocabulary. It retains causal depthwise convolution, the gated diagonal SSM, two-expert sparse Top-1 routing, shared refinement, Q2-v2 matrix quantization, INT8 activations, the training/checkpoint pipeline, evaluation and CI. The original 5B repository remains separate and is not selected or modified by the Light workflow.\n\nThe Light configuration reduces capacity while keeping the important model mechanisms. Larger configs in this repository are reference profiles only; the Light defaults select configs/qmini_light_0.7m.json.
 
-| Component | Current baseline |
+| Component | Light profile |
 |---|---:|
-| Vocabulary target | 4,096; actual tokenizer size is written into active config |
-| Model width | 256 |
-| Expert hidden width | 384 |
+| Vocabulary target | 4,096 |
+| Model width | 64 |
+| Expert hidden width | 128 |
 | Main causal blocks | 6 |
-| Experts per block | 4 |
+| Experts per block | 2 |
 | Active experts per token | Top-1 |
-| Maximum context | 512 tokens |
+| Maximum context | 4,096 tokens |
 | Convolution kernel width | 10 |
 | Convolution dilations | 1, 2, 4, 8, 16, 32 |
+| Gated diagonal state-space | Enabled |
 | Shared refinement | One block reused for 1–4 passes |
 | Q2 normalized weight codebook | {-1.0, -0.5, +0.5, +1.0} |
 | Activation quantization | Per-token AbsMax INT8 fake quantization |
@@ -83,7 +84,7 @@ Token IDs
   -> Next-token logits
 ~~~
 
-With kernel width 10 and the configured dilations, the six main blocks have a theoretical receptive field of 568 tokens. The configured context is 512 tokens. Parameter count must always be read from the instantiated model using the sum of parameter tensor sizes; configuration changes alter the total.
+With kernel width 10 and the configured dilations, the six convolution blocks have a theoretical receptive field of 568 tokens. The Light profile uses a 4,096-token context, with the gated diagonal state-space path providing the recurrent long-range sequence state. Parameter count must always be read from the instantiated model using the sum of parameter tensor sizes; configuration changes alter the total.
 
 
 ### Q-Mini Light 0.7M training profile
