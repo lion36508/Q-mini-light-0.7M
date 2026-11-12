@@ -50,3 +50,7 @@ Q2-v2 is the production/deployment matrix-weight format. During later Quantizati
 The initial artifact is not trained and does not include a tokenizer. The later training workflow must provide matching Q-Mini data streams and tokenizer. The 0.7M Light profile is intended to use the repository's existing single-device CUDA trainer; FSDP/ZeRO is not a prerequisite for this small profile. Keep the separate distributed-training work (issue #18) scoped to larger 5B-scale training. QAT still uses FP32 master parameters, gradients and optimizer state, so a packed 2-bit deployment artifact does not mean training itself runs in 2-bit memory.
 
 Do not delete older FP32 shards as part of this migration. Keep them as a separate backup/diagnostic artifact until the new Q2-v2 output has been independently verified.
+
+## Private repository access from Colab
+
+This repository is private. In Colab, authenticate access to GitHub and either save a fine-grained token as a notebook secret named QMINI_GITHUB_TOKEN or enter it when the notebook displays its hidden prompt. Limit the token to this repository and Contents: Read-only. The notebook passes the token through a temporary Git authentication header and does not print or save it.
