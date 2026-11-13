@@ -7,6 +7,7 @@ on:
       - "colab/QMini_Initial_Brain_Build.ipynb"
       - "colab/QMini_Training_Ready_Build.ipynb"
       - "colab/QMini_Training_Runner.ipynb"
+      - "colab/QMini_One_Click_Training.ipynb"
       - ".github/workflows/colab-initial-build.yml"
   pull_request:
     branches: [main]
