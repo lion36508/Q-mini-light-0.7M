@@ -285,7 +285,7 @@ def test_training_runner_defaults_match_the_bundled_package_contract():
     assert "packaged_sequence_length != config.max_context" in validation
 
 
-def test_one_click_colab_notebook_mounts_drive_builds_and_trains_512_context():
+def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     notebook_path = (
         Path(__file__).resolve().parents[1]
         / "colab"
@@ -302,19 +302,25 @@ def test_one_click_colab_notebook_mounts_drive_builds_and_trains_512_context():
     for index, source in enumerate(code_cells, start=1):
         ast.parse(source, filename=f"{notebook_path}:code-cell-{index}")
 
-    all_code = "\n".join(code_cells)
+    all_code = "\\n".join(code_cells)
     settings = code_cells[0]
-    assert "START_TRAINING = True" in settings
+    build = next(source for source in code_cells if "build-initial" in source)
+    final_guard = code_cells[-1]
+    assert 'MODEL_CONFIG_REL = "configs/qmini_light_0.7m.json"' in settings
     assert "TRAIN_SEQUENCE_LENGTH = 512" in settings
-    assert "SEQUENCE_LENGTH = 512" in settings
-    assert "TARGET_OPTIMIZER_STEPS = 20000" in settings
-    assert 'drive.mount("/content/drive")' in all_code
-    assert "https://github.com/lion36508/Q-mini-light-0.7M.git" in all_code
+    assert "START_TRAINING" not in all_code
+    assert "train_model(" not in all_code
+    assert "TrainingSessionLease" not in all_code
+    assert "restore_latest_checkpoint" not in all_code
+    assert "drive.mount(\\"/content/drive\\")" in all_code
+    assert "https://github.com/lion36508/Q-mini-light-0.7m.git" in all_code
     assert "QMini-Light-0.7M/datasets" in all_code
-    assert "build-initial" in all_code
-    assert "TrainingSessionLease" in all_code
-    assert "restore_latest_checkpoint" in all_code
-    assert "trained_models" in all_code
-    assert "training_state" in all_code
+    assert "build-initial" in build
+    assert "training_runtime" in build
+    assert '"enabled": False' in build
+    assert "training_progress.json" in build
+    assert "training_runtime_enabled" in build
     assert "config.max_context != 512" in all_code
-    assert "training_runtime_manifest_sha256" in all_code
+    assert "No neural-model training was run in this build stage." in build
+    assert "MODEL BUILD COMPLETE — TRAINING REMAINS DISABLED" in final_guard
+    assert "QMini_Training_Runner.ipynb" in final_guard
