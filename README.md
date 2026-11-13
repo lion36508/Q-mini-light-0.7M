@@ -6,15 +6,19 @@
 
 [![Q-Mini CI](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml)
 
-## Private Colab access
+## One-click Google Colab training
 
-This repository is private. Open the notebooks while signed in to GitHub/Colab with access to this repository. The clone cells look for a Colab secret named QMINI_GITHUB_TOKEN; when it is not available, they ask for the token through a hidden prompt. Use a fine-grained token limited to this repository with Contents: Read-only permission. The token is passed to Git only as a temporary authentication header; it is not printed or saved in the notebook, repository or Drive.
+The repository is currently public. Open [Q-Mini Light 0.7M — One-Click Build + Training](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_One_Click_Training.ipynb) in Google Colab and choose **Runtime → Run all**. It mounts Google Drive, clones this repository, prepares the corpus, builds and verifies the initial Q2-v2 model, starts the 512-context training run, saves verified resumable checkpoints every 10 optimizer steps, and writes the verified final model to Drive.
+
+Before running, select a CUDA GPU runtime with at least 8 GiB of free GPU memory and put reviewed corpus files in `MyDrive/QMini-Light-0.7M/datasets/`. The notebook stops if no supported dataset is present. Its default target is 20,000 total optimizer steps; Colab availability and session duration are not guaranteed. Re-run the notebook with the same code/data to resume from the latest valid Drive checkpoint. Model package, training state and final exports are saved below `MyDrive/QMini-Light-0.7M/training_ready/`.
 
 ## Build an untrained Q2-v2 initial brain
 
 For the step-zero two-bit Q2-v2 build of the 0.7M Light model, use [the initial-brain Colab and CLI guide](docs/INITIAL_BRAIN_Q2_BUILD.md). Production matrix weights are exported as verified Q2-v2 (2 bits per symbol). The current QAT trainer still uses FP32 master parameters and optimizer state; this is a training-memory limitation, not a Q2 deployment artifact.
 
-## Separate Light model build and training runner
+## Separate Light model build and training runner (advanced, two-notebook path)
+
+The one-click notebook above is the recommended route. For manual control over package creation and training activation, use the two steps below.
 
 Use [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb) to create the model package, tokenizer, prepared corpus and a **dormant bundled training runtime** in Google Drive. It never starts training.
 
