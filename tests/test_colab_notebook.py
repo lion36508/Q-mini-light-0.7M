@@ -283,3 +283,38 @@ def test_training_runner_defaults_match_the_bundled_package_contract():
     assert '"sequence_length": TRAIN_SEQUENCE_LENGTH' in package_builder
     assert "config.max_context != 512" in validation
     assert "packaged_sequence_length != config.max_context" in validation
+
+
+def test_one_click_colab_notebook_mounts_drive_builds_and_trains_512_context():
+    notebook_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab"
+        / "QMini_One_Click_Training.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    assert notebook.get("nbformat") == 4
+    code_cells = [
+        "".join(cell.get("source", []))
+        for cell in notebook.get("cells", [])
+        if cell.get("cell_type") == "code"
+    ]
+    assert code_cells
+    for index, source in enumerate(code_cells, start=1):
+        ast.parse(source, filename=f"{notebook_path}:code-cell-{index}")
+
+    all_code = "\n".join(code_cells)
+    settings = code_cells[0]
+    assert "START_TRAINING = True" in settings
+    assert "TRAIN_SEQUENCE_LENGTH = 512" in settings
+    assert "SEQUENCE_LENGTH = 512" in settings
+    assert "TARGET_OPTIMIZER_STEPS = 20000" in settings
+    assert 'drive.mount("/content/drive")' in all_code
+    assert "https://github.com/lion36508/Q-mini-light-0.7M.git" in all_code
+    assert "QMini-Light-0.7M/datasets" in all_code
+    assert "build-initial" in all_code
+    assert "TrainingSessionLease" in all_code
+    assert "restore_latest_checkpoint" in all_code
+    assert "trained_models" in all_code
+    assert "training_state" in all_code
+    assert "config.max_context != 512" in all_code
+    assert "training_runtime_manifest_sha256" in all_code
