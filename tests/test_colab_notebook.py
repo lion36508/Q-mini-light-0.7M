@@ -302,7 +302,7 @@ def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     for index, source in enumerate(code_cells, start=1):
         ast.parse(source, filename=f"{notebook_path}:code-cell-{index}")
 
-    all_code = "\\n".join(code_cells)
+    all_code = "\n".join(code_cells)
     settings = code_cells[0]
     build = next(source for source in code_cells if "build-initial" in source)
     final_guard = code_cells[-1]
@@ -312,7 +312,7 @@ def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     assert "train_model(" not in all_code
     assert "TrainingSessionLease" not in all_code
     assert "restore_latest_checkpoint" not in all_code
-    assert "drive.mount(\\"/content/drive\\")" in all_code
+    assert 'drive.mount("/content/drive")' in all_code
     assert "https://github.com/lion36508/Q-mini-light-0.7m.git" in all_code
     assert "QMini-Light-0.7M/datasets" in all_code
     assert "build-initial" in build
