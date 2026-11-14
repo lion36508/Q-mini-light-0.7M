@@ -27,6 +27,28 @@ def test_future_tokens_do_not_change_past_logits(tiny_config):
     assert torch.allclose(logits_a[:, :12], logits_b[:, :12], atol=1e-6, rtol=1e-6)
 
 
+def test_sparse_moe_dispatch_supports_bfloat16_autocast_and_backward(tiny_config):
+    from qmini.model import SparseTop1MoE
+
+    moe = SparseTop1MoE(tiny_config).train()
+    inputs = torch.randn(2, 7, tiny_config.d_model, requires_grad=True)
+
+    # CPU autocast exercises the same FP32 residual / BF16 expert dtype split
+    # seen on Colab T4 without requiring a GPU in CI.
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        output, aux_loss, counts = moe(inputs)
+
+    assert output.dtype == inputs.dtype
+    assert output.shape == inputs.shape
+    assert counts.sum().item() == inputs.shape[0] * inputs.shape[1]
+    loss = output.float().square().mean() + aux_loss
+    loss.backward()
+
+    assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
+    assert moe.router.weight.grad is not None
+    assert torch.isfinite(moe.router.weight.grad).all()
+
+
 def test_router_gets_gradient_from_language_model_loss(tiny_config):
     model = QMiniMoE(tiny_config)
     ids = torch.randint(0, tiny_config.vocab_size, (2, 12))
