@@ -66,6 +66,33 @@ def test_tokenizer_iterator_excludes_validation_and_duplicate_documents(tmp_path
     assert valid_doc not in rows
 
 
+def test_training_record_iterator_can_resume_on_another_thread(tmp_path):
+    # tokenizers.train_from_iterator may resume a Python generator from a
+    # worker thread. Reproduce that thread hop directly while the generator
+    # keeps one SQLite connection open across yields.
+    from concurrent.futures import ThreadPoolExecutor
+
+    corpus = tmp_path / "thread-hop.txt"
+    corpus.write_text(
+        "\\n\\n".join(
+            f"independent training document number {index} contains distinct words and details"
+            for index in range(40)
+        ),
+        encoding="utf-8",
+    )
+
+    iterator = iter_training_text_records([corpus], valid_fraction=0.02)
+    first = next(iterator)  # Opens and builds the SQLite index in this thread.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        second = executor.submit(next, iterator).result()  # Resume in another thread.
+
+    remaining = list(iterator)  # Resume again in the original thread and close.
+    rows = [first, second, *remaining]
+    assert len(rows) >= 2
+    assert len(rows) == len(set(rows))
+    assert all(row.strip() for row in rows)
+
+
 def test_tokenizer_matches_rebalanced_prepare_split(tmp_path):
     from qmini.data import prepare_token_streams
 
