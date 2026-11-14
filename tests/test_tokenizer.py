@@ -74,7 +74,7 @@ def test_training_record_iterator_can_resume_on_another_thread(tmp_path):
 
     corpus = tmp_path / "thread-hop.txt"
     corpus.write_text(
-        "\\n\\n".join(
+        "\n\n".join(
             f"independent training document number {index} contains distinct words and details"
             for index in range(40)
         ),
