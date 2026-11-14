@@ -503,7 +503,11 @@ def iter_training_text_records(
 
     with tempfile.TemporaryDirectory(prefix="qmini-tokenizer-") as temp_dir:
         database_path = Path(temp_dir) / "split.sqlite3"
-        connection = sqlite3.connect(database_path)
+        # Hugging Face tokenizers may resume this single-consumer Python iterator
+        # from a worker thread. SQLite work is sequential (the generator cannot
+        # be entered concurrently), so allow the connection to migrate between
+        # threads while retaining SQLite's normal locking/transaction semantics.
+        connection = sqlite3.connect(database_path, check_same_thread=False)
         yielded = 0
         try:
             connection.execute("PRAGMA journal_mode=OFF")
