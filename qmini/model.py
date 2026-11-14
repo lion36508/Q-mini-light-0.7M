@@ -419,7 +419,12 @@ class SparseTop1MoE(nn.Module):
                 expert_input = flat.index_select(0, indices)
                 expert_output = expert(expert_input)
                 gate = selected_weights.index_select(0, indices).to(expert_output.dtype)
-                output = output.index_copy(0, indices, expert_output * gate)
+                # The dispatch buffer follows the residual stream dtype (often FP32),
+                # while autocast may produce BF16/FP16 expert outputs. index_copy
+                # requires identical dtypes, so cast the gated expert result back
+                # to the buffer dtype without detaching its gradient.
+                weighted_output = (expert_output * gate).to(dtype=output.dtype)
+                output = output.index_copy(0, indices, weighted_output)
                 offset += expert_count
 
         return output.reshape(shape), aux_loss, counts
