@@ -53,6 +53,7 @@ jobs:
           paths = [
               Path("colab/QMini_Training.ipynb"),
               Path("colab/QMini_Initial_Brain_Build.ipynb"),
+              Path("colab/QMini_Auto_Train_Hindi_512.ipynb"),
               Path("colab/QMini_Training_Ready_Build.ipynb"),
               Path("colab/QMini_Training_Runner.ipynb"),
               Path("colab/QMini_One_Click_Training.ipynb"),
