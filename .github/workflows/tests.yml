@@ -57,6 +57,7 @@ jobs:
               Path("colab/QMini_Training_Ready_Build.ipynb"),
               Path("colab/QMini_Training_Runner.ipynb"),
               Path("colab/QMini_One_Click_Training.ipynb"),
+              Path("colab/QMini_English_One_Click_Training.ipynb"),
           ]
           total = 0
           for path in paths:
