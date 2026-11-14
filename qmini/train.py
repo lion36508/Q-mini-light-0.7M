@@ -976,11 +976,15 @@ def train_model(
             f"{stage} starts with a fresh optimizer."
         )
     use_amp = device.type == "cuda"
-    bf16_supported = (
-        bool(torch.cuda.is_bf16_supported())
-        if use_amp and hasattr(torch.cuda, "is_bf16_supported")
-        else False
-    )
+    # Prefer BF16 only on Ampere-class (SM 8.0+) or newer GPUs where it is
+    # natively supported. PyTorch can report BF16 as available through
+    # emulation on older cards such as T4; FP16 is the native fast path there.
+    bf16_supported = False
+    if use_amp and hasattr(torch.cuda, "is_bf16_supported"):
+        compute_major, _compute_minor = torch.cuda.get_device_capability(device)
+        bf16_supported = bool(
+            compute_major >= 8 and torch.cuda.is_bf16_supported()
+        )
     use_bf16 = bool(use_amp and bf16_supported)
     use_fp16 = bool(use_amp and not use_bf16)
     try:
