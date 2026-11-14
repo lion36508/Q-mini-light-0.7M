@@ -6,14 +6,11 @@
 
 [![Q-Mini CI](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml)
 
-## Build the model first; train later
+## GitHub → Colab → Google Drive: build the initial model first
 
-Open [Q-Mini Light 0.7M — Build Model First](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_One_Click_Training.ipynb) in Google Colab and choose **Runtime → Run all**. This first notebook only prepares the model package: it mounts Drive, prepares the dataset/tokenizer, builds and verifies the initial Q2-v2 model, bundles the complete dormant training runtime and saves everything under `MyDrive/QMini-Light-0.7M/training_ready/`. It **does not start neural-model training**.
+For the first step, open [Q-Mini Initial Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Initial_Brain_Build.ipynb) and choose **Runtime → Run all**. This build-only notebook fetches the latest source from this repository, builds the 705,742-parameter Q2-v2 initial model with a 512-token context, and saves the verified model **plus the complete source checkout and disabled training/checkpoint code** to `MyDrive/QMini-Light-0.7M/initial_brains/`. It does not require a dataset upload and does not start training. It also does not require a CUDA GPU for this CPU-streamed initial build.
 
-Before running, put reviewed corpus files in `MyDrive/QMini-Light-0.7M/datasets/`. The notebook stops if it finds no supported data. The Light model context is fixed at **512 tokens**. The initial package has zero optimizer steps and zero trained weight updates; it is a built, untrained model.
-
-When you are ready to train, open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Runner.ipynb) and explicitly set `START_TRAINING = True`. The runner loads the verified package and resumes from the newest valid checkpoint; it does not rebuild the initial model. A fresh Colab runtime may be used, but the model and training package remain saved in Drive. Training needs a compatible CUDA GPU with at least 8 GiB free memory; Colab hardware availability and session duration are not guaranteed.
-
+The initial weights are random. This package is not yet a trained assistant, and it does not include a tokenizer or prepared train/validation streams. Those must be created from a permitted corpus before training. When a corpus is available, use [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb) to prepare the tokenizer and dataset, then use [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Runner.ipynb) and explicitly set `START_TRAINING = True`. The runner requires a compatible CUDA GPU with at least 8 GiB free memory.
 ## Build an untrained Q2-v2 initial brain
 
 For the step-zero two-bit Q2-v2 build of the 0.7M Light model, use [the initial-brain Colab and CLI guide](docs/INITIAL_BRAIN_Q2_BUILD.md). Production matrix weights are exported as verified Q2-v2 (2 bits per symbol). The current QAT trainer still uses FP32 master parameters and optimizer state; this is a training-memory limitation, not a Q2 deployment artifact.
