@@ -737,15 +737,17 @@ def _resume_contract(
     return contract
 
 
-def _resume_contract_for_comparison(contract: dict[str, Any]) -> dict[str, Any]:
-    """Normalize physical microbatching while preserving the optimizer batch.
+def _resume_contract_for_comparison(
+    contract: dict[str, Any],
+    *,
+    allow_batch_size_change: bool = False,
+) -> dict[str, Any]:
+    """Normalize microbatching and optionally authorize an effective-batch change.
 
-    A checkpoint may safely resume with a different (batch_size, grad_accum)
-    pair only when their product is identical. The sampler consumes the same
-    ordered sequence of examples and the optimizer still sees the same number
-    of tokens per step; only the grouping of forward/backward microbatches
-    changes. All data, tokenizer, sequence, seed and optimizer settings remain
-    strict resume requirements.
+    By default, a checkpoint may resume with a different (batch_size, grad_accum)
+    pair only when their product is identical. A deliberate performance-tuning
+    run may explicitly authorize a different effective batch; every data,
+    tokenizer, sequence, seed and optimizer setting remains strictly checked.
     """
     normalized = dict(contract)
     batch_size = normalized.get("batch_size")
@@ -759,7 +761,8 @@ def _resume_contract_for_comparison(contract: dict[str, Any]) -> dict[str, Any]:
     if valid_batch and valid_accum:
         normalized.pop("batch_size")
         normalized.pop("gradient_accumulation")
-        normalized["effective_batch_size"] = batch_size * grad_accum
+        if not allow_batch_size_change:
+            normalized["effective_batch_size"] = batch_size * grad_accum
     return normalized
 
 
@@ -819,8 +822,9 @@ def train_model(
     init_from_initial: str | Path | None = None,
     checkpoint_mirror_dir: str | Path | None = None,
     checkpoint_session_id: str | None = None,
+    allow_batch_size_change: bool = False,
 ) -> Path:
-    """Pretrain from scratch/step-zero Q2 brain, SFT from a trained model, or resume."""
+    """Pretrain from scratch/step-zero Q2 brain, SFT, or deliberate batch tuning on resume."""
     config.validate()
     positive = {
         "steps": steps,
@@ -867,6 +871,7 @@ def train_model(
         ("resume", resume),
         ("extend_schedule", extend_schedule),
         ("allow_legacy_resume", allow_legacy_resume),
+        ("allow_batch_size_change", allow_batch_size_change),
     ):
         if not isinstance(value, bool):
             raise TypeError(f"{name} must be a boolean.")
@@ -1059,11 +1064,11 @@ def train_model(
             saved_core = _resume_contract_for_comparison({
                 key: value for key, value in saved_contract.items()
                 if key not in lineage_keys
-            })
+            }, allow_batch_size_change=allow_batch_size_change)
             current_core = _resume_contract_for_comparison({
                 key: value for key, value in contract.items()
                 if key not in lineage_keys
-            })
+            }, allow_batch_size_change=allow_batch_size_change)
             if saved_core != current_core:
                 raise ValueError(
                     "Resume contract mismatch (dataset/tokenizer or optimizer settings). "
@@ -1072,6 +1077,21 @@ def train_model(
             # The initial model is loaded exactly once. On resume the caller must
             # not pass it again, but the checkpoint's original initialization
             # fingerprint must remain in every subsequent checkpoint and manifest.
+            saved_effective_batch = (
+                int(saved_contract.get("batch_size", batch_size))
+                * int(saved_contract.get("gradient_accumulation", grad_accum))
+            )
+            current_effective_batch = int(batch_size) * int(grad_accum)
+            if saved_effective_batch != current_effective_batch:
+                if not allow_batch_size_change:
+                    raise ValueError(
+                        "Changing effective batch size requires allow_batch_size_change=True."
+                    )
+                print(
+                    "WARNING: authorized effective-batch change on resume: "
+                    f"{saved_effective_batch} -> {current_effective_batch}. "
+                    "Optimizer state is retained, but tokens per optimizer step change."
+                )
             contract["initial_model"] = saved_contract.get("initial_model")
             contract["initial_model_path"] = saved_contract.get("initial_model_path")
 
