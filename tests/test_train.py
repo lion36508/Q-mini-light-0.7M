@@ -148,6 +148,37 @@ def test_smoke_training_checkpoint_resume_and_export(tiny_config, tmp_path):
     assert manifest["trainable_weight_policy"] == "fp32-master-q2-ste"
 
 
+def test_resume_allows_same_effective_batch_with_rebalanced_microbatches(tiny_config, tmp_path):
+    """A V3 1x8 checkpoint can resume as 2x4 without changing tokens per step."""
+    train_bin = tmp_path / "train.bin"
+    valid_bin = tmp_path / "valid.bin"
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 3101)
+    _write_stream(valid_bin, tiny_config.vocab_size, 192, 3102)
+    run = tmp_path / "rebalanced-run"
+
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=1, batch_size=1, seq_len=8, grad_accum=2,
+        eval_every=1, save_every=1, eval_batches=1,
+    )
+    first = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert first["tokens_seen"] == 16
+    assert first["resume_contract"]["batch_size"] == 1
+    assert first["resume_contract"]["gradient_accumulation"] == 2
+
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=2, batch_size=2, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+        resume=True, extend_schedule=True,
+    )
+    resumed = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert resumed["step"] == 2
+    assert resumed["tokens_seen"] == 32
+    assert resumed["resume_contract"]["batch_size"] == 2
+    assert resumed["resume_contract"]["gradient_accumulation"] == 1
+
+
 def test_resume_rejects_changed_training_data(tiny_config, tmp_path):
     train_bin = tmp_path / "train.bin"
     valid_bin = tmp_path / "valid.bin"
