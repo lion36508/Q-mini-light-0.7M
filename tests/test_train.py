@@ -179,6 +179,40 @@ def test_resume_allows_same_effective_batch_with_rebalanced_microbatches(tiny_co
     assert resumed["resume_contract"]["gradient_accumulation"] == 1
 
 
+def test_resume_requires_explicit_opt_in_for_effective_batch_change(tiny_config, tmp_path):
+    train_bin = tmp_path / "train.bin"
+    valid_bin = tmp_path / "valid.bin"
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 4401)
+    _write_stream(valid_bin, tiny_config.vocab_size, 192, 4402)
+    run = tmp_path / "batch-migration-run"
+
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=1, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+    )
+
+    with pytest.raises(ValueError, match="Resume contract mismatch"):
+        train_model(
+            tiny_config, train_bin, valid_bin, run,
+            steps=2, batch_size=4, seq_len=8, grad_accum=1,
+            eval_every=1, save_every=1, eval_batches=1,
+            resume=True, extend_schedule=True,
+        )
+
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=2, batch_size=4, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+        resume=True, extend_schedule=True, allow_batch_size_change=True,
+    )
+    resumed = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert resumed["step"] == 2
+    assert resumed["tokens_seen"] == 40
+    assert resumed["resume_contract"]["batch_size"] == 4
+    assert resumed["resume_contract"]["gradient_accumulation"] == 1
+
+
 def test_resume_rejects_changed_training_data(tiny_config, tmp_path):
     train_bin = tmp_path / "train.bin"
     valid_bin = tmp_path / "valid.bin"
