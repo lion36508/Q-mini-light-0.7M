@@ -737,6 +737,32 @@ def _resume_contract(
     return contract
 
 
+def _resume_contract_for_comparison(contract: dict[str, Any]) -> dict[str, Any]:
+    """Normalize physical microbatching while preserving the optimizer batch.
+
+    A checkpoint may safely resume with a different (batch_size, grad_accum)
+    pair only when their product is identical. The sampler consumes the same
+    ordered sequence of examples and the optimizer still sees the same number
+    of tokens per step; only the grouping of forward/backward microbatches
+    changes. All data, tokenizer, sequence, seed and optimizer settings remain
+    strict resume requirements.
+    """
+    normalized = dict(contract)
+    batch_size = normalized.get("batch_size")
+    grad_accum = normalized.get("gradient_accumulation")
+    valid_batch = (
+        isinstance(batch_size, int) and not isinstance(batch_size, bool) and batch_size > 0
+    )
+    valid_accum = (
+        isinstance(grad_accum, int) and not isinstance(grad_accum, bool) and grad_accum > 0
+    )
+    if valid_batch and valid_accum:
+        normalized.pop("batch_size")
+        normalized.pop("gradient_accumulation")
+        normalized["effective_batch_size"] = batch_size * grad_accum
+    return normalized
+
+
 def _reconcile_metrics(path: Path, checkpoint_step: int) -> None:
     """Discard log rows newer than the last durable checkpoint after an interrupted run."""
     if not path.is_file():
@@ -1030,14 +1056,14 @@ def train_model(
             raise ValueError("Checkpoint resume contract is malformed; refusing an unsafe resume.")
         else:
             lineage_keys = {"initial_model", "initial_model_path"}
-            saved_core = {
+            saved_core = _resume_contract_for_comparison({
                 key: value for key, value in saved_contract.items()
                 if key not in lineage_keys
-            }
-            current_core = {
+            })
+            current_core = _resume_contract_for_comparison({
                 key: value for key, value in contract.items()
                 if key not in lineage_keys
-            }
+            })
             if saved_core != current_core:
                 raise ValueError(
                     "Resume contract mismatch (dataset/tokenizer or optimizer settings). "
