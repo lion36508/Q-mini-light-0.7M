@@ -6,6 +6,16 @@
 
 [![Q-Mini CI](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml/badge.svg)](https://github.com/lion36508/Q-mini-light-0.7M/actions/workflows/tests.yml)
 
+## One-click Google Colab: Personal AI Assistant (CPU-only)
+
+
+Open the repository's ready-to-run CPU notebook directly in Google Colab. No notebook download or manual upload is needed:
+
+[![Open in Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Personal_Assistant_CPU_One_Click.ipynb)
+
+The notebook prepares 800 English/Hinglish assistant conversations, reuses the existing Q-Mini tokenizer and trained checkpoint from Google Drive, applies response-only loss, and runs CPU instruction fine-tuning with physical batch 4, gradient accumulation 2, and context 512. It refuses to start from the random step-zero initial brain. Training outputs are saved to the user's Google Drive; repository model code and settings are not modified by the notebook.
+
+
 ## GitHub → Colab → Google Drive: build the initial model first
 
 For the first step, open [Q-Mini Initial Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Initial_Brain_Build.ipynb) and choose **Runtime → Run all**. This build-only notebook fetches the latest source from this repository, builds the 705,742-parameter Q2-v2 initial model with a 512-token context, and saves the verified model **plus the complete source checkout and disabled training/checkpoint code** to `MyDrive/QMini-Light-0.7M/initial_brains/`. It does not require a dataset upload and does not start training. It also does not require a CUDA GPU for this CPU-streamed initial build.
