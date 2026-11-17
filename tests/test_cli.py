@@ -272,3 +272,36 @@ def test_generate_cli_serialized_prompt_requires_warning_and_passes_penalties(
     assert called["kwargs"]["serialized_prompt"] is True
     assert called["kwargs"]["frequency_penalty"] == 0.4
     assert called["kwargs"]["presence_penalty"] == 0.7
+
+def test_training_cli_forwards_allow_dataset_change(monkeypatch, tmp_path):
+    import qmini.train as train_module
+
+    seen = {}
+
+    def fake_train_model(*args, **kwargs):
+        seen["kwargs"] = kwargs
+        return tmp_path / "run"
+
+    monkeypatch.setattr(train_module, "train_model", fake_train_model)
+    base_argv = [
+        "qmini",
+        "train",
+        "--config",
+        "configs/qmini_smoke.json",
+        "--train-bin",
+        "train.bin",
+        "--valid-bin",
+        "valid.bin",
+        "--tokenizer",
+        "tokenizer.json",
+        "--output-dir",
+        "run",
+        "--steps",
+        "3",
+    ]
+    monkeypatch.setattr(sys, "argv", [*base_argv, "--allow-dataset-change"])
+    assert cli.main() == 0
+    assert seen["kwargs"]["allow_dataset_change"] is True
+    monkeypatch.setattr(sys, "argv", base_argv)
+    assert cli.main() == 0
+    assert seen["kwargs"]["allow_dataset_change"] is False
