@@ -1078,11 +1078,11 @@ def train_model(
                 key: value for key, value in contract.items()
                 if key not in excluded_keys
             }, allow_batch_size_change=allow_batch_size_change)
-    _reconcile_resume_contract(
-        saved_contract, saved_core, current_core, contract, state,
-    allow_dataset_change=allow_dataset_change,
+            _reconcile_resume_contract(
+                saved_contract, saved_core, current_core, contract, state,
+                allow_dataset_change=allow_dataset_change,
                 )
-# The initial model is loaded exactly once. On resume the caller must
+            # The initial model is loaded exactly once. On resume the caller must
             # not pass it again, but the checkpoint's original initialization
             # fingerprint must remain in every subsequent checkpoint and manifest.
             saved_effective_batch = (
