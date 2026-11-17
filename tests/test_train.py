@@ -31,6 +31,7 @@ def _write_stream(path, vocab_size, length, seed):
         ("resume", "false", TypeError),
         ("extend_schedule", 1, TypeError),
         ("allow_legacy_resume", None, TypeError),
+        ("allow_dataset_change", None, TypeError),
     ],
 )
 def test_training_rejects_malformed_public_api_arguments(
@@ -867,4 +868,74 @@ def test_finetuning_rejects_legacy_q2_version_packed_source(
             steps=1, batch_size=1, seq_len=8, grad_accum=1,
             eval_every=1, save_every=1, eval_batches=1,
             init_from=source_dir / "model.qmini.npz",
+        )
+
+def test_resume_allows_audited_dataset_switch(tiny_config, tmp_path):
+    train_bin = tmp_path / "train.bin"
+    valid_bin = tmp_path / "valid.bin"
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 10)
+    _write_stream(valid_bin, tiny_config.vocab_size, 256, 11)
+    run = tmp_path / "run"
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=2, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+    )
+    first = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert first["step"] == 2
+    assert first["tokens_seen"] == 16
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 99)
+    with pytest.raises(ValueError, match="Resume contract mismatch"):
+        train_model(
+            tiny_config, train_bin, valid_bin, run,
+            steps=3, batch_size=1, seq_len=8, grad_accum=1,
+            eval_every=1, save_every=1, eval_batches=1,
+            resume=True, extend_schedule=True,
+        )
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=3, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+        resume=True, extend_schedule=True, allow_dataset_change=True,
+    )
+    switched = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert switched["step"] == 3
+    assert switched["tokens_seen"] == 24
+    assert switched["resume_contract"]["train"] != first["resume_contract"]["train"]
+    switch = switched["resume_contract"]["dataset_switch"]
+    assert switch["switch_step"] == 2
+    assert switch["previous_train"] == first["resume_contract"]["train"]
+    assert switch["previous_validation"] == first["resume_contract"]["validation"]
+    assert len(switched["resume_contract"]["dataset_switch_history"]) == 1
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=4, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+        resume=True, extend_schedule=True,
+    )
+    resumed = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
+    assert resumed["step"] == 4
+    assert resumed["tokens_seen"] == 32
+    assert resumed["resume_contract"]["dataset_switch"]["switch_step"] == 2
+
+
+def test_resume_with_dataset_switch_still_rejects_optimizer_change(tiny_config, tmp_path):
+    train_bin = tmp_path / "train.bin"
+    valid_bin = tmp_path / "valid.bin"
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 10)
+    _write_stream(valid_bin, tiny_config.vocab_size, 256, 11)
+    run = tmp_path / "run"
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=2, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+    )
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 99)
+    with pytest.raises(ValueError, match="Resume contract mismatch"):
+        train_model(
+            tiny_config, train_bin, valid_bin, run,
+            steps=3, batch_size=1, seq_len=8, grad_accum=1,
+            eval_every=1, save_every=1, eval_batches=1,
+            resume=True, extend_schedule=True,
+            allow_dataset_change=True, learning_rate=1e-3,
         )

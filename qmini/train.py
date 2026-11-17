@@ -823,8 +823,9 @@ def train_model(
     checkpoint_mirror_dir: str | Path | None = None,
     checkpoint_session_id: str | None = None,
     allow_batch_size_change: bool = False,
+    allow_dataset_change: bool = False,
 ) -> Path:
-    """Pretrain from scratch/step-zero Q2 brain, SFT, or deliberate batch tuning on resume."""
+    """Pretrain from scratch/step-zero Q2 brain, SFT, deliberate batch tuning, or an audited dataset switch on resume."""
     config.validate()
     positive = {
         "steps": steps,
@@ -872,9 +873,15 @@ def train_model(
         ("extend_schedule", extend_schedule),
         ("allow_legacy_resume", allow_legacy_resume),
         ("allow_batch_size_change", allow_batch_size_change),
+        ("allow_dataset_change", allow_dataset_change),
     ):
         if not isinstance(value, bool):
             raise TypeError(f"{name} must be a boolean.")
+    if allow_dataset_change and not resume:
+        raise ValueError(
+                "--allow-dataset-change only applies when resuming a checkpoint "
+            "with --resume."
+        )
 
     if (train_mask_bin is None) != (valid_mask_bin is None):
         raise ValueError("Provide both --train-mask-bin and --valid-mask-bin, or neither.")
@@ -1061,18 +1068,19 @@ def train_model(
             raise ValueError("Checkpoint resume contract is malformed; refusing an unsafe resume.")
         else:
             lineage_keys = {"initial_model", "initial_model_path"}
+            switch_keys = {"dataset_switch", "dataset_switch_history"}
+            excluded_keys = lineage_keys | switch_keys
             saved_core = _resume_contract_for_comparison({
                 key: value for key, value in saved_contract.items()
-                if key not in lineage_keys
+                if key not in excluded_keys
             }, allow_batch_size_change=allow_batch_size_change)
             current_core = _resume_contract_for_comparison({
                 key: value for key, value in contract.items()
-                if key not in lineage_keys
+                if key not in excluded_keys
             }, allow_batch_size_change=allow_batch_size_change)
-            if saved_core != current_core:
-                raise ValueError(
-                    "Resume contract mismatch (dataset/tokenizer or optimizer settings). "
-                    "Use a new run directory for changed data or settings."
+            _reconcile_resume_contract(
+                saved_contract, saved_core, current_core, contract, state,
+                allow_dataset_change=allow_dataset_change,
                 )
             # The initial model is loaded exactly once. On resume the caller must
             # not pass it again, but the checkpoint's original initialization
@@ -1491,3 +1499,67 @@ def train_model(
         f"Training complete: {final_dir} | packed export={packed_path.stat().st_size:,} bytes"
     )
     return final_dir
+
+def _reconcile_resume_contract(
+    saved_contract,
+    saved_core,
+    current_core,
+    contract,
+    state,
+    *,
+    allow_dataset_change,
+):
+    """Reconcile a saved resume contract with the current run's contract.
+
+    When the data fingerprints match, any recorded dataset-switch audit trail
+    is carried into the new contract. When only the data fingerprints differ
+    and the caller explicitly allowed a dataset change, the switch is recorded
+    (previous fingerprints plus the step it happened at) and the new contract
+    is re-baselined to the new data. Anything else is still a hard mismatch:
+    config, seed, learning rate, weight decay, effective batch and tokenizer
+    changes are never allowed through this path.
+    """
+    if saved_core == current_core:
+        if "dataset_switch" in saved_contract:
+            contract["dataset_switch"] = saved_contract["dataset_switch"]
+        if "dataset_switch_history" in saved_contract:
+            contract["dataset_switch_history"] = saved_contract["dataset_switch_history"]
+        return
+    differing = {
+        key
+        for key in saved_core.keys() | current_core.keys()
+        if saved_core.get(key) != current_core.get(key)
+    }
+    dataset_keys = {
+        "train",
+        "validation",
+        "train_loss_mask",
+        "validation_loss_mask",
+        "dataset_manifest",
+    }
+    if allow_dataset_change and differing and differing <= dataset_keys:
+        switch_record = {
+            "switch_step": int(state["step"]),
+            "previous_train": saved_contract.get("train"),
+            "previous_validation": saved_contract.get("validation"),
+            "previous_train_loss_mask": saved_contract.get("train_loss_mask"),
+            "previous_validation_loss_mask": saved_contract.get("validation_loss_mask"),
+            "previous_dataset_manifest": saved_contract.get("dataset_manifest"),
+            "previous_tokenizer": saved_contract.get("tokenizer"),
+        }
+        history = list(saved_contract.get("dataset_switch_history") or [])
+        history.append(switch_record)
+        contract["dataset_switch"] = switch_record
+        contract["dataset_switch_history"] = history
+        print(
+            "WARNING: authorized dataset switch on resume at step "
+            f"{int(state['step']):,}: the resume contract is re-baselined to the "
+            "new data. Optimizer state, model weights, config, seed, learning "
+            "rate, weight decay and effective batch are unchanged; only the data "
+            "fingerprints were replaced."
+        )
+        return
+    raise ValueError(
+        "Resume contract mismatch (dataset/tokenizer or optimizer settings). "
+        "Use a new run directory for changed data or settings."
+    )

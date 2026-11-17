@@ -269,6 +269,8 @@ def main() -> int:
     )
     train.add_argument("--allow-legacy-resume", action="store_true",
         help="resume a checkpoint without data fingerprints after manual verification")
+    train.add_argument("--allow-dataset-change", action="store_true",
+                       help="resume with a different dataset after an explicit, audited dataset switch; re-baselines only the data fingerprints in the resume contract")
     def do_train(a):
         from .train import train_model
         train_model(QMiniConfig.from_json(a.config), a.train_bin, a.valid_bin, a.output_dir,
@@ -277,7 +279,7 @@ def main() -> int:
             a.extend_schedule, a.allow_legacy_resume, a.train_mask_bin, a.valid_mask_bin,
             init_from=a.init_from, init_from_initial=a.init_from_initial,
             checkpoint_mirror_dir=a.checkpoint_mirror_dir,
-            checkpoint_session_id=a.checkpoint_session_id); return 0
+            checkpoint_session_id=a.checkpoint_session_id, allow_dataset_change=a.allow_dataset_change); return 0
     train.set_defaults(func=do_train)
     gen = commands.add_parser("generate", help="generate from a trained model")
     gen.add_argument("--model-dir", required=True); gen.add_argument("--prompt", required=True)
