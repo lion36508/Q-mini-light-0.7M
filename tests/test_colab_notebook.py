@@ -324,3 +324,25 @@ def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     assert "No neural-model training was run in this build stage." in build
     assert "MODEL BUILD COMPLETE — TRAINING REMAINS DISABLED" in final_guard
     assert "QMini_Training_Runner.ipynb" in final_guard
+
+def test_cpu_resume_notebook_trains_on_conversation_data():
+    notebook_path = (
+        Path(__file__).resolve().parents[1] / "colab" / "QMini_English_CPU_One_Click_Resume.ipynb"
+    )
+    raw = notebook_path.read_text(encoding="utf-8")
+    notebook = json.loads(raw)
+    assert len(notebook["cells"]) == 2
+    markdown = "".join(notebook["cells"][0]["source"])
+    code = "".join(notebook["cells"][1]["source"])
+    ast.parse(code)
+    assert "tinystories" not in raw.lower()
+    assert "roneneldan" not in raw.lower()
+    assert "V11" in markdown
+    assert "prepare_conversation_datasets" in code
+    assert "allow_dataset_change" in code
+    assert "QMini-English-512-Q2v2-e1a187f0ca1567cd" in code
+    assert "dailydialog" in code
+    assert "oasst1_en" in code
+    assert "checkpoint-step-000000012540" in code
+    assert "--loss-mask" in code
+    assert '"assistant"' in code or "'assistant'" in code
