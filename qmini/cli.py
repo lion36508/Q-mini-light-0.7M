@@ -269,7 +269,7 @@ def main() -> int:
     )
     train.add_argument("--allow-legacy-resume", action="store_true",
         help="resume a checkpoint without data fingerprints after manual verification")
-train.add_argument("--allow-dataset-change", action="store_true",
+    train.add_argument("--allow-dataset-change", action="store_true",
                        help="resume with a different dataset after an explicit, audited dataset switch; re-baselines only the data fingerprints in the resume contract")
     def do_train(a):
         from .train import train_model
