@@ -275,6 +275,7 @@ def test_generate_cli_serialized_prompt_requires_warning_and_passes_penalties(
 
 def test_training_cli_forwards_allow_dataset_change(monkeypatch, tmp_path):
     import qmini.train as train_module
+    import sys
 
     seen = {}
 
