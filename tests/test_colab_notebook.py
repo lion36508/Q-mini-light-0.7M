@@ -346,3 +346,39 @@ def test_cpu_resume_notebook_trains_on_conversation_data():
     assert "checkpoint-step-000000012540" in code
     assert "--loss-mask" in code
     assert '"assistant"' in code or "'assistant'" in code
+
+def test_english_cpu_only_resume_v9_is_syntax_valid_and_uses_safe_resume_flow():
+    root = Path(__file__).resolve().parents[1]
+    notebook_path = root / "colab" / "QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+
+    assert notebook.get("nbformat") == 4
+    code_cells = [
+        "".join(cell.get("source", []))
+        for cell in notebook.get("cells", [])
+        if cell.get("cell_type") == "code"
+    ]
+    assert len(code_cells) == 1
+    source = code_cells[0]
+    parsed = ast.parse(source, filename=str(notebook_path))
+    assert parsed.body
+
+    # Catch the historical Path NameError and ensure the CPU lock is set
+    # before importing PyTorch in a fresh Colab runtime.
+    assert source.index("from pathlib import Path") < source.index('Path("/content/drive/MyDrive")')
+    assert source.index('os.environ["CUDA_VISIBLE_DEVICES"] = ""') < source.index("import torch")
+    assert "CPU-only lock did not take effect." in source
+    assert "torch.cuda.is_available()" in source
+
+    # The active notebook must keep the intended model/data contract and
+    # use the checked Drive checkpoint-resume path rather than reinitializing.
+    assert "TRAIN_SEQUENCE_LENGTH = 512" in source
+    assert "VOCAB_SIZE = 4096" in source
+    assert "TARGET_OPTIMIZER_STEPS = 20000" in source
+    assert "BATCH_SIZE = 4" in source
+    assert "GRAD_ACCUM = 2" in source
+    assert "TrainingSessionLease(" in source
+    assert "restore_latest_checkpoint(" in source
+    assert "resume=resume_run" in source
+    assert "init_from_initial=None if resume_run else INITIAL_MODEL_PATH" in source
+
