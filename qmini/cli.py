@@ -23,7 +23,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     audit = commands.add_parser("audit", help="inspect model configuration and runtime")
     audit.add_argument("--config", default="configs/qmini_light_0.7m.json")
-def do_audit(args):
+    def do_audit(args):
         cfg = QMiniConfig.from_json(args.config)
         parameters = cfg.estimated_parameter_count()
         print("Q-MINI CONFIG AUDIT"); print("=" * 60)
