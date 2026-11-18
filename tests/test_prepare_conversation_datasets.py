@@ -247,3 +247,11 @@ def test_pinned_dataset_constants():
     assert prep.DAILYDIALOG_SPLITS["train"]["dialogues"] == 11118
     assert prep.DAILYDIALOG_SPLITS["validation"]["dialogues"] == 1000
     assert prep.DAILYDIALOG_SPLITS["test"]["dialogues"] == 1000
+
+def test_pinned_dailydialog_sha256_hashes():
+    assert prep.DAILYDIALOG_SPLITS["train"]["sha256"] == "c5179ab5a9a86a77b9d29114087c6b82cc4cb366abea25a43a0c24be761133f7"
+    assert prep.DAILYDIALOG_SPLITS["validation"]["sha256"] == "1dbcb00a0b4fe709788ce6604b561ba76557c88fe41f049d7899287838f0ec6a"
+    assert prep.DAILYDIALOG_SPLITS["test"]["sha256"] == "cfffc0bab93a3697c2562a9ee35c4533f0de2a93e86a4e4d3ea45cbde4bea00f"
+    for split in prep.DAILYDIALOG_SPLITS.values():
+        assert len(split["sha256"]) == 64
+        assert set(split["sha256"]) <= set("0123456789abcdef")
