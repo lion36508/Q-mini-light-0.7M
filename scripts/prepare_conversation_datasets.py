@@ -55,7 +55,7 @@ DAILYDIALOG_SPLITS = {
     "train": {
         "file": "train.zip",
         "size_bytes": 1935190,
-        "sha256": "c5179ab5a9a86a77b9d29114087c6824c4b364abea2a53a0c24be761133f7",
+        "sha256": "c5179ab5a9a86a77b9d29114087c6b82cc4cb366abea25a43a0c24be761133f7",
         "dialogues": 11118,
     },
     "validation": {
@@ -67,7 +67,7 @@ DAILYDIALOG_SPLITS = {
     "test": {
         "file": "test.zip",
         "size_bytes": 178601,
-        "sha256": "cfffc0bab93a3697c2562a9e35c4533f0de2a93e86a4e4d3ea45cbde4bea00f",
+        "sha256": "cfffc0bab93a3697c2562a9ee35c4533f0de2a93e86a4e4d3ea45cbde4bea00f",
         "dialogues": 1000,
     },
 }
