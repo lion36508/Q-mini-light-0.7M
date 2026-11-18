@@ -337,7 +337,7 @@ def test_cpu_resume_notebook_trains_on_conversation_data():
     ast.parse(code)
     assert "tinystories" not in raw.lower()
     assert "roneneldan" not in raw.lower()
-    assert "V11" in markdown
+    assert "V12" in markdown
     assert "prepare_conversation_datasets" in code
     assert "allow_dataset_change" in code
     assert "QMini-English-512-Q2v2-e1a187f0ca1567cd" in code
