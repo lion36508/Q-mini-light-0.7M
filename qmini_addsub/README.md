@@ -37,7 +37,7 @@ Never load a legacy Q2-v2 checkpoint into this package. Do not overwrite or migr
 
 The default preparation script uses:
 
-1. **WikiText-103 raw** for next-token language pretraining. The source archive is SHA-256 pinned; source metadata reports CC-BY-SA/GFDL terms.
+1. **WikiText-103 raw** for next-token language pretraining. The source archive is SHA-256 pinned; source metadata reports CC-BY-SA/GFDL terms (upstream raw metadata does not pin one single version).
 2. **OpenAssistant OASST1** for English human-annotated multi-turn conversation data. Only ready-for-export, positively reviewed, non-deleted, explicitly non-synthetic messages and rank-0 assistant answers are retained. The pinned source revision/file hash is verified. License: Apache-2.0.
 3. **Databricks Dolly 15k** for human-authored instruction/response examples. Dataset revision is pinned and source file SHA-256 is recorded at preparation time. License: CC-BY-SA-3.0.
 
