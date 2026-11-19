@@ -46,25 +46,61 @@ class CausalConvMixer(nn.Module):
         return self.output_projection(activated)
 
 
+class RMSNorm(nn.Module):
+    """Pre-normalization for stable residual streams."""
+
+    def __init__(self, width: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(width))
+        self.eps = eps
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        variance = inputs.float().pow(2).mean(dim=-1, keepdim=True)
+        normalized = inputs * torch.rsqrt(variance + self.eps).to(inputs.dtype)
+        return normalized * self.weight.to(inputs.dtype)
+
+
 class GatedDiagonalStateSpace(nn.Module):
-    """Causal diagonal recurrence with a parallelizable training interface."""
+    """Input-dependent diagonal state-space memory with an associative scan."""
 
     def __init__(self, config: AddSubConfig) -> None:
         super().__init__()
         self.drive_projection = AddSubLinear(config.d_model, config.d_model)
+        self.decay_projection = AddSubLinear(config.d_model, config.d_model)
         self.gate_projection = AddSubLinear(config.d_model, config.d_model)
-        self.decay_logits = nn.Parameter(torch.zeros(config.d_model))
+        self.output_projection = AddSubLinear(config.d_model, config.d_model)
+
+    @staticmethod
+    def parallel_scan(decay: torch.Tensor, injection: torch.Tensor) -> torch.Tensor:
+        """Differentiable O(log(sequence))-depth affine prefix scan."""
+        if decay.ndim != 3 or injection.shape != decay.shape:
+            raise ValueError("decay and injection must share [batch, sequence, features] shape.")
+        if decay.shape[1] < 1:
+            raise ValueError("State-space scan requires a non-empty sequence.")
+        a = decay.float()
+        b = injection.float()
+        offset, length = 1, decay.shape[1]
+        while offset < length:
+            previous_a, previous_b = a, b
+            earlier_a = torch.cat(
+                (torch.ones_like(previous_a[:, :offset]), previous_a[:, :-offset]),
+                dim=1,
+            )
+            earlier_b = torch.cat(
+                (torch.zeros_like(previous_b[:, :offset]), previous_b[:, :-offset]),
+                dim=1,
+            )
+            b = previous_b + previous_a * earlier_b
+            a = previous_a * earlier_a
+            offset *= 2
+        return b
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        drive = torch.tanh(self.drive_projection(inputs))
-        decay = torch.sigmoid(self.decay_logits).view(1, -1)
-        state = torch.zeros_like(drive[:, 0, :])
-        states = []
-        for position in range(drive.shape[1]):
-            state = decay * state + (1.0 - decay) * drive[:, position, :]
-            states.append(state)
-        memory = torch.stack(states, dim=1)
-        return memory * torch.sigmoid(self.gate_projection(inputs))
+        drive = torch.tanh(self.drive_projection(inputs)).float()
+        decay = torch.exp(-F.softplus(self.decay_projection(inputs).float())).clamp_min(1e-6)
+        states = self.parallel_scan(decay, (1.0 - decay) * drive)
+        gated = states.to(dtype=inputs.dtype) * torch.sigmoid(self.gate_projection(inputs))
+        return self.output_projection(gated)
 
 
 class SparseTop1Experts(nn.Module):
@@ -112,19 +148,22 @@ class SparseTop1Experts(nn.Module):
 
 
 class AddSubBlock(nn.Module):
-    """New implementation of the legacy model's three useful sequence ideas."""
+    """Pre-norm residual block: causal convolution, state-space memory and sparse MoE."""
 
     def __init__(self, config: AddSubConfig) -> None:
         super().__init__()
+        self.conv_norm = RMSNorm(config.d_model)
         self.conv = CausalConvMixer(config)
+        self.state_norm = RMSNorm(config.d_model)
         self.state_space = GatedDiagonalStateSpace(config)
+        self.expert_norm = RMSNorm(config.d_model)
         self.experts = SparseTop1Experts(config)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        outputs = inputs + self.dropout(self.conv(inputs))
-        outputs = outputs + self.dropout(self.state_space(outputs))
-        expert_output, auxiliary_loss = self.experts(outputs)
+        outputs = inputs + self.dropout(self.conv(self.conv_norm(inputs)))
+        outputs = outputs + self.dropout(self.state_space(self.state_norm(outputs)))
+        expert_output, auxiliary_loss = self.experts(self.expert_norm(outputs))
         outputs = torch.clamp(outputs + self.dropout(expert_output), -12.0, 12.0)
         return outputs, auxiliary_loss
 
@@ -140,6 +179,7 @@ class AddSubLanguageModel(nn.Module):
         self.blocks = nn.ModuleList(
             [AddSubBlock(self.config) for _ in range(self.config.n_layers)]
         )
+        self.final_norm = RMSNorm(self.config.d_model)
         self.final_bias = nn.Parameter(torch.zeros(self.config.vocab_size))
 
     def forward(self, input_ids: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -160,7 +200,7 @@ class AddSubLanguageModel(nn.Module):
             auxiliary_losses.append(aux_loss)
 
         tied_output_weight = quantize_weight_ste(self.token_embedding.weight)
-        logits = F.linear(hidden, tied_output_weight, self.final_bias)
+        logits = F.linear(self.final_norm(hidden), tied_output_weight, self.final_bias)
         auxiliary_loss = torch.stack(auxiliary_losses).mean()
         return {"logits": logits, "aux_loss": auxiliary_loss}
 
