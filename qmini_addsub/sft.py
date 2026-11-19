@@ -12,7 +12,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tokenizers import Tokenizer
 
-from .config import AddSubConfig\nfrom .data import is_clean_english_text
+from .config import AddSubConfig
+from .data import is_clean_english_text
 from .model import AddSubLanguageModel
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
