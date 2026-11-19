@@ -53,6 +53,45 @@ def test_additive_projection_matches_five_symbol_reference():
     assert np.array_equal(actual, expected)
 
 
+def test_zero_symbol_adds_no_projection_contribution():
+    activations = np.asarray([[12, -8, 5]], dtype=np.int8)
+    zero_weights = np.full((4, 3), 2, dtype=np.uint8)
+    assert np.array_equal(
+        additive_projection(activations, zero_weights),
+        np.zeros((1, 4), dtype=np.int64),
+    )
+
+
+def test_sft_dataset_masks_user_context_and_supervises_assistant_end_token():
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    dataset = ConversationDataset(
+        [{"messages": [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ]}],
+        tokenizer,
+        max_context=64,
+    )
+    token_ids, labels = dataset[0]
+    user_position = token_ids.index(vocab["<|user|>"])
+    assistant_position = token_ids.index(vocab["<|assistant|>"])
+    assert labels[user_position + 1] == -100
+    assert labels[assistant_position] == -100
+    assert labels[assistant_position + 1] == vocab["<unk>"]
+    assert labels[-1] == vocab["<|end|>"]
+
+
 def test_additive_runtime_has_no_multiply_divide_or_matmul_ast():
     source = Path(__file__).resolve().parents[1] / "qmini_addsub" / "runtime.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
