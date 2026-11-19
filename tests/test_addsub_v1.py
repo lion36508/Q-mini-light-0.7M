@@ -373,7 +373,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
                 {"role": "assistant", "content": "A compiler translates program source."},
             ],
         }
-        path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     sft_train = data_dir / "sft_train.jsonl"
