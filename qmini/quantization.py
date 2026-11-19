@@ -142,6 +142,10 @@ def unpack_quaternary(
         if np.any(scales < 0):
             raise ValueError("Q2-v2 row scales must be non-negative.")
         codebook = (-1.0, -0.5, 0.5, 1.0)
+    elif format_version == 3:
+        if np.any(scales < 0):
+            raise ValueError("Q2-v3 row scales must be non-negative.")
+        codebook = (-1.0, 0.0, 0.5, 1.0)
     else:
         raise ValueError(f"Unsupported Q2 format version: {format_version!r}.")
 
@@ -150,6 +154,83 @@ def unpack_quaternary(
         codes[:, offset::4] = (packed >> (2 * offset)) & 3
     values = np.asarray(codebook, dtype=np.float32)[codes]
     return values[:, :in_features] * scales[:, None]
+
+
+
+def quantize_q2_v3(weight: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Q2-v3 STE using {-1, 0, +0.5, +1} and FP32 row AbsMax scales."""
+    if weight.ndim < 2 or any(size < 1 for size in weight.shape):
+        raise ValueError("Weight tensor must have at least two non-empty dimensions.")
+    if isinstance(eps, bool) or not np.isfinite(eps) or eps <= 0:
+        raise ValueError("eps must be finite and positive.")
+    if not torch.isfinite(weight).all():
+        raise ValueError("Q2-v3 quantization rejects non-finite weights.")
+
+    flat = weight.detach().float().reshape(weight.shape[0], -1)
+    row_scale = flat.abs().amax(dim=-1, keepdim=True)
+    safe_scale = row_scale.clamp_min(float(eps))
+    normalized = (flat / safe_scale).clamp(-1.0, 1.0)
+    symbols = torch.where(
+        normalized < -0.5,
+        -1.0,
+        torch.where(normalized < 0.25, 0.0,
+                    torch.where(normalized < 0.75, 0.5, 1.0)),
+    )
+    quantized = (symbols * row_scale).reshape_as(weight).to(dtype=weight.dtype)
+    return weight + (quantized - weight).detach()
+
+
+def quantize_q2(
+    weight: torch.Tensor,
+    quantization_version: str = "q2-v2",
+) -> torch.Tensor:
+    """Dispatch QAT quantization while preserving the legacy v2 function."""
+    if quantization_version == "q2-v2":
+        return quantize_quaternary(weight)
+    if quantization_version == "q2-v3":
+        return quantize_q2_v3(weight)
+    raise ValueError(f"Unsupported Q-Mini quantization version: {quantization_version!r}.")
+
+
+def pack_q2_v3(weight: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+    """Pack 00=-1, 01=0, 10=+0.5, 11=+1 with FP32 per-row AbsMax scales."""
+    if weight.ndim != 2 or weight.shape[0] < 1 or weight.shape[1] < 1:
+        raise ValueError("Expected a non-empty [out_features, in_features] matrix.")
+    values = weight.detach().float().cpu().numpy()
+    if not np.isfinite(values).all():
+        raise ValueError("Q2-v3 packing rejects non-finite weights.")
+
+    scales = np.max(np.abs(values), axis=1).astype(np.float32)
+    safe_scales = np.where(scales > 0.0, scales, 1.0).astype(np.float32)
+    normalized = np.clip(values / safe_scales[:, None], -1.0, 1.0)
+    codes = np.select(
+        [normalized < -0.5, normalized < 0.25, normalized < 0.75],
+        [0, 1, 2],
+        default=3,
+    ).astype(np.uint8)
+
+    rows, columns = codes.shape
+    # Code 01 is the true-zero symbol and the neutral padding value.
+    padded = np.full((rows, ((columns + 3) // 4) * 4), 1, dtype=np.uint8)
+    padded[:, :columns] = codes
+    packed = (
+        padded[:, 0::4]
+        | (padded[:, 1::4] << 2)
+        | (padded[:, 2::4] << 4)
+        | (padded[:, 3::4] << 6)
+    )
+    return packed.astype(np.uint8), scales
+
+
+def pack_q2(
+    weight: torch.Tensor,
+    quantization_version: str = "q2-v2",
+) -> tuple[np.ndarray, np.ndarray]:
+    if quantization_version == "q2-v2":
+        return pack_quaternary(weight)
+    if quantization_version == "q2-v3":
+        return pack_q2_v3(weight)
+    raise ValueError(f"Unsupported Q-Mini quantization version: {quantization_version!r}.")
 
 
 def quantize_ternary_rowwise(
