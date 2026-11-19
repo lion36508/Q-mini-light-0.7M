@@ -339,6 +339,12 @@ def load_packed_state_into_trainable_model(
         metadata = json.loads(str(archive["metadata_json"].item()))
         q2_version = _resolve_q2_archive_version(metadata)
         config = QMiniConfig.from_dict(metadata["config"])
+        expected_quantization = "q2-v2" if q2_version in {1, 2} else "q2-v3"
+        if q2_version in {2, 3} and config.quantization_version != expected_quantization:
+            raise ValueError(
+                f"Q2-v{q2_version} packed initialization config must declare "
+                f"quantization_version={expected_quantization!r}."
+            )
         if config.to_dict() != model.config.to_dict():
             raise ValueError("Packed initialization config differs from the trainable model.")
         parameters = dict(model.named_parameters())
@@ -357,6 +363,8 @@ def load_packed_state_into_trainable_model(
                 if shape != tuple(parameter.shape):
                     raise ValueError(f"Packed initialization shape mismatch for {name}.")
                 if spec["kind"] == "q2":
+                    if name == "embedding.weight" and not config.quantize_embeddings:
+                        raise ValueError("Q2 embedding payload conflicts with quantize_embeddings=false.")
                     packed = np.asarray(archive[spec["packed_key"]], dtype=np.uint8)
                     scales = np.asarray(archive[spec["scale_key"]], dtype=np.float32)
                     if not np.isfinite(scales).all() or (
