@@ -201,27 +201,11 @@ def read_dailydialog_split_text(zip_path, split):
 def flatten_oasst1_rows(rows):
     """Flatten only reviewed, non-synthetic English OASST1 messages.
 
-    Required source flags (review_result, deleted, synthetic, rank and
-    tree_state) are enforced by the caller's schema check and below.
-    Conversation trees stay intact for downstream document-level splitting.
-    """
-Flatten OASST1 message trees into linear dialogues.
-
-    ``rows`` is an iterable of dicts with ``message_id``, ``parent_id``,
-    ``text``, ``role``, ``lang``, ``deleted`` and ``message_tree_id``. Rows
-    are expected in depth-first order (the order the parquet file stores
-    them); children keep that order.
-
-    Only English (``lang == "en``), non-deleted messages with non-empty
-    text are kept; ``prompter`` maps to the ``user`` role and ``assistant``
-    to ``assistant``. Each message tree becomes exactly one document: the
-    linear dialogue follows the first-child chain from the root, so a tree
-    can never be split across the pipeline's train/validation split. Two
-    consecutive kept messages with the same role are merged into one turn.
-    A tree that has no root among the kept messages, does not start with a
-    user turn, or has no assistant turn, is dropped.
-
-    Returns ``(records, stats)``.
+    The input schema must include review_result, deleted, synthetic, rank and
+    tree_state. Only ready-for-export, positively reviewed, non-deleted,
+    explicitly non-synthetic English messages are kept. For assistant replies,
+    only rank 0 is retained. Unknown/missing safety flags fail closed.
+    Conversation trees remain intact for downstream document-level splitting.
     """
     kept = []
     dropped = {
