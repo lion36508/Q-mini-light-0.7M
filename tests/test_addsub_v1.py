@@ -18,7 +18,7 @@ from qmini_addsub.runtime import additive_projection
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
-from qmini_addsub.sft import ConversationDataset
+from qmini_addsub.sft import ConversationDataset, _load_conversations
 
 
 def test_addsub_config_is_independent_and_validates():
@@ -94,6 +94,34 @@ def test_sft_dataset_masks_user_context_and_supervises_assistant_end_token():
     assert labels[assistant_position] == -100
     assert labels[assistant_position + 1] == vocab["<unk>"]
     assert labels[-1] == vocab["<|end|>"]
+
+
+def test_sft_loader_accepts_only_curated_human_non_synthetic_sources(tmp_path):
+    import json
+
+    path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "OpenAssistant/oasst1",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "What is a compiler?"},
+            {"role": "assistant", "content": "A compiler translates source code."},
+        ],
+    }
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert len(_load_conversations(path)) == 1
+
+    record["synthetic"] = True
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="synthetic/unverified"):
+        _load_conversations(path)
+
+    record["synthetic"] = False
+    record["source"] = "unknown/copied-corpus"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unapproved"):
+        _load_conversations(path)
 
 
 def test_additive_runtime_has_no_multiply_divide_or_matmul_ast():
