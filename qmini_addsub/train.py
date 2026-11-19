@@ -196,27 +196,53 @@ def train_from_scratch(
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
         torch.set_rng_state(checkpoint["torch_rng"])
+        if device.type == "cuda":
+            saved_cuda_rng = checkpoint.get("cuda_rng_states")
+            if not saved_cuda_rng or len(saved_cuda_rng) != torch.cuda.device_count():
+                raise ValueError(
+                    "CUDA RNG state is missing or device count changed; exact resume is unsafe."
+                )
+            torch.cuda.set_rng_state_all(saved_cuda_rng)
         rng.setstate(checkpoint["python_rng"])
 
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "metrics.jsonl"
 
-    def evaluate() -> float:
+    def evaluate(tokens: np.ndarray) -> float:
+        """Evaluate on fixed evenly spaced windows without advancing train RNG."""
         model.eval()
-        losses = []
+        max_start = len(tokens) - sequence_length - 1
+        if max_start < 0:
+            raise ValueError("Evaluation token stream is shorter than one sequence.")
+        number_of_windows = min(64, max_start + 1)
+        if number_of_windows == 1:
+            starts = [0]
+        else:
+            stride = max(1, max_start // (number_of_windows - 1))
+            starts = list(range(0, max_start + 1, stride))[:number_of_windows]
+
+        total_loss = 0.0
+        target_count = 0
         with torch.inference_mode():
-            for _ in range(4):
-                x, y = _sample_batch(
-                    valid_tokens, batch_size, sequence_length, rng, device
+            for offset in range(0, len(starts), batch_size):
+                current = starts[offset : offset + batch_size]
+                x = np.stack([tokens[start : start + sequence_length] for start in current])
+                y = np.stack(
+                    [tokens[start + 1 : start + sequence_length + 1] for start in current]
                 )
-                result = model(x)
-                loss = F.cross_entropy(
+                inputs = torch.as_tensor(x.astype(np.int64), device=device)
+                targets = torch.as_tensor(y.astype(np.int64), device=device)
+                result = model(inputs)
+                total_loss += float(F.cross_entropy(
                     result["logits"].float().reshape(-1, config.vocab_size),
-                    y.reshape(-1),
-                )
-                losses.append(float(loss))
+                    targets.reshape(-1),
+                    reduction="sum",
+                ))
+                target_count += int(targets.numel())
         model.train()
-        return float(sum(losses) / len(losses))
+        if not target_count:
+            raise ValueError("Evaluation did not contain any target tokens.")
+        return total_loss / target_count
 
     def save_checkpoint(step: int, valid_loss: float | None) -> Path:
         path = output / f"checkpoint-step-{step:09d}.pt"
@@ -233,6 +259,7 @@ def train_from_scratch(
             "valid_loss": valid_loss,
             "torch_rng": torch.get_rng_state(),
             "python_rng": rng.getstate(),
+            "cuda_rng_states": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
         temporary = path.with_suffix(".tmp")
         torch.save(payload, temporary)
@@ -260,7 +287,7 @@ def train_from_scratch(
         last_loss = float(token_loss.detach())
 
         if step % validate_every == 0 or step == steps:
-            valid_loss = evaluate()
+            valid_loss = evaluate(valid_tokens)
             record = {
                 "step": step,
                 "train_token_loss": last_loss,
@@ -277,11 +304,15 @@ def train_from_scratch(
         if step % save_every == 0 or step == steps:
             save_checkpoint(step, valid_loss)
 
+    heldout_test_loss = evaluate(test_tokens)
     return {
         "format": CHECKPOINT_FORMAT,
         "steps": steps,
         "parameter_count": model.parameter_count(),
         "final_train_token_loss": last_loss,
+        "final_validation_token_loss": evaluate(valid_tokens),
+        "heldout_test_token_loss": heldout_test_loss,
+        "heldout_test_sha256": sha256_file(test_path),
         "output_dir": str(output),
         "data_manifest_sha256": manifest_sha,
         "note": "Training graph only; complete add/sub-only inference export is a separate gate.",
