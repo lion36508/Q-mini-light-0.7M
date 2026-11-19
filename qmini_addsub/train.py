@@ -111,6 +111,30 @@ def train_from_scratch(
             f"Tokenizer vocab {tokenizer.get_vocab_size()} does not match "
             f"Add/Sub config vocab {config.vocab_size}."
         )
+    manifest_path = train_path.parent / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            "A verified dataset_manifest.json is required beside the Add/Sub token streams."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("format") != "qmini-addsub-data-v1" or manifest.get("language") != "English":
+        raise ValueError("Unsupported or non-English Add/Sub dataset manifest.")
+    if manifest.get("synthetic_training_records_included") != 0:
+        raise ValueError("Add/Sub v1 refuses a corpus containing synthetic training records.")
+    pretraining = manifest.get("pretraining", {}).get("splits", {})
+    for split, source_name in (("train", "pretrain_train.txt"), ("validation", "pretrain_validation.txt")):
+        source_path = train_path.parent / source_name
+        expected_sha = pretraining.get(split, {}).get("sha256")
+        if not source_path.is_file() or not expected_sha or sha256_file(source_path) != expected_sha:
+            raise ValueError(f"{split} pretraining source does not match the manifest.")
+    token_streams = manifest.get("token_streams", {})
+    if token_streams.get("train", {}).get("sha256") != sha256_file(train_path):
+        raise ValueError("Training token stream does not match the dataset manifest.")
+    if token_streams.get("validation", {}).get("sha256") != sha256_file(valid_path):
+        raise ValueError("Validation token stream does not match the dataset manifest.")
+    if train_path.resolve() == valid_path.resolve():
+        raise ValueError("Training and validation token streams must be different files.")
+
     train_tokens = np.memmap(train_path, dtype=np.uint16, mode="r")
     valid_tokens = np.memmap(valid_path, dtype=np.uint16, mode="r")
     if not len(train_tokens) or not len(valid_tokens):
@@ -119,6 +143,7 @@ def train_from_scratch(
         raise ValueError("Token stream contains IDs outside the configured vocabulary.")
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
     tokenizer_sha = sha256_file(tokenizer_path)
+    manifest_sha = sha256_file(manifest_path)
 
     random.seed(seed)
     np.random.seed(seed)
@@ -140,6 +165,7 @@ def train_from_scratch(
             "train_sha256": train_sha,
             "valid_sha256": valid_sha,
             "tokenizer_sha256": tokenizer_sha,
+            "data_manifest_sha256": manifest_sha,
         }
         mismatches = [
             key for key, value in expected.items() if checkpoint.get(key) != value
@@ -186,6 +212,7 @@ def train_from_scratch(
             "train_sha256": train_sha,
             "valid_sha256": valid_sha,
             "tokenizer_sha256": tokenizer_sha,
+            "data_manifest_sha256": manifest_sha,
             "valid_loss": valid_loss,
             "torch_rng": torch.get_rng_state(),
             "python_rng": rng.getstate(),
@@ -239,6 +266,7 @@ def train_from_scratch(
         "parameter_count": model.parameter_count(),
         "final_train_token_loss": last_loss,
         "output_dir": str(output),
+        "data_manifest_sha256": manifest_sha,
         "note": "Training graph only; complete add/sub-only inference export is a separate gate.",
     }
 
