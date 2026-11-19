@@ -75,11 +75,9 @@ def _oasst1_row(
     tree="tree-1",
     review_result=True,
     synthetic=False,
-    rank=None,
+    rank=0,
     tree_state="ready_for_export",
 ):
-    if role == "assistant" and rank is None:
-        rank = 0
     return {
         "message_id": message_id,
         "parent_id": parent_id,
@@ -137,6 +135,7 @@ def test_oasst1_filters_non_english_deleted_and_empty():
         "unreviewed": 0,
         "deleted": 1,
         "synthetic": 0,
+        "missing_rank": 0,
         "non_top_rank": 0,
         "empty": 1,
         "other_role": 0,
@@ -150,6 +149,7 @@ def test_oasst1_excludes_synthetic_unreviewed_not_ready_and_non_top_ranked_rows(
         _oasst1_row("a-unreviewed", "u1", "Unreviewed answer.", "assistant", review_result=False),
         _oasst1_row("a-not-ready", "u1", "Not exported.", "assistant", tree_state="halted_by_moderator"),
         _oasst1_row("a-ranked-1", "u1", "Second choice.", "assistant", rank=1),
+        _oasst1_row("a-missing-rank", "u1", "Unranked answer.", "assistant", rank=None),
         _oasst1_row("a-best", "u1", "Reviewed human answer.", "assistant", rank=0),
         _oasst1_row("u2", "a-best", "Thanks.", "prompter"),
         _oasst1_row("a2", "u2", "You are welcome.", "assistant", rank=0),
@@ -167,6 +167,7 @@ def test_oasst1_excludes_synthetic_unreviewed_not_ready_and_non_top_ranked_rows(
     assert stats["dropped_messages"]["unreviewed"] == 1
     assert stats["dropped_messages"]["not_ready"] == 1
     assert stats["dropped_messages"]["non_top_rank"] == 1
+    assert stats["dropped_messages"]["missing_rank"] == 1
 
 
 def test_oasst1_merges_consecutive_same_role_turns():
