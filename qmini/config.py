@@ -248,8 +248,9 @@ class QMiniConfig:
             + (experts if experts > 1 else 0)
         )
         row_scale_bytes = q2_row_count * 4
-        fp16_vector_bytes = vector_parameters * 2
-        fp16_embedding_matrix_bytes = 0 if quantized_embedding else vocab * d * 2
+        fp16_embedding_parameters = 0 if quantized_embedding else vocab * d
+        fp16_vector_bytes = (vector_parameters - fp16_embedding_parameters) * 2
+        fp16_embedding_matrix_bytes = fp16_embedding_parameters * 2
         return (
             packed_weight_bytes
             + row_scale_bytes
