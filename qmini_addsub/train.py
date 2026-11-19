@@ -132,15 +132,27 @@ def train_from_scratch(
         raise ValueError("Training token stream does not match the dataset manifest.")
     if token_streams.get("validation", {}).get("sha256") != sha256_file(valid_path):
         raise ValueError("Validation token stream does not match the dataset manifest.")
-    if train_path.resolve() == valid_path.resolve():
-        raise ValueError("Training and validation token streams must be different files.")
+    test_stream = token_streams.get("test", {})
+    test_path = train_path.parent / str(test_stream.get("path", ""))
+    if not test_path.is_file() or test_stream.get("sha256") != sha256_file(test_path):
+        raise ValueError("A separate, verified held-out test token stream is required.")
+    if len({train_path.resolve(), valid_path.resolve(), test_path.resolve()}) != 3:
+        raise ValueError("Train, validation and test token streams must be separate files.")
+    tokenizer_meta = manifest.get("tokenizer", {})
+    if tokenizer_meta.get("sha256") != tokenizer_sha:
+        raise ValueError("Tokenizer fingerprint does not match the dataset manifest.")
 
     train_tokens = np.memmap(train_path, dtype=np.uint16, mode="r")
     valid_tokens = np.memmap(valid_path, dtype=np.uint16, mode="r")
-    if not len(train_tokens) or not len(valid_tokens):
-        raise ValueError("Train and validation token streams must both be non-empty.")
-    if int(train_tokens.max()) >= config.vocab_size or int(valid_tokens.max()) >= config.vocab_size:
-        raise ValueError("Token stream contains IDs outside the configured vocabulary.")
+    test_tokens = np.memmap(test_path, dtype=np.uint16, mode="r")
+    if not len(train_tokens) or not len(valid_tokens) or not len(test_tokens):
+        raise ValueError("Train, validation and test token streams must all be non-empty.")
+    if (
+        int(train_tokens.max()) >= config.vocab_size
+        or int(valid_tokens.max()) >= config.vocab_size
+        or int(test_tokens.max()) >= config.vocab_size
+    ):
+        raise ValueError("A token stream contains IDs outside the configured vocabulary.")
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
     tokenizer_sha = sha256_file(tokenizer_path)
     manifest_sha = sha256_file(manifest_path)
