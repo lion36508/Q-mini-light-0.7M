@@ -33,6 +33,7 @@ def encode_text_file(
     output_path: str | Path,
 ) -> tuple[int, str]:
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    tokenizer_sha = sha256_file(tokenizer_path)
     eos_id = tokenizer.token_to_id("<eos>")
     if eos_id is None:
         raise ValueError("Tokenizer must contain the <eos> token.")
@@ -154,7 +155,6 @@ def train_from_scratch(
     ):
         raise ValueError("A token stream contains IDs outside the configured vocabulary.")
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
-    tokenizer_sha = sha256_file(tokenizer_path)
     manifest_sha = sha256_file(manifest_path)
 
     random.seed(seed)
