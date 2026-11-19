@@ -160,6 +160,11 @@ def test_new_model_forward_from_random_initialization():
     assert model.parameter_count() > 0
 
 
+def test_default_addsub_model_parameter_count_is_stable():
+    model = AddSubLanguageModel(AddSubConfig())
+    assert model.parameter_count() == 636168
+
+
 def test_new_model_rejects_legacy_context_overflow():
     config = AddSubConfig(
         vocab_size=300,
