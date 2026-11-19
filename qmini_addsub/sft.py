@@ -183,6 +183,9 @@ def fine_tune_from_addsub_checkpoint(
     if data_manifest.get("synthetic_training_records_included") != 0:
         raise ValueError("SFT refuses a dataset manifest containing synthetic training records.")
     sft_manifest = data_manifest.get("instruction_splits", {})
+    tokenizer_meta = data_manifest.get("tokenizer", {})
+    if tokenizer_meta.get("sha256") != sha256_file(tokenizer_path):
+        raise ValueError("SFT tokenizer does not match the curated dataset/tokenizer manifest.")
     for split_name, source_path in (("train", train_path), ("validation", valid_path)):
         entry = sft_manifest.get(split_name, {})
         if entry.get("path") != source_path.name or entry.get("sha256") != sha256_file(source_path):
