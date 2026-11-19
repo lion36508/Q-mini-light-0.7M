@@ -214,6 +214,7 @@ def flatten_oasst1_rows(rows):
         "unreviewed": 0,
         "deleted": 0,
         "synthetic": 0,
+        "missing_rank": 0,
         "non_top_rank": 0,
         "empty": 0,
         "other_role": 0,
@@ -239,15 +240,17 @@ def flatten_oasst1_rows(rows):
             mapped = "user"
         elif role == "assistant":
             rank = row.get("rank")
-            if rank is not None:
-                try:
-                    rank = int(rank)
-                except (TypeError, ValueError):
-                    dropped["non_top_rank"] += 1
-                    continue
-                if rank != 0:
-                    dropped["non_top_rank"] += 1
-                    continue
+            if rank is None:
+                dropped["missing_rank"] += 1
+                continue
+            try:
+                rank = int(rank)
+            except (TypeError, ValueError):
+                dropped["non_top_rank"] += 1
+                continue
+            if rank != 0:
+                dropped["non_top_rank"] += 1
+                continue
             mapped = "assistant"
         else:
             dropped["other_role"] += 1
