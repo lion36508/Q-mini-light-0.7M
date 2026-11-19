@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from tokenizers import Tokenizer
 
 from .config import AddSubConfig
-from .data import is_clean_english_text
+from .data import escape_special_token_literals, is_clean_english_text
 from .model import AddSubLanguageModel
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
@@ -85,7 +85,7 @@ class ConversationDataset(Dataset):
                     "<|user|>" if role == "user" else "<|assistant|>"
                 )
                 content = str(message.get("content") or "").strip()
-                content_ids = tokenizer.encode(content).ids
+                content_ids = tokenizer.encode(escape_special_token_literals(content)).ids
                 if not content_ids:
                     continue
                 encoded.append((role, special[role_token], content_ids))
