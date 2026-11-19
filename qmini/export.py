@@ -258,7 +258,7 @@ def reconstruct_packed_state(
         ) from exc
 
 
-def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]:
+def _verify_packed_export_impl(path: str | Path) -> dict[str, Any]:
     """Validate packed arrays one tensor at a time without expanding a 5B model."""
     target = Path(path)
     packed_weight_bytes = 0
@@ -372,6 +372,7 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]
     return {
         "format": archive_format,
         "q2_version": q2_version,
+        "q2_contract": metadata.get("q2_contract", _q2_contract(q2_version)) if q2_version in {2, 3} else {"version": 1, "codebook": {"00": -2.0, "01": -1.0, "10": 1.0, "11": 2.0}},
         "tensor_count": len(seen),
         "parameter_count": parameter_count,
         "q2_tensor_count": q2_count,
@@ -389,7 +390,7 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]
 
 
 
-def verify_packed_export(path: str | Path) -> dict[str, int | str | float]:
+def verify_packed_export(path: str | Path) -> dict[str, Any]:
     """Verify a packed archive and normalize malformed-container errors."""
     target = Path(path)
     try:
