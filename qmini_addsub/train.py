@@ -63,10 +63,10 @@ def _sample_batch(
     rng: random.Random,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    maximum = len(tokens) - sequence_length - 1
-    if maximum < 1:
+    last_start = len(tokens) - sequence_length - 1
+    if last_start < 0:
         raise ValueError("Token stream is shorter than one training sequence.")
-    starts = [rng.randrange(maximum) for _ in range(batch_size)]
+    starts = [rng.randrange(last_start + 1) for _ in range(batch_size)]
     inputs = np.stack([tokens[start : start + sequence_length] for start in starts])
     targets = np.stack(
         [tokens[start + 1 : start + sequence_length + 1] for start in starts]
@@ -98,6 +98,10 @@ def train_from_scratch(
     config.validate()
     if steps < 1 or batch_size < 1 or sequence_length < 2:
         raise ValueError("steps, batch_size and sequence_length must be positive.")
+    if save_every < 1 or validate_every < 1:
+        raise ValueError("save_every and validate_every must be positive.")
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive.")
     if sequence_length > config.max_context:
         raise ValueError("sequence_length exceeds the configured context.")
     device = torch.device(device_name)
@@ -160,6 +164,7 @@ def train_from_scratch(
     ):
         raise ValueError("A token stream contains IDs outside the configured vocabulary.")
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
+    test_sha = sha256_file(test_path)
     manifest_sha = sha256_file(manifest_path)
 
     random.seed(seed)
@@ -181,6 +186,7 @@ def train_from_scratch(
             "config": config.to_dict(),
             "train_sha256": train_sha,
             "valid_sha256": valid_sha,
+            "test_sha256": test_sha,
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
         }
@@ -254,6 +260,7 @@ def train_from_scratch(
             "optimizer": optimizer.state_dict(),
             "train_sha256": train_sha,
             "valid_sha256": valid_sha,
+            "test_sha256": test_sha,
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
             "valid_loss": valid_loss,
@@ -294,6 +301,7 @@ def train_from_scratch(
                 "valid_token_loss": valid_loss,
                 "train_sha256": train_sha,
                 "valid_sha256": valid_sha,
+                "test_sha256": test_sha,
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
