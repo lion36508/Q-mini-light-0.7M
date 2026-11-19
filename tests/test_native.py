@@ -272,6 +272,44 @@ def test_neon_native_kernel_is_selected_without_force_flag(
 
 
 
+def test_native_q2_v3_zero_codebook_matches_python_packed_reference(compiled_native_library):
+    from qmini.quantization import pack_q2_v3, unpack_quaternary
+
+    native = NativeKernel(compiled_native_library)
+    weight = torch.tensor([
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [-1.0, -0.5, 0.0, 0.25, 0.5, 0.75, 1.0],
+        [1.0, 0.0, -1.0, 0.0, 0.0, 0.5, -0.5],
+    ], dtype=torch.float32)
+    packed, scales = pack_q2_v3(weight)
+    assert scales.tolist() == [0.0, 1.0, 1.0]
+    x_q = np.asarray([[127, -127, 64, -64, 32, -32, 1]], dtype=np.int8)
+    x_scale = np.asarray([0.01], dtype=np.float32)
+
+    actual = native.linear(x_q, packed, scales, x_scale, q2_version=3)
+    dequantized = unpack_quaternary(packed, scales, 7, format_version=3)
+    expected = (x_q.astype(np.float32) @ dequantized.T) * x_scale[:, None]
+    assert np.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+    assert actual[0, 0] == 0.0
+
+
+def test_native_q2_v3_accepts_zero_rows_and_rejects_negative_scales(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    x_q = np.ones((1, 4), dtype=np.int8)
+    packed = np.full((2, 1), 0b01010101, dtype=np.uint8)
+    x_scale = np.ones(1, dtype=np.float32)
+    with pytest.raises(ValueError, match="non-negative"):
+        native.linear(
+            x_q, packed, np.asarray([0.0, -1.0], dtype=np.float32),
+            x_scale, q2_version=3,
+        )
+    out = native.linear(
+        x_q, packed, np.asarray([0.0, 0.0], dtype=np.float32),
+        x_scale, q2_version=3,
+    )
+    assert np.array_equal(out, np.zeros((1, 2), dtype=np.float32))
+
+
 def test_native_q2_v2_zero_scale_row_matches_python_reference(compiled_native_library):
     from qmini.quantization import pack_quaternary, unpack_quaternary
 
