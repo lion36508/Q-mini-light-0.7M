@@ -32,11 +32,21 @@ static inline int32_t qmini_decode_weight(
             default: return 4;
         }
     }
-    // Q2-v2 normalized codebook, represented in half-units:
-    // {-1,-0.5,+0.5,+1} -> {-2,-1,+1,+2}.
+    if (q2_version == 2) {
+        // Q2-v2 normalized codebook in half-units:
+        // {-1,-0.5,+0.5,+1} -> {-2,-1,+1,+2}.
+        switch (code) {
+            case 0: return -2;
+            case 1: return -1;
+            case 2: return 1;
+            default: return 2;
+        }
+    }
+    // Q2-v3 asymmetric codebook in half-units:
+    // {-1,0,+0.5,+1} -> {-2,0,+1,+2}; code 01 is a true zero.
     switch (code) {
         case 0: return -2;
-        case 1: return -1;
+        case 1: return 0;
         case 2: return 1;
         default: return 2;
     }
@@ -107,8 +117,9 @@ static int64_t qmini_accumulate_i8_q2(
 #endif
 }
 
-// Q2-v1 legacy symbols are {-2,-1,+1,+2}; Q2-v2 production symbols are
-// {-1,-0.5,+0.5,+1}. Both use four symbols per byte and row scales.
+// Q2-v1 legacy symbols are {-2,-1,+1,+2}; Q2-v2 uses
+// {-1,-0.5,+0.5,+1}; Q2-v3 uses {-1,0,+0.5,+1}. The decoder returns
+// doubled half-units and applies the 0.5 factor exactly once.
 // Integer accumulation uses doubled half-units and applies the 0.5 factor
 // exactly once. ARM builds use NEON when the target supports it.
 QMINI_EXPORT int qmini_linear_i8_v2(
@@ -128,7 +139,7 @@ QMINI_EXPORT int qmini_linear_i8_v2(
     }
     if (rows <= 0 || in_features <= 0 || out_features <= 0 ||
         in_features > std::numeric_limits<int>::max() - 3 ||
-        (q2_version != 1 && q2_version != 2)) {
+        (q2_version != 1 && q2_version != 2 && q2_version != 3)) {
         return 2;
     }
 
