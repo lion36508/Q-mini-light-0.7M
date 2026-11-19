@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from qmini_addsub.train import encode_text_file
@@ -37,7 +38,7 @@ def main() -> None:
         raise ValueError("Unsupported Add/Sub dataset manifest.")
     manifest["token_streams"] = outputs
     manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(outputs)
