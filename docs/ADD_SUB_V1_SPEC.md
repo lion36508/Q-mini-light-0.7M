@@ -1,6 +1,6 @@
 # Q-Mini Add/Sub v1 — Architecture Contract
 
-**Status:** design contract only. No model implementation, checkpoint or training run is claimed.
+**Status:** first independent training/data implementation exists; no Add/Sub model has been trained and the full multiply-free inference graph is not yet complete.
 
 ## 1. Product-line separation
 
@@ -12,7 +12,7 @@
 | Existing Q-Mini Light checkpoints | New checkpoints only |
 | Existing Drive folder | Separate `QMini-Light-AddSub-v1/` Drive folder |
 
-The old model remains runnable and its artifacts remain untouched. The new code must not import legacy model/runtime classes or load legacy weights. Stable ideas such as data manifests, checksums, tests and resumable-save principles may be reused, but architecture and artifact loaders stay separate.
+The old model remains runnable and its artifacts remain untouched. The new code must not import legacy model/runtime classes or load legacy weights. Stable ideas such as data manifests, checksums, tests and resumable-save principles may be reused, but model, quantization, tokenizer, checkpoint and runtime code stay separate.
 
 ## 2. Required weight alphabet
 
@@ -39,13 +39,25 @@ A coefficient lookup maps the activation integer and one of the five weight symb
 
 This requirement covers the *entire deployed graph*, not only the projection kernel.
 
-## 4. Training policy
+## 4. Model architecture and training graph
+
+The independent Add/Sub v1 training graph currently reuses three useful architectural ideas from the legacy family, but with new code and a reduced, separately versioned configuration:
+
+- causal depthwise convolution for local sequence mixing;
+- gated diagonal state-space recurrence for running context;
+- sparse Top-1 expert routing with per-token selected expert computation.
+
+The default configuration is English-first with a 512-token vocabulary, width 96, four blocks, two experts and a 256-wide expert MLP. This is a compact experimental design, not a claim of superior quality. The actual parameter count is obtained from the instantiated model.
+
+The training graph uses five-symbol STE/QAT matrix weights. Training/optimization is allowed to use floating-point arithmetic, multiplication and gradient operations. The deployment restriction applies to the inference graph only. Do not call the training model the Add/Sub-only runtime.
+
+## 5. Training policy
 
 Training precision is an independent research choice. This contract does **not** require a staged FP16/BF16 phase, does not prescribe an FP16-to-low-bit schedule, and does not authorize any change to the legacy model's trainer.
 
 The new model is initialized independently and trained only using the project's approved, provenance-checked English corpus. Do not load external pretrained checkpoints, adapters, LoRA weights or old Q-Mini weights.
 
-## 5. Required package layout
+## 6. Required package layout
 
 ```text
 qmini/                         # existing legacy Q-Mini Light; preserve
@@ -64,9 +76,9 @@ qmini_addsub/
     tests/
 ```
 
-This is the target layout, not a claim that all these files already exist. The legacy package must not import from `qmini_addsub`, and the new package must not import model/runtime classes from `qmini`.
+Implemented files include config.py, model.py, quantization.py, runtime.py, data.py, train.py and sft.py. Data/tokenizer preparation scripts and tests live in scripts/ and tests/. The full inference export/loader, calibrated LUT set and native inference graph are still pending. The legacy package must not import from qmini_addsub, and the new package must not import model/runtime classes from qmini.
 
-## 6. Artifact compatibility
+## 7. Artifact compatibility
 
 The manifest must include:
 
@@ -82,7 +94,7 @@ The manifest must include:
 
 The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown artifact format.
 
-## 7. Acceptance tests
+## 8. Acceptance tests
 
 1. Round-trip all five symbols, including exact zero, across pack/unpack.
 2. Invalid 3-bit codes are rejected; no symbol silently maps to another.
@@ -95,7 +107,7 @@ The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown a
 9. Held-out English NLL and task evaluation are reported separately from synthetic smoke tests.
 10. Real target-device RAM, speed, thermal and energy measurements are published before phone-support claims.
 
-## 8. Explicit non-goals for v1
+## 9. Explicit non-goals for v1
 
 - Do not merge with legacy Q2-v2 weights or checkpoints.
 - Do not overwrite or migrate the old Drive dataset/checkpoint folders.
