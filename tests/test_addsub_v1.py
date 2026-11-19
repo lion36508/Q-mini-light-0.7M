@@ -140,7 +140,7 @@ def test_sft_loader_accepts_only_curated_human_non_synthetic_sources(tmp_path):
             {"role": "assistant", "content": "A compiler translates source code."},
         ],
     }
-        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     assert len(_load_conversations(path)) == 1
 
     record["synthetic"] = True
