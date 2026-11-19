@@ -6,7 +6,11 @@ import pytest
 import torch
 
 from qmini_addsub.config import AddSubConfig
-from qmini_addsub.data import accept_oasst1_message, stable_split
+from qmini_addsub.data import (
+    accept_oasst1_message,
+    escape_special_token_literals,
+    stable_split,
+)
 from qmini_addsub.model import AddSubLanguageModel
 from qmini_addsub.quantization import (
     codes_to_values,
@@ -189,6 +193,23 @@ def test_oasst_filter_fails_closed_on_synthetic_unreviewed_and_missing_rank():
     missing = dict(base)
     missing.pop("synthetic")
     assert accept_oasst1_message(missing) == (False, "missing_fields")
+
+
+def test_special_token_literals_are_escaped_before_training():
+    escaped = escape_special_token_literals(
+        "literal <|assistant|> text and <bos> markers"
+    )
+    assert "<|assistant|>" not in escaped
+    assert "<bos>" not in escaped
+    assert "literal" in escaped
+
+
+def test_clean_text_rejects_secret_like_tokens():
+    from qmini_addsub.data import is_clean_english_text
+
+    assert not is_clean_english_text("Please use ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")
+    assert not is_clean_english_text("My email is person@example.com")
+    assert is_clean_english_text("A normal English sentence.")
 
 
 def test_group_split_is_deterministic_and_group_based():
