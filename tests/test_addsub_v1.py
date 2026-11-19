@@ -272,6 +272,92 @@ def test_new_model_forward_from_random_initialization():
     assert model.parameter_count() > 0
 
 
+def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint(tmp_path):
+    import hashlib
+    import json
+
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+    from qmini_addsub.train import train_from_scratch
+
+    config = AddSubConfig(
+        vocab_size=300,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=16,
+        dropout=0.0,
+    )
+    tokenizer_vocab = {"<unk>": 0, "<eos>": 1}
+    tokenizer_vocab.update({f"unused_{index}": index for index in range(2, 300)})
+    tokenizer = Tokenizer(WordLevel(tokenizer_vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer.save(str(tokenizer_path))
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    streams = {}
+    pretraining_splits = {}
+    for split, count in (("train", 64), ("validation", 32), ("test", 32)):
+        text_path = data_dir / f"pretrain_{split}.txt"
+        text_path.write_text(f"English {split} sample text.\n", encoding="utf-8")
+        raw_sha = hashlib.sha256(text_path.read_bytes()).hexdigest()
+        pretraining_splits[split] = {"sha256": raw_sha}
+        token_path = data_dir / f"pretrain_{split}.u16"
+        values = (np.arange(count, dtype=np.uint16) % 299) + 1
+        values.tofile(token_path)
+        streams[split] = {
+            "path": token_path.name,
+            "tokens": count,
+            "sha256": hashlib.sha256(token_path.read_bytes()).hexdigest(),
+        }
+
+    manifest = {
+        "format": "qmini-addsub-data-v1",
+        "language": "English",
+        "synthetic_training_records_included": 0,
+        "pretraining": {"splits": pretraining_splits},
+        "token_streams": streams,
+        "tokenizer": {
+            "path": tokenizer_path.name,
+            "sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+        },
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True), encoding="utf-8"
+    )
+
+    output_dir = tmp_path / "run"
+    common = {
+        "train_bin": data_dir / "pretrain_train.u16",
+        "valid_bin": data_dir / "pretrain_validation.u16",
+        "tokenizer_path": tokenizer_path,
+        "output_dir": output_dir,
+        "config": config,
+        "batch_size": 1,
+        "learning_rate": 1e-3,
+        "sequence_length": 8,
+        "save_every": 1,
+        "validate_every": 1,
+        "device_name": "cpu",
+        "seed": 42,
+    }
+    first = train_from_scratch(steps=1, **common)
+    checkpoint = output_dir / "checkpoint-step-000000001.pt"
+    assert checkpoint.is_file()
+    assert first["steps"] == 1
+    assert first["heldout_test_token_loss"] > 0
+
+    second = train_from_scratch(steps=2, resume=checkpoint, **common)
+    assert second["steps"] == 2
+    assert (output_dir / "checkpoint-step-000000002.pt").is_file()
+    assert second["heldout_test_sha256"] == streams["test"]["sha256"]
+
+
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
     assert model.parameter_count() == 711528
