@@ -14,6 +14,7 @@ from .quantization import (
     pack_q2,
     quantize_int8_per_token,
     quantize_q2,
+    quantize_quaternary,
 )
 
 
