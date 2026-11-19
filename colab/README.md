@@ -7,6 +7,11 @@
 2. **[Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb)**  
    Existing-checkpoint chat/runtime experiment. It does not create a new training run.
 
+## New independent model line
+
+3. **[Q-Mini Add/Sub v1 — from-scratch English training](QMini_AddSub_V1_From_Scratch.ipynb)**  
+   Separate model family inside the same repository. It reuses causal convolution, gated state-space memory and sparse Top-1 experts with independent code and checkpoints. Source-license acknowledgement is required. Data preparation is reproducible and non-synthetic; training and SFT are OFF by default until the user enables them. CPU is the default device. Full multiply-free model inference is not yet complete.
+
 ## Historical / experimental notebooks
 
 Other notebooks in this directory are retained for reproducibility and old checkpoint compatibility. They include older TinyStories, Hindi/Hinglish, T4 V6–V8, V9, SFT and teacher-distillation experiments. They are not the current recommended training path and must not be mixed with the V12 corpus/checkpoint lineage.
