@@ -60,18 +60,6 @@ It has **four** symbols and no zero symbol for an individual entry in a nonzero 
 
 The legacy profile and artifact format remain available for backward compatibility. See [legacy architecture](docs/ARCHITECTURE.md), [Q2 quantization contract](docs/Q2_QUANTIZATION_SPEC.md) and [strict 2-bit migration status](docs/STRICT_2BIT_MIGRATION.md).
 
-## Add/Sub v1 — separate next-generation model
-
-The new model's required weight alphabet is:
-
-`{-1.5, -0.5, 0, +0.5, +1.5}`
-
-Five symbols require at least 3 bits per fixed-width weight; 2 bits cannot encode five values. The deployed Add/Sub inference path must use addition/subtraction for numerical accumulation, with versioned lookup tables for coefficient contributions and nonlinear functions. Runtime multiplication, division, matmul, dot products, convolution multiply and hidden scale multiplication are forbidden.
-
-The model has a separate package, config, tokenizer, checkpoint, export format and Drive folder. No FP16 warm-up stage is prescribed, and no legacy checkpoints are reused. See [Add/Sub v1 architecture contract](docs/ADD_SUB_V1_SPEC.md).
-
-**Status:** specification only. No Add/Sub model code, trained weights, performance or quality results are claimed.
-
 ## Repository layout
 
 - `qmini/` — legacy model, configuration, tokenizer, data pipeline, trainer, generation, export and runtime.
