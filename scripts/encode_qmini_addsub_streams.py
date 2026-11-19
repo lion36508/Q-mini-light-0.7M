@@ -39,7 +39,7 @@ def main() -> None:
         raise ValueError("Unsupported Add/Sub dataset manifest.")
     manifest["token_streams"] = outputs
     manifest["tokenizer"] = {
-        "path": str(tokenizer.resolve()),
+        "path": tokenizer.name,
         "sha256": tokenizer_sha,
     }
     manifest_path.write_text(
