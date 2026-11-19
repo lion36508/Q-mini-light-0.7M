@@ -123,7 +123,11 @@ def train_from_scratch(
     if manifest.get("synthetic_training_records_included") != 0:
         raise ValueError("Add/Sub v1 refuses a corpus containing synthetic training records.")
     pretraining = manifest.get("pretraining", {}).get("splits", {})
-    for split, source_name in (("train", "pretrain_train.txt"), ("validation", "pretrain_validation.txt")):
+    for split, source_name in (
+        ("train", "pretrain_train.txt"),
+        ("validation", "pretrain_validation.txt"),
+        ("test", "pretrain_test.txt"),
+    ):
         source_path = train_path.parent / source_name
         expected_sha = pretraining.get(split, {}).get("sha256")
         if not source_path.is_file() or not expected_sha or sha256_file(source_path) != expected_sha:
