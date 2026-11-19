@@ -105,8 +105,18 @@ def train_from_scratch(
     if not train_path.is_file() or not valid_path.is_file() or not tokenizer_path.is_file():
         raise FileNotFoundError("Train stream, validation stream and tokenizer are required.")
 
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    if tokenizer.get_vocab_size() != config.vocab_size:
+        raise ValueError(
+            f"Tokenizer vocab {tokenizer.get_vocab_size()} does not match "
+            f"Add/Sub config vocab {config.vocab_size}."
+        )
     train_tokens = np.memmap(train_path, dtype=np.uint16, mode="r")
     valid_tokens = np.memmap(valid_path, dtype=np.uint16, mode="r")
+    if not len(train_tokens) or not len(valid_tokens):
+        raise ValueError("Train and validation token streams must both be non-empty.")
+    if int(train_tokens.max()) >= config.vocab_size or int(valid_tokens.max()) >= config.vocab_size:
+        raise ValueError("Token stream contains IDs outside the configured vocabulary.")
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
     tokenizer_sha = sha256_file(tokenizer_path)
 
