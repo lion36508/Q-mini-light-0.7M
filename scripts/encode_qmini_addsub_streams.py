@@ -20,6 +20,7 @@ def main() -> None:
     if not tokenizer.is_file():
         raise FileNotFoundError("Train the Add/Sub v1 tokenizer first.")
     outputs = {}
+    tokenizer_sha = hashlib.sha256(tokenizer.read_bytes()).hexdigest()
     for split in ("train", "validation", "test"):
         source = data_dir / f"pretrain_{split}.txt"
         target = data_dir / f"pretrain_{split}.u16"
@@ -37,6 +38,10 @@ def main() -> None:
     if manifest.get("format") != "qmini-addsub-data-v1":
         raise ValueError("Unsupported Add/Sub dataset manifest.")
     manifest["token_streams"] = outputs
+    manifest["tokenizer"] = {
+        "path": str(tokenizer.resolve()),
+        "sha256": tokenizer_sha,
+    }
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
