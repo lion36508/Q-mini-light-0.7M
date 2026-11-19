@@ -372,7 +372,7 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, Any]:
     return {
         "format": archive_format,
         "q2_version": q2_version,
-        "q2_contract": metadata.get("q2_contract", _q2_contract(q2_version)) if q2_version in {2, 3} else {"version": 1, "codebook": {"00": -2.0, "01": -1.0, "10": 1.0, "11": 2.0}},
+        "q2_contract": metadata["q2_contract"] if q2_version in {2, 3} else {"version": 1, "codebook": {"00": -2.0, "01": -1.0, "10": 1.0, "11": 2.0}},
         "tensor_count": len(seen),
         "parameter_count": parameter_count,
         "q2_tensor_count": q2_count,
