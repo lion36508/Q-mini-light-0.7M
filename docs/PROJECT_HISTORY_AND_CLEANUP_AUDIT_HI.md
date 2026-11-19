@@ -48,7 +48,7 @@
 - `review_result is True` हो
 - `deleted is False` हो
 - `synthetic is False` हो
-- assistant reply के लिए `rank == 0` हो; null rank को केवल तब रहने दिया जाएगा जब source ने कोई alternative rank नहीं दिया हो
+- assistant reply के लिए `rank == 0` हो; missing rank भी अस्वीकार होगा
 
 Missing safety flags fail-closed हैं। Dropped rows के कारण अलग-अलग counters रखे जाएँगे ताकि audit में पता चल सके कि कितना data synthetic, unreviewed, deleted, non-English या low-ranked होने के कारण बाहर हुआ।
 
@@ -134,13 +134,15 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 
 ## 8. Add/Sub v1 का अलग नियम
 
-नया model `qmini_addsub/` में रहेगा; पुराना `qmini/` package अपने पुराने format में रहेगा। नए model का code, config, checkpoints, tokenizer, export format और Drive folder अलग होंगे।
+नया model `qmini_addsub/` में है; पुराना `qmini/` package अपने पुराने format में सुरक्षित है। नया Add/Sub model अलग config, code, tokenizer, data manifest, training checkpoints और Drive folder इस्तेमाल करता है। यह पुराने checkpoint को स्वीकार नहीं करता।
+
+वर्तमान Add/Sub v1 training architecture: RMSNorm, dilated causal depthwise convolution (dilation 1/2/4/8), input-dependent gated diagonal state-space recurrence with parallel scan और sparse Top-1 experts. Default profile में vocab 512, width 96, चार blocks, दो experts, hidden 256 और context 512 है; instantiated parameter count 711,528 है।
 
 नया weight alphabet:
 
 `{-1.5, -0.5, 0, +0.5, +1.5}`
 
-पाँच अलग symbols को fixed-width storage में कम-से-कम **3 bits per weight** चाहिए; 2 bits में पाँच states encode नहीं हो सकते। नए inference path में कोई multiplication/matmul/dot-product/convolution या runtime scale multiplication नहीं होगा। Contribution lookup के बाद numerical accumulation केवल addition/subtraction से होगी। Nonlinear operations lookup tables से होंगी। इसकी implementation अभी बाकी है; यह दस्तावेज़ architecture contract है, passing runtime का दावा नहीं।
+पाँच अलग symbols को fixed-width storage में कम-से-कम **3 bits per weight** चाहिए; 2 bits में पाँच states encode नहीं हो सकते। नए inference path में कोई multiplication/matmul/dot-product/convolution या runtime scale multiplication नहीं होगा। Contribution lookup के बाद numerical accumulation केवल addition/subtraction से होगी। Nonlinear operations lookup tables से होंगी। इस branch में अभी सिर्फ़ additive linear-projection reference runtime तैयार है; full convolution/SSM/MoE/LUT/export runtime अधूरा है। इसलिए इसे तैयार multiply-free deployment runtime नहीं कहा जाएगा।
 
 ## 9. इस branch में किए गए परिवर्तन
 
@@ -148,6 +150,7 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 2. Regression tests में synthetic/unreviewed/non-ready/rank-1 rows को drop करने का test जोड़ा।
 3. V12 notebook को correct dataset-filter source revision पर pin किया और test में pin को lock किया।
 4. पुराने Q-Mini और नए Add/Sub v1 के लिए अलग documentation boundary बनाई।
+5. स्वतंत्र Add/Sub v1 training model, 3-bit packer, additive projection primitive, tokenizer/data scripts, random-init trainer, response-masked SFT और training-off Colab notebook जोड़े।
 
 ## 10. अभी बाकी और acceptance gate
 
