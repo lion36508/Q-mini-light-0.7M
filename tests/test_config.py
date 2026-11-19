@@ -41,7 +41,7 @@ def test_q2_v3_fp16_embedding_estimate_matches_actual_layout():
         "quantization_version": "q2-v2",
         "quantize_embeddings": True,
     })
-    assert values.estimated_packed_export_bytes() < legacy.estimated_packed_export_bytes()
+    assert values.estimated_packed_export_bytes() > legacy.estimated_packed_export_bytes()
 
 
 def test_config_round_trip(tmp_path):
