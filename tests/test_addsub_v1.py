@@ -198,6 +198,38 @@ def test_group_split_is_deterministic_and_group_based():
         stable_split("")
 
 
+def test_parallel_state_space_scan_matches_sequential_reference_and_gradients():
+    from qmini_addsub.model import GatedDiagonalStateSpace
+
+    torch.manual_seed(11)
+    decay = torch.rand(2, 17, 5, dtype=torch.float32) * 0.8 + 0.1
+    injection = torch.randn(2, 17, 5, dtype=torch.float32, requires_grad=True)
+    actual = GatedDiagonalStateSpace.parallel_scan(decay, injection)
+    state = torch.zeros(2, 5)
+    expected = []
+    for position in range(decay.shape[1]):
+        state = decay[:, position] * state + injection[:, position]
+        expected.append(state)
+    expected = torch.stack(expected, dim=1)
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+    actual.square().mean().backward()
+    assert injection.grad is not None
+    assert torch.isfinite(injection.grad).all()
+
+
+def test_parallel_state_space_scan_is_causal():
+    from qmini_addsub.model import GatedDiagonalStateSpace
+
+    torch.manual_seed(12)
+    decay = torch.full((1, 12, 3), 0.7)
+    injection = torch.randn(1, 12, 3)
+    changed_future = injection.clone()
+    changed_future[:, 7:] = changed_future[:, 7:] + 50.0
+    first = GatedDiagonalStateSpace.parallel_scan(decay, injection)
+    second = GatedDiagonalStateSpace.parallel_scan(decay, changed_future)
+    assert torch.allclose(first[:, :7], second[:, :7], atol=0.0, rtol=0.0)
+
+
 def test_new_model_forward_from_random_initialization():
     torch.manual_seed(7)
     config = AddSubConfig(
@@ -221,7 +253,7 @@ def test_new_model_forward_from_random_initialization():
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 636168
+    assert model.parameter_count() == 711528
 
 
 def test_new_model_rejects_legacy_context_overflow():
