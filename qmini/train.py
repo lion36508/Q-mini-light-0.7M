@@ -392,14 +392,16 @@ def _verify_initial_model_artifact(
     from .export import verify_packed_export
 
     packed_report = verify_packed_export(packed_path)
+    expected_format = manifest.get("matrix_weight_format")
+    expected_q2_version = int(manifest.get("q2_version", 2))
     if (
-        packed_report.get("format") != "qmini-packed-v2"
-        or packed_report.get("q2_version") != 2
+        packed_report.get("format") != expected_format
+        or packed_report.get("q2_version") != expected_q2_version
         or packed_report.get("parameter_count") != expected_parameters
     ):
         raise ValueError(
-            "Q-Mini SFT source must contain a verified Q2-v2 two-bit packed export "
-            "with the expected parameter count."
+            "Q-Mini SFT source packed export does not match its versioned manifest "
+            "or expected parameter count."
         )
 
     if source_path.suffix.lower() == ".pt":
@@ -482,8 +484,16 @@ def _verify_initial_brain_artifact(
         value = manifest.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value != 0:
             raise ValueError(f"Initial-brain manifest must record {field}=0.")
-    if manifest.get("matrix_weight_format") != "qmini-packed-v2" or manifest.get("matrix_weight_bits") != 2:
-        raise ValueError("Initial-brain source is not the required Q2-v2 two-bit format.")
+    expected_q2_version = 3 if source_config.quantization_version == "q2-v3" else 2
+    expected_q2_format = f"qmini-packed-v{expected_q2_version}"
+    if (
+        manifest.get("matrix_weight_format") != expected_q2_format
+        or manifest.get("matrix_weight_bits") != 2
+        or manifest.get("q2_version", expected_q2_version) != expected_q2_version
+    ):
+        raise ValueError(
+            f"Initial-brain source is not the required {expected_q2_format} two-bit format."
+        )
 
     packed_name = manifest.get("packed_export")
     if (
@@ -505,11 +515,13 @@ def _verify_initial_brain_artifact(
     from .export import verify_packed_export
     report = verify_packed_export(packed_path)
     if (
-        report.get("format") != "qmini-packed-v2"
-        or report.get("q2_version") != 2
+        report.get("format") != expected_q2_format
+        or report.get("q2_version") != expected_q2_version
         or report.get("parameter_count") != expected_parameters
     ):
-        raise ValueError("Initial-brain packed artifact failed Q2-v2 verification.")
+        raise ValueError(
+            f"Initial-brain packed artifact failed {expected_q2_format} verification."
+        )
     return manifest
 
 
@@ -1210,7 +1222,7 @@ def train_model(
         "precision": "bf16" if use_bf16 else "fp16" if use_fp16 else "fp32",
         "autocast_precision": "bf16" if use_bf16 else "fp16" if use_fp16 else "off",
         "trainable_parameter_dtypes": sorted({str(parameter.dtype) for parameter in model.parameters()}),
-        "trainable_weight_policy": "fp32-master-q2-ste",
+        "trainable_weight_policy": f"fp32-master-{config.quantization_version}-ste",
         "deployment_matrix_weight_format": "qmini-packed-v2",
         "deployment_matrix_weight_bits": 2,
         "device": str(device),
@@ -1431,13 +1443,20 @@ def train_model(
         model.state_dict(), config, final_dir / "model.qmini.npz"
     )
 
-    # New deployment folders contain only the verified Q2-v2 matrix export.
-    # Never write a dense FP32 model.pt here. If an older run already has one,
-    # preserve it untouched; resumable training state remains in latest.pt.
+    # New deployment folders contain only the verified, versioned Q2 matrix
+    # export. Never write a dense FP32 model.pt here. If an older run already has
+    # one, preserve it untouched; resumable training state remains in latest.pt.
     from .export import verify_packed_export
     packed_report = verify_packed_export(packed_path)
-    if packed_report.get("format") != "qmini-packed-v2" or packed_report.get("q2_version") != 2:
-        raise RuntimeError("Final deployment export is not verified Q2-v2.")
+    expected_q2_version = 3 if config.quantization_version == "q2-v3" else 2
+    expected_q2_format = f"qmini-packed-v{expected_q2_version}"
+    if (
+        packed_report.get("format") != expected_q2_format
+        or packed_report.get("q2_version") != expected_q2_version
+    ):
+        raise RuntimeError(
+            f"Final deployment export is not verified {expected_q2_format}."
+        )
     # Older model.pt files, if present, are left untouched for manual recovery
     # but are not part of this final-model manifest or accepted as SFT sources.
     packed_fingerprint = _sha256_file(packed_path)
@@ -1467,9 +1486,12 @@ def train_model(
             tokenizer_fingerprint["size_bytes"] if tokenizer_fingerprint else None
         ),
         "parameters": model.parameter_report()["total"],
-        "matrix_weight_format": "qmini-packed-v2",
+        "matrix_weight_format": packed_report["format"],
         "matrix_weight_bits": 2,
-        "q2_codebook": {"00": -1.0, "01": -0.5, "10": 0.5, "11": 1.0},
+        "q2_version": packed_report["q2_version"],
+        "q2_codebook": packed_report["q2_contract"]["codebook"],
+        "quantize_embeddings": config.quantize_embeddings,
+        "embedding_storage": "q2" if config.quantize_embeddings else "float16",
         "packed_export_verification": packed_report,
         "packed_export": packed_path.name,
         "packed_export_bytes": packed_fingerprint["size_bytes"],
