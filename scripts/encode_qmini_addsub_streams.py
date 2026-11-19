@@ -25,7 +25,21 @@ def main() -> None:
         if not source.is_file():
             raise FileNotFoundError(source)
         count, digest = encode_text_file(source, tokenizer, target)
-        outputs[split] = {"tokens": count, "sha256": digest, "path": str(target)}
+        outputs[split] = {
+            "tokens": count,
+            "sha256": digest,
+            "path": target.name,
+        }
+
+    manifest_path = data_dir / "dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("format") != "qmini-addsub-data-v1":
+        raise ValueError("Unsupported Add/Sub dataset manifest.")
+    manifest["token_streams"] = outputs
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+        encoding="utf-8",
+    )
     print(outputs)
 
 
