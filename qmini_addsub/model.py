@@ -24,6 +24,7 @@ class CausalConvMixer(nn.Module):
     def __init__(self, config: AddSubConfig) -> None:
         super().__init__()
         self.kernel_size = config.kernel_size
+        self.dilation = 1
         self.depthwise_weight = nn.Parameter(
             torch.empty(config.d_model, 1, config.kernel_size)
         )
@@ -34,11 +35,13 @@ class CausalConvMixer(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         channel_first = inputs.transpose(1, 2)
-        padded = F.pad(channel_first, (self.kernel_size - 1, 0))
+        padding = self.dilation * (self.kernel_size - 1)
+        padded = F.pad(channel_first, (padding, 0))
         mixed = F.conv1d(
             padded,
             quantize_weight_ste(self.depthwise_weight),
             self.depthwise_bias,
+            dilation=self.dilation,
             groups=inputs.shape[-1],
         ).transpose(1, 2)
         content, gate = self.gate_projection(mixed).chunk(2, dim=-1)
@@ -69,6 +72,16 @@ class GatedDiagonalStateSpace(nn.Module):
         self.decay_projection = AddSubLinear(config.d_model, config.d_model)
         self.gate_projection = AddSubLinear(config.d_model, config.d_model)
         self.output_projection = AddSubLinear(config.d_model, config.d_model)
+        with torch.no_grad():
+            log_times = torch.linspace(
+                torch.log(torch.tensor(2.0)),
+                torch.log(torch.tensor(float(config.max_context))),
+                config.d_model,
+            )
+            time_constants = torch.exp(log_times)
+            rates = time_constants.reciprocal()
+            self.decay_projection.weight.zero_()
+            self.decay_projection.bias.copy_(torch.log(torch.expm1(rates)))
 
     @staticmethod
     def parallel_scan(decay: torch.Tensor, injection: torch.Tensor) -> torch.Tensor:
@@ -150,10 +163,11 @@ class SparseTop1Experts(nn.Module):
 class AddSubBlock(nn.Module):
     """Pre-norm residual block: causal convolution, state-space memory and sparse MoE."""
 
-    def __init__(self, config: AddSubConfig) -> None:
+    def __init__(self, config: AddSubConfig, dilation: int = 1) -> None:
         super().__init__()
         self.conv_norm = RMSNorm(config.d_model)
         self.conv = CausalConvMixer(config)
+        self.conv.dilation = dilation
         self.state_norm = RMSNorm(config.d_model)
         self.state_space = GatedDiagonalStateSpace(config)
         self.expert_norm = RMSNorm(config.d_model)
@@ -177,7 +191,7 @@ class AddSubLanguageModel(nn.Module):
         self.config.validate()
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
         self.blocks = nn.ModuleList(
-            [AddSubBlock(self.config) for _ in range(self.config.n_layers)]
+            [AddSubBlock(self.config, dilation=2 ** index) for index in range(self.config.n_layers)]
         )
         self.final_norm = RMSNorm(self.config.d_model)
         self.final_bias = nn.Parameter(torch.zeros(self.config.vocab_size))
