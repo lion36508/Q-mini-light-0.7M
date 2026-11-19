@@ -299,7 +299,11 @@ def write_sft_splits(output: Path, conversations: list[dict]) -> dict:
         if split == "train" and not records:
             raise ValueError("The instruction training split is empty.")
         count, digest = write_jsonl(output / f"sft_{split}.jsonl", records)
-        details[split] = {"conversations": count, "sha256": digest}
+        details[split] = {
+            "path": f"sft_{split}.jsonl",
+            "conversations": count,
+            "sha256": digest,
+        }
     return details
 
 
