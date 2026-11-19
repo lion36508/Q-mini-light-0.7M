@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 
 from qmini_addsub.data import (
     accept_oasst1_message,
+    is_clean_english_text,
     sha256_file,
     stable_split,
     write_jsonl,
@@ -232,11 +233,12 @@ def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
             instruction = str(row.get("instruction") or "").strip()
             context = str(row.get("context") or "").strip()
             response = str(row.get("response") or "").strip()
-            if len(instruction) < 2 or len(response) < 2:
-                dropped["empty"] += 1
-                continue
-            if "@" in instruction or "@" in response or "@" in context:
-                dropped["possible_email"] += 1
+            if (
+                not is_clean_english_text(instruction)
+                or not is_clean_english_text(response)
+                or (context and not is_clean_english_text(context))
+            ):
+                dropped["not_clean_or_sensitive"] += 1
                 continue
             user_text = instruction
             if context:
