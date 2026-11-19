@@ -339,6 +339,8 @@ def test_cpu_resume_notebook_trains_on_conversation_data():
     assert "roneneldan" not in raw.lower()
     assert "V12" in markdown
     assert "prepare_conversation_datasets" in code
+    # Keep the notebook pinned to a source revision that contains the verified 64-character DailyDialog hashes.
+    assert 'TRAINING_SOURCE_REVISION = "da4df686b8d1073c43b26ad9e6e02c0278ac622c"' in code
     assert "allow_dataset_change" in code
     assert "QMini-English-512-Q2v2-e1a187f0ca1567cd" in code
     assert "dailydialog" in code
