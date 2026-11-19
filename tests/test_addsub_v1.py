@@ -15,6 +15,10 @@ from qmini_addsub.quantization import (
     unpack_3bit_codes,
 )
 from qmini_addsub.runtime import additive_projection
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from qmini_addsub.sft import ConversationDataset
 
 
 def test_addsub_config_is_independent_and_validates():
