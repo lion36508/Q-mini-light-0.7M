@@ -2,6 +2,10 @@
 
 An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
 
+**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 experts, 256-wide expert MLP, and 512-token context. The instantiated training model currently has **711,528 parameters**. This size is a design baseline, not evidence of better model quality.
+
+Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), and selected-expert dispatch. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
+
 ## Implementation status
 
 **Implemented in this branch**
