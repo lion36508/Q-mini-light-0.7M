@@ -282,16 +282,16 @@ def write_pretraining_outputs(output: Path, wikitext: dict) -> dict:
 
 def write_sft_splits(output: Path, conversations: list[dict]) -> dict:
     splits = {"train": [], "validation": [], "test": []}
-    seen_by_split = {name: set() for name in splits}
+    seen_content = set()
     for record in conversations:
         group = record["group_id"]
-        split = stable_split(group)
         content_key = hashlib.sha256(
             json.dumps(record["messages"], sort_keys=True).encode("utf-8")
         ).hexdigest()
-        if content_key in seen_by_split[split]:
+        if content_key in seen_content:
             continue
-        seen_by_split[split].add(content_key)
+        seen_content.add(content_key)
+        split = stable_split(group)
         splits[split].append(record)
 
     details = {}
