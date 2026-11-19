@@ -149,6 +149,31 @@ def test_tied_embedding_output_uses_native_projection(
     assert hasattr(embedding, "_qmini_native_packed_weight")
 
 
+def test_q2_v3_qlinear_uses_versioned_native_weight_cache(
+    compiled_native_library, monkeypatch
+):
+    import torch.nn.functional as F
+    import qmini.native as native_module
+    from qmini.model import QLinear
+    from qmini.quantization import fake_quantize_int8, quantize_q2_v3
+
+    kernel = NativeKernel(compiled_native_library)
+    monkeypatch.setattr(native_module, "get_native_kernel", lambda: kernel)
+    monkeypatch.setenv("QMINI_NATIVE_FORCE_SCALAR", "1")
+    layer = QLinear(7, 3).eval()
+    layer._qmini_quantization_version = "q2-v3"
+    values = torch.randn(2, 7)
+    with torch.inference_mode():
+        actual = layer(values)
+        expected = F.linear(
+            fake_quantize_int8(values),
+            quantize_q2_v3(layer.weight),
+            layer.bias,
+        )
+    assert torch.allclose(actual, expected, atol=2e-5, rtol=2e-5)
+    assert layer._qmini_native_packed_key[-1] == 3
+
+
 def test_pytorch_fallback_is_used_without_native_library(monkeypatch):
     import torch.nn.functional as F
     import qmini.native as native_module
