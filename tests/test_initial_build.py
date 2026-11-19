@@ -3,6 +3,7 @@ import json
 
 import torch
 
+from qmini.config import QMiniConfig
 from qmini.export import verify_packed_export
 from qmini.initial_build import build_initial_brain, iter_initial_state_tensors
 from qmini.model import QMiniMoE
