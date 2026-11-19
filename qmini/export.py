@@ -201,10 +201,18 @@ def _reconstruct_packed_state_impl(path: str | Path) -> tuple[QMiniConfig, dict[
             ):
                 raise ValueError(f"Q2-v{q2_version} archive contract/codebook metadata is missing or invalid.")
         config = QMiniConfig.from_dict(metadata["config"])
+        expected_quantization = "q2-v2" if q2_version in {1, 2} else "q2-v3"
+        if q2_version in {2, 3} and config.quantization_version != expected_quantization:
+            raise ValueError(
+                f"Q2-v{q2_version} archive config must declare "
+                f"quantization_version={expected_quantization!r}."
+            )
         state: dict[str, np.ndarray] = {}
         for spec in metadata["tensors"]:
             shape = tuple(int(x) for x in spec["shape"])
             if spec["kind"] == "q2":
+                if spec["name"] == "embedding.weight" and not config.quantize_embeddings:
+                    raise ValueError("Q2 embedding payload conflicts with quantize_embeddings=false.")
                 value = unpack_quaternary(
                     archive[spec["packed_key"]],
                     archive[spec["scale_key"]],
@@ -278,6 +286,12 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]
             ):
                 raise ValueError(f"Q2-v{q2_version} archive contract/codebook metadata is missing or invalid.")
         config = QMiniConfig.from_dict(metadata["config"])
+        expected_quantization = "q2-v2" if q2_version in {1, 2} else "q2-v3"
+        if q2_version in {2, 3} and config.quantization_version != expected_quantization:
+            raise ValueError(
+                f"Q2-v{q2_version} archive config must declare "
+                f"quantization_version={expected_quantization!r}."
+            )
         specs = metadata.get("tensors")
         if not isinstance(specs, list) or len(specs) != int(metadata.get("tensor_count", -1)):
             raise ValueError("Packed archive tensor manifest count is invalid.")
@@ -294,6 +308,8 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]
             parameter_count += math.prod(shape)
 
             if spec.get("kind") == "q2":
+                if name == "embedding.weight" and not config.quantize_embeddings:
+                    raise ValueError("Q2 embedding payload conflicts with quantize_embeddings=false.")
                 if len(shape) < 2:
                     raise ValueError(f"Q2 tensor {name} has rank less than two.")
                 in_features = math.prod(shape[1:])
@@ -341,6 +357,13 @@ def _verify_packed_export_impl(path: str | Path) -> dict[str, int | str | float]
             else:
                 raise ValueError(f"Unknown tensor encoding in packed archive: {name}.")
 
+    expected_fp16_matrices = (
+        1 if q2_version == 3 and not config.quantize_embeddings else 0
+    )
+    if fp16_matrix_count != expected_fp16_matrices:
+        raise ValueError(
+            "Packed archive FP16 matrix count does not match the configured embedding policy."
+        )
     if parameter_count != config.estimated_parameter_count():
         raise ValueError(
             f"Packed archive has {parameter_count:,} parameters; config expects "
