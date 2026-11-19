@@ -280,6 +280,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
     from qmini_addsub.train import train_from_scratch
+    from qmini_addsub.sft import fine_tune_from_addsub_checkpoint
 
     config = AddSubConfig(
         vocab_size=300,
@@ -288,11 +289,15 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         n_layers=1,
         n_experts=2,
         kernel_size=3,
-        max_context=16,
+        max_context=64,
         dropout=0.0,
     )
-    tokenizer_vocab = {"<unk>": 0, "<eos>": 1}
-    tokenizer_vocab.update({f"unused_{index}": index for index in range(2, 300)})
+    special_tokens = [
+        "<unk>", "<eos>", "<pad>", "<bos>",
+        "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    ]
+    tokenizer_vocab = {token: index for index, token in enumerate(special_tokens)}
+    tokenizer_vocab.update({f"unused_{index}": index for index in range(8, 300)})
     tokenizer = Tokenizer(WordLevel(tokenizer_vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer_path = tmp_path / "tokenizer.json"
@@ -354,8 +359,48 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     second = train_from_scratch(steps=2, resume=checkpoint, **common)
     assert second["steps"] == 2
-    assert (output_dir / "checkpoint-step-000000002.pt").is_file()
+    final_pretrain_checkpoint = output_dir / "checkpoint-step-000000002.pt"
+    assert final_pretrain_checkpoint.is_file()
     assert second["heldout_test_sha256"] == streams["test"]["sha256"]
+
+    def write_conversation(path):
+        record = {
+            "source": "databricks/databricks-dolly-15k",
+            "human_authored": True,
+            "synthetic": False,
+            "messages": [
+                {"role": "user", "content": "What is a compiler?"},
+                {"role": "assistant", "content": "A compiler translates program source."},
+            ],
+        }
+        path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    sft_train = data_dir / "sft_train.jsonl"
+    sft_valid = data_dir / "sft_validation.jsonl"
+    train_sft_sha = write_conversation(sft_train)
+    valid_sft_sha = write_conversation(sft_valid)
+    manifest["instruction_splits"] = {
+        "train": {"path": sft_train.name, "sha256": train_sft_sha},
+        "validation": {"path": sft_valid.name, "sha256": valid_sft_sha},
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True), encoding="utf-8"
+    )
+
+    sft_result = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        output_dir=tmp_path / "sft",
+        steps=1,
+        batch_size=1,
+        device_name="cpu",
+        seed=43,
+    )
+    assert sft_result["steps"] == 1
+    assert (tmp_path / "sft" / "sft-checkpoint-step-000000001.pt").is_file()
 
 
 def test_default_addsub_model_parameter_count_is_stable():
