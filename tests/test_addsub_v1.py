@@ -21,6 +21,33 @@ from tokenizers.pre_tokenizers import Whitespace
 from qmini_addsub.sft import ConversationDataset, _load_conversations
 
 
+def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
+    import json
+
+    notebook_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab"
+        / "QMini_AddSub_V1_From_Scratch.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    for index, source in enumerate(code):
+        ast.parse(source, filename=f"{notebook_path}:cell-{index}")
+    all_code = "\\n".join(code)
+    assert "QMini-Light-AddSub-v1" in all_code
+    assert "START_PRETRAIN = False" in all_code
+    assert "START_SFT = False" in all_code
+    assert "ACCEPT_SOURCE_LICENSES = False" in all_code
+    assert "DEVICE = 'cpu'" in all_code
+    assert "QMini-Light-0.7M/training_ready" not in all_code
+    assert "qmini_addsub.train" in all_code
+    assert "qmini_addsub.sft" in all_code
+
+
 def test_addsub_config_is_independent_and_validates():
     config = AddSubConfig()
     config.validate()
