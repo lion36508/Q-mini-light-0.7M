@@ -47,8 +47,8 @@ def test_additive_projection_matches_five_symbol_reference():
     x = np.asarray([[2, -3, 4]], dtype=np.int8)
     codes = np.asarray([[4, 0, 2], [1, 3, 4]], dtype=np.uint8)
     actual = additive_projection(x, codes)
-    weights = np.asarray([[-1.5, -0.5, 0.0, 0.5, 1.5], [-1.5, -0.5, 0.0, 0.5, 1.5]])
-    decoded = weights[np.asarray([[4, 0, 2], [1, 3, 4]])]
+    levels = np.asarray([-1.5, -0.5, 0.0, 0.5, 1.5], dtype=np.float32)
+    decoded = levels[codes]
     expected = (x.astype(np.int64) @ decoded.T * 2).astype(np.int64)
     assert np.array_equal(actual, expected)
 
