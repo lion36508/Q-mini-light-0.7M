@@ -22,6 +22,11 @@ OASST_REQUIRED_FIELDS = {
 }
 
 EMAIL_RE = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+SECRET_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
+SPECIAL_TOKEN_LITERALS = (
+    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    "<bos>", "<eos>", "<pad>", "<unk>",
+)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -38,10 +43,17 @@ def is_clean_english_text(value: Any, min_chars: int = 2) -> bool:
     text = value.strip()
     if len(text) < min_chars or not any(char.isalpha() for char in text):
         return False
-    if EMAIL_RE.search(text):
+    if EMAIL_RE.search(text) or SECRET_RE.search(text):
         return False
     return True
 
+
+def escape_special_token_literals(text: str) -> str:
+    """Prevent literal dataset text from becoming tokenizer control IDs."""
+    value = text
+    for token in SPECIAL_TOKEN_LITERALS:
+        value = value.replace(token, token.replace("<", "<\\u200b", 1))
+    return value
 
 def accept_oasst1_message(row: dict[str, Any]) -> tuple[bool, str]:
     """Fail-closed source filter: reviewed human English OASST1 only."""
