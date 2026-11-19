@@ -25,6 +25,8 @@ See qmini_addsub/README.md for build instructions and docs/ADD_SUB_V1_SPEC.md fo
 
 ## Current Colab entry points
 
+- **[Add/Sub v1 — from-scratch English model](colab/QMini_AddSub_V1_From_Scratch.ipynb)** — separate experimental model line with a new random initialization, independent data pipeline and checkpoints. Both pretraining and SFT are OFF by default; source licenses must be acknowledged. Its full multiply-free inference runtime is still incomplete.
+
 - **[English CPU resume trainer V12](colab/QMini_English_CPU_One_Click_Resume.ipynb)** — the current English conversation-data training pipeline. It uses pinned DailyDialog and OpenAssistant OASST1 source files, verifies data hashes/manifests, and resumes only a compatible checkpoint. Running this notebook can start/resume training in Google Drive; CI does not run model training.
 - **[Existing Drive data CPU chat](colab/QMini_Existing_Drive_Data_CPU_Chat.ipynb)** — an existing-checkpoint chat experiment.
 
