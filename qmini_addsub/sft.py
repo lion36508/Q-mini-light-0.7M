@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tokenizers import Tokenizer
 
-from .config import AddSubConfig
+from .config import AddSubConfig\nfrom .data import is_clean_english_text
 from .model import AddSubLanguageModel
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
@@ -35,12 +35,21 @@ def _load_conversations(path: Path) -> list[dict[str, Any]]:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid JSONL") from exc
+            if record.get("source") not in {
+                "OpenAssistant/oasst1",
+                "databricks/databricks-dolly-15k",
+            }:
+                raise ValueError(f"{path}:{line_number}: unapproved SFT source.")
+            if record.get("human_authored") is not True or record.get("synthetic") is not False:
+                raise ValueError(f"{path}:{line_number}: synthetic/unverified SFT record rejected.")
             messages = record.get("messages")
             if not isinstance(messages, list) or len(messages) < 2:
                 continue
             roles = [item.get("role") for item in messages]
             if roles[0] != "user" or roles[-1] != "assistant":
                 continue
+            if any(not is_clean_english_text(item.get("content")) for item in messages):
+                raise ValueError(f"{path}:{line_number}: non-English/empty/PII text rejected.")
             if any(role not in {"user", "assistant"} for role in roles):
                 continue
             if any(roles[index] == roles[index - 1] for index in range(1, len(roles))):
@@ -164,6 +173,23 @@ def fine_tune_from_addsub_checkpoint(
     if tokenizer.get_vocab_size() != config.vocab_size:
         raise ValueError("Tokenizer vocabulary does not match the Add/Sub base config.")
 
+    manifest_path = train_path.parent / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError("Verified Add/Sub dataset_manifest.json is required for SFT.")
+    data_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if data_manifest.get("format") != "qmini-addsub-data-v1":
+        raise ValueError("Unsupported Add/Sub dataset manifest.")
+    if data_manifest.get("synthetic_training_records_included") != 0:
+        raise ValueError("SFT refuses a dataset manifest containing synthetic training records.")
+    sft_manifest = data_manifest.get("instruction_splits", {})
+    for split_name, source_path in (("train", train_path), ("validation", valid_path)):
+        entry = sft_manifest.get(split_name, {})
+        if entry.get("path") != source_path.name or entry.get("sha256") != sha256_file(source_path):
+            raise ValueError(f"{split_name} SFT file does not match the curated data manifest.")
+    if train_path.resolve() == valid_path.resolve():
+        raise ValueError("SFT training and validation files must be different.")
+    data_manifest_sha = sha256_file(manifest_path)
+
     train_records = _load_conversations(train_path)
     valid_records = _load_conversations(valid_path)
     train_data = ConversationDataset(train_records, tokenizer, config.max_context)
@@ -194,6 +220,7 @@ def fine_tune_from_addsub_checkpoint(
         "tokenizer_sha256": sha256_file(tokenizer_path),
         "train_sha256": sha256_file(train_path),
         "valid_sha256": sha256_file(valid_path),
+        "data_manifest_sha256": data_manifest_sha,
     }
     start_step = 0
     if resume is not None:
