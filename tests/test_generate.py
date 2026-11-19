@@ -293,7 +293,7 @@ def test_q2_only_manifest_ignores_stale_dense_snapshot_and_refuses_dense_gpu_fal
     assert getattr(loaded_model, "_qmini_packed_runtime", False) is True
     assert loaded_tokenizer.get_vocab_size() == tiny_config.vocab_size
 
-    with pytest.raises(RuntimeError, match="packed Q2-v2 inference runtime is CPU-only"):
+    with pytest.raises(RuntimeError, match="packed Q2 inference runtime is CPU-only"):
         load_model(model_dir, device="cuda")
 
 
@@ -367,8 +367,10 @@ def test_load_model_accepts_q2_v3_manifest_and_fp16_embedding(tiny_config, tmp_p
     root.mkdir()
     corpus = root / "corpus.txt"
     corpus.write_text(
-        "Q-Mini v3 preserves embedding rows in a higher precision format.\n"
-        "Zero is an exact two-bit symbol in the new matrix codebook.\n",
+        "Q-Mini v3 preserves embedding rows in a higher precision format.\n\n"
+        "Zero is an exact two-bit symbol in the new matrix codebook.\n\n"
+        "The tokenizer uses separate training and validation documents.\n\n"
+        "The deployment archive keeps model provenance and version metadata.\n",
         encoding="utf-8",
     )
     tokenizer_path = root / "tokenizer.json"
