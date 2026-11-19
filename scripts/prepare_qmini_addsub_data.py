@@ -95,7 +95,7 @@ def prepare_wikitext(cache: Path, output: Path) -> dict:
         "upstream_archive": WIKITEXT_URL,
         "archive_sha256": WIKITEXT_SHA256,
         "archive_size_bytes": WIKITEXT_SIZE,
-        "license": "CC-BY-SA-4.0 (dataset metadata also lists GFDL; review source terms)",
+        "license": "CC-BY-SA / GFDL (upstream WikiText metadata; confirm applicable version and source terms)",
         "citation": "Merity et al., WikiText: A long-term dependency language modeling dataset",
         "splits": counts,
     }
