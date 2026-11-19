@@ -65,15 +65,33 @@ def test_converted_records_use_only_user_and_assistant_roles():
     assert roles <= {"user", "assistant"}
 
 
-def _oasst1_row(message_id, parent_id, text, role="prompter", lang="en", deleted=False, tree="tree-1"):
+def _oasst1_row(
+    message_id,
+    parent_id,
+    text,
+    role="prompter",
+    lang="en",
+    deleted=False,
+    tree="tree-1",
+    review_result=True,
+    synthetic=False,
+    rank=None,
+    tree_state="ready_for_export",
+):
+    if role == "assistant" and rank is None:
+        rank = 0
     return {
         "message_id": message_id,
         "parent_id": parent_id,
         "text": text,
         "role": role,
         "lang": lang,
+        "review_result": review_result,
         "deleted": deleted,
+        "rank": rank,
+        "synthetic": synthetic,
         "message_tree_id": tree,
+        "tree_state": tree_state,
     }
 
 
@@ -115,10 +133,40 @@ def test_oasst1_filters_non_english_deleted_and_empty():
     ]
     assert stats["dropped_messages"] == {
         "non_english": 1,
+        "not_ready": 0,
+        "unreviewed": 0,
         "deleted": 1,
+        "synthetic": 0,
+        "non_top_rank": 0,
         "empty": 1,
         "other_role": 0,
     }
+
+
+def test_oasst1_excludes_synthetic_unreviewed_not_ready_and_non_top_ranked_rows():
+    rows = [
+        _oasst1_row("u1", None, "Question.", "prompter"),
+        _oasst1_row("a-synthetic", "u1", "Generated answer.", "assistant", synthetic=True),
+        _oasst1_row("a-unreviewed", "u1", "Unreviewed answer.", "assistant", review_result=False),
+        _oasst1_row("a-not-ready", "u1", "Not exported.", "assistant", tree_state="halted_by_moderator"),
+        _oasst1_row("a-ranked-1", "u1", "Second choice.", "assistant", rank=1),
+        _oasst1_row("a-best", "u1", "Reviewed human answer.", "assistant", rank=0),
+        _oasst1_row("u2", "a-best", "Thanks.", "prompter"),
+        _oasst1_row("a2", "u2", "You are welcome.", "assistant", rank=0),
+    ]
+    records, stats = prep.flatten_oasst1_rows(rows)
+
+    assert len(records) == 1
+    assert records[0]["messages"] == [
+        {"role": "user", "content": "Question."},
+        {"role": "assistant", "content": "Reviewed human answer."},
+        {"role": "user", "content": "Thanks."},
+        {"role": "assistant", "content": "You are welcome."},
+    ]
+    assert stats["dropped_messages"]["synthetic"] == 1
+    assert stats["dropped_messages"]["unreviewed"] == 1
+    assert stats["dropped_messages"]["not_ready"] == 1
+    assert stats["dropped_messages"]["non_top_rank"] == 1
 
 
 def test_oasst1_merges_consecutive_same_role_turns():
