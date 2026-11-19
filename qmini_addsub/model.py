@@ -89,18 +89,26 @@ class SparseTop1Experts(nn.Module):
         selected = torch.argmax(logits, dim=-1)
         selected_probability = probabilities.gather(-1, selected.unsqueeze(-1))
 
-        output = torch.zeros_like(inputs)
         assignments = F.one_hot(selected, num_classes=self.n_experts).float()
         load = assignments.mean(dim=(0, 1))
         importance = probabilities.mean(dim=(0, 1))
         auxiliary_loss = self.n_experts * torch.sum(load * importance)
 
+        flat_inputs = inputs.reshape(-1, inputs.shape[-1])
+        flat_selected = selected.reshape(-1)
+        flat_probability = selected_probability.reshape(-1, 1)
+        output = torch.zeros_like(flat_inputs)
         for expert_index, expert in enumerate(self.experts):
-            expert_output = expert(inputs)
-            mask = (selected == expert_index).unsqueeze(-1)
-            weighted = expert_output * selected_probability
-            output = output + torch.where(mask, weighted, torch.zeros_like(weighted))
-        return output, auxiliary_loss
+            token_indices = torch.nonzero(
+                flat_selected == expert_index, as_tuple=False
+            ).flatten()
+            if token_indices.numel() == 0:
+                continue
+            expert_inputs = flat_inputs.index_select(0, token_indices)
+            expert_probability = flat_probability.index_select(0, token_indices)
+            expert_output = expert(expert_inputs) * expert_probability
+            output = output.index_copy(0, token_indices, expert_output)
+        return output.reshape_as(inputs), auxiliary_loss
 
 
 class AddSubBlock(nn.Module):
