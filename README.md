@@ -7,9 +7,21 @@ A from-scratch, text-only language-model research project. This repository conta
 | Line | Location | Status |
 |---|---|---|
 | Q-Mini Light legacy | `qmini/` | Existing 705,742-parameter research baseline; preserve its code, Q2-v2 artifacts and checkpoints |
-| Q-Mini Add/Sub v1 | `qmini_addsub/` | Separate design contract; implementation and training are not yet complete |
+| Q-Mini Add/Sub v1 | `qmini_addsub/` | Independent training/data prototype; full multiply-free inference runtime remains incomplete |
 
 Do not mix the two model lines. The Add/Sub loader must never read legacy Q2-v2 checkpoints, and the legacy package must remain unchanged by Add/Sub development.
+
+## Q-Mini Add/Sub v1 — independent from-scratch model
+
+The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline.
+
+The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The random-init pretraining model, source-preparation scripts and response-masked SFT stage are available. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
+
+Training uses three pinned, provenance-recorded English corpora: WikiText-103 raw for language pretraining, reviewed/non-synthetic English OASST1 conversations, and human-authored Databricks Dolly instruction pairs. TinyStories, Alpaca/UltraChat and model-generated teacher data are excluded. DailyDialog is excluded from the default mix because its license has non-commercial/share-alike terms. Review dataset licenses before use/redistribution.
+
+See qmini_addsub/README.md for build instructions and docs/ADD_SUB_V1_SPEC.md for the architecture contract.
+
+**Important limitation:** the current additive runtime implements the integer projection primitive only. Full model inference—convolution, recurrent-state, gates, experts, nonlinear LUTs, output projection and compiled device runtime—must pass its audit before Add/Sub v1 is described or used as a deployed multiply-free model. No Add/Sub weights have been trained yet.
 
 ## Current Colab entry points
 
@@ -61,7 +73,7 @@ The model has a separate package, config, tokenizer, checkpoint, export format a
 ## Repository layout
 
 - `qmini/` — legacy model, configuration, tokenizer, data pipeline, trainer, generation, export and runtime.
-- `qmini_addsub/` — separate Add/Sub v1 package boundary and specification.
+- `qmini_addsub/` — independent Add/Sub v1 configuration, training model, data filters, tokenizer, training/SFT and additive projection prototype.
 - `configs/` — legacy model profiles.
 - `scripts/` — data preparation, benchmark and development utilities.
 - `tests/` — unit and regression tests, including synthetic test fixtures.
