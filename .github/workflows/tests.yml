@@ -332,9 +332,9 @@ jobs:
             /tmp/qmini-smoke-tasks.json
             /tmp/qmini-smoke-conversations.json
           if-no-files-found: error
-      - name: Run audit and CLI checks
+      - name: Run Q-Mini master verification and CLI checks
         run: |
-          python -m qmini.cli audit --config configs/qmini_smoke.json
+          python QMINI_MASTER.py verify
           python -m qmini.cli plan --config configs/qmini_5b.json
           python -c "from qmini.config import QMiniConfig; from qmini.model import QMiniMoE; c=QMiniConfig.from_json('configs/qmini_research_152m.json'); n=QMiniMoE(c).parameter_report()['total']; print('Hybrid research profile parameters:', n); assert n == 152483800"
           python -c "from qmini.config import QMiniConfig; c=QMiniConfig.from_json('configs/qmini_5b.json'); assert c.estimated_parameter_count() == 5132630288"
