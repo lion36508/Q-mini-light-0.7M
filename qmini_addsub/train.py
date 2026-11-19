@@ -107,6 +107,7 @@ def train_from_scratch(
         raise FileNotFoundError("Train stream, validation stream and tokenizer are required.")
 
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    tokenizer_sha = sha256_file(tokenizer_path)
     if tokenizer.get_vocab_size() != config.vocab_size:
         raise ValueError(
             f"Tokenizer vocab {tokenizer.get_vocab_size()} does not match "
