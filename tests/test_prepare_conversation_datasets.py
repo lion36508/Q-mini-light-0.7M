@@ -279,8 +279,12 @@ def test_read_oasst1_train_rows_rejects_wrong_row_count(tmp_path):
             "text": ["Hi.", "Hello."],
             "role": ["prompter", "assistant"],
             "lang": ["en", "en"],
+            "review_result": [True, True],
             "deleted": [False, False],
+            "rank": [None, 0],
+            "synthetic": [False, False],
             "message_tree_id": ["t1", "t1"],
+            "tree_state": ["ready_for_export", "ready_for_export"],
         }
     )
     path = tmp_path / "train.parquet"
@@ -291,6 +295,9 @@ def test_read_oasst1_train_rows_rejects_wrong_row_count(tmp_path):
 
 def test_pinned_dataset_constants():
     assert len(prep.OASST1_TRAIN_PARQUET_SHA256) == 64
+    assert {
+        "review_result", "deleted", "rank", "synthetic", "tree_state"
+    }.issubset(prep.OASST1_REQUIRED_COLUMNS)
     assert prep.OASST1_TRAIN_ROWS == 84437
     assert prep.DAILYDIALOG_SPLITS["train"]["dialogues"] == 11118
     assert prep.DAILYDIALOG_SPLITS["validation"]["dialogues"] == 1000
