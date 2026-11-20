@@ -126,7 +126,7 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 
 ### Legacy/experimental notebooks
 
-`colab/` में कई dated versions और parallel experiments हैं। आगे की सफ़ाई में V12 CPU resume को मुख्य training entry point और existing-Drive CPU chat को runtime demo माना जाए। TinyStories, पुराने T4 V6–V8, Hindi variants, V9 और Mistral distillation notebooks को archive index में रखा जाए—ताकि पुराने links/checkpoints न टूटें। यह branch अभी इन historical notebooks को delete नहीं करती।
+`colab/` में अब केवल दो model lines के तीन सक्रिय entry points रखे गए हैं: legacy Q-Mini का V12 CPU trainer और existing-Drive CPU chat demo, तथा Add/Sub v1 का from-scratch notebook। बाकी 21 historical notebooks को उनके मूल contents/blob IDs बदले बिना `colab/archive/legacy-experiments/` में स्थानांतरित किया गया है। इससे पुराने experiments और Git history सुरक्षित हैं, पर नए users को duplicate training routes नहीं दिखते। Archive index में हर moved notebook सूचीबद्ध है।
 
 ### वास्तविक training scope से बाहर
 
@@ -162,3 +162,16 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 - पुराने model को नए model के checkpoints/artifacts load करने की अनुमति नहीं होगी।
 
 **सुरक्षा नियम:** पुराने model, उसकी training history या checkpoints को delete/overwrite नहीं किया जाएगा। नई architecture का काम अलग branch/package और अलग artifacts पर ही होगा।
+
+
+## 11. 20 नवम्बर 2026 — दो-model cleanup और Add/Sub text hygiene
+
+- सक्रिय model implementations को स्पष्ट रूप से दो रखा गया है: legacy `qmini/` और independent `qmini_addsub/`.
+- Colab root में तीन उपयोगी entry points बचे हैं; 21 पुराने notebooks को delete करने के बजाय archive किया गया है.
+- CI अब active और archived notebooks को recursively syntax-check करता है; पुरानी notebooks को active training recommendations नहीं माना जाता.
+- Add/Sub cleaner Unicode NFC, line endings, horizontal whitespace और control characters normalize करता है; email, credential-like secret, स्पष्ट phone-contact PII, empty/short और overlong text reject करता है.
+- OASST1 filter review, deletion, synthetic flag, tree state, assistant rank और non-empty tree/message IDs को fail-closed validate करता है.
+- Dolly cleaner हर field rejection का अलग counter लिखता है; SFT loader approved sources के records को दोबारा hygiene-check करता है.
+- कोई model weight, user checkpoint, dataset cache या existing Drive artifact delete नहीं किया गया.
+
+यह cleanup code/data hygiene को बेहतर बनाता है; Add/Sub v1 का full multiply-free inference graph, export/loader और वास्तविक trained checkpoint अभी अलग acceptance gates हैं.

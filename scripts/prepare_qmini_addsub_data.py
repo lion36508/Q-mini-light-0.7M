@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 
 from qmini_addsub.data import (
     accept_oasst1_message,
-    is_clean_english_text,
+    normalize_training_text,
     sha256_file,
     stable_split,
     write_jsonl,
@@ -168,15 +168,21 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
             current = candidates[0] if candidates else None
 
         turns = []
+        invalid_text = False
         for message in chain:
             role = "user" if message["role"] == "prompter" else "assistant"
-            text = str(message["text"]).strip()
-            if not text:
-                continue
+            text, clean_reason = normalize_training_text(message["text"])
+            if clean_reason != "accepted":
+                dropped[f"normalized_text_{clean_reason}"] += 1
+                invalid_text = True
+                break
             if turns and turns[-1]["role"] == role:
                 turns[-1]["content"] += "\n" + text
             else:
                 turns.append({"role": role, "content": text})
+        if invalid_text:
+            incomplete_trees += 1
+            continue
         if len(turns) < 2 or turns[0]["role"] != "user" or turns[-1]["role"] != "assistant":
             incomplete_trees += 1
             continue
@@ -230,15 +236,26 @@ def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
             if not line.strip():
                 continue
             row = json.loads(line)
-            instruction = str(row.get("instruction") or "").strip()
-            context = str(row.get("context") or "").strip()
-            response = str(row.get("response") or "").strip()
-            if (
-                not is_clean_english_text(instruction)
-                or not is_clean_english_text(response)
-                or (context and not is_clean_english_text(context))
+            if not isinstance(row, dict):
+                dropped["not_object"] += 1
+                continue
+            instruction, instruction_reason = normalize_training_text(row.get("instruction"))
+            response, response_reason = normalize_training_text(row.get("response"))
+            raw_context = row.get("context") or ""
+            if raw_context:
+                context, context_reason = normalize_training_text(raw_context)
+            else:
+                context, context_reason = "", "accepted"
+            rejected = False
+            for field, reason in (
+                ("instruction", instruction_reason),
+                ("context", context_reason),
+                ("response", response_reason),
             ):
-                dropped["not_clean_or_sensitive"] += 1
+                if reason != "accepted":
+                    dropped[f"{field}_{reason}"] += 1
+                    rejected = True
+            if rejected:
                 continue
             user_text = instruction
             if context:
@@ -343,6 +360,13 @@ def main() -> None:
         "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "language": "English",
         "synthetic_training_records_included": 0,
+        "cleaning_policy": {
+            "version": "qmini-addsub-text-clean-v2",
+            "normalization": "Unicode NFC; normalized line endings; horizontal whitespace collapse; control-character removal",
+            "rejections": ["short/empty text", "overlong text", "email addresses", "credential-like secrets", "explicitly labelled phone-contact strings"],
+            "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
+            "maximum_text_characters": 32768
+        },
         "pretraining": wikitext_info,
         "instruction_sources": {
             "oasst1": oasst_info,

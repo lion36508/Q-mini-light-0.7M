@@ -81,3 +81,12 @@ The required weight codebook is {-1.5, -0.5, 0, +0.5, +1.5}. Five symbols requir
 The real inference path must not use multiplication, division, matmul, dot products, convolution multiply, floating rescaling or fused multiply-add. Quantized activation/weight contributions are obtained from versioned lookup tables and accumulated by addition/subtraction. Zero maps to no contribution. This contract is not considered satisfied until the entire graph—including convolution, recurrent state, expert routing, nonlinearities, embedding/output projection and sampling—is audited.
 
 See the full architecture and acceptance contract in docs/ADD_SUB_V1_SPEC.md.
+
+
+## Data-cleaning contract
+
+Pinned English sources pass through a fail-closed, versioned cleaner before the SFT split is written. Text is normalized to Unicode NFC, line endings and horizontal whitespace are normalized, and unsafe control characters are removed. Empty/short and overlong fields, email addresses, credential-like strings and explicitly labelled phone-contact strings are rejected with per-field reason counters in `dataset_manifest.json`.
+
+OASST1 still requires `lang == "en"`, `ready_for_export`, positive review, `deleted is False`, `synthetic is False`, and rank-zero assistant responses. Dolly is pinned to a fixed dataset revision and is treated as an English source. This cleaner does not claim to infer language from arbitrary text: language provenance comes from those source contracts. Exact duplicate conversations are removed before stable whole-conversation train/validation/test splitting. Raw pinned downloads remain in the cache and are not overwritten.
+
+Synthetic tests and benchmarks remain outside the production corpus. A cleaning pass never converts a synthetic sample into a human-authored one.

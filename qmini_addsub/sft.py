@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from tokenizers import Tokenizer
 
 from .config import AddSubConfig
-from .data import escape_special_token_literals, is_clean_english_text
+from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
@@ -36,6 +36,8 @@ def _load_conversations(path: Path) -> list[dict[str, Any]]:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid JSONL") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_number}: record must be a JSON object.")
             if record.get("source") not in {
                 "OpenAssistant/oasst1",
                 "databricks/databricks-dolly-15k",
@@ -46,16 +48,28 @@ def _load_conversations(path: Path) -> list[dict[str, Any]]:
             messages = record.get("messages")
             if not isinstance(messages, list) or len(messages) < 2:
                 continue
+            if any(not isinstance(item, dict) for item in messages):
+                raise ValueError(f"{path}:{line_number}: every message must be an object.")
             roles = [item.get("role") for item in messages]
             if roles[0] != "user" or roles[-1] != "assistant":
                 continue
-            if any(not is_clean_english_text(item.get("content")) for item in messages):
-                raise ValueError(f"{path}:{line_number}: non-English/empty/PII text rejected.")
             if any(role not in {"user", "assistant"} for role in roles):
                 continue
             if any(roles[index] == roles[index - 1] for index in range(1, len(roles))):
                 continue
-            records.append(record)
+            cleaned_messages = []
+            for item in messages:
+                cleaned, reason = normalize_training_text(item.get("content"))
+                if reason != "accepted":
+                    raise ValueError(
+                        f"{path}:{line_number}: message rejected by text cleaner ({reason})."
+                    )
+                cleaned_item = dict(item)
+                cleaned_item["content"] = cleaned
+                cleaned_messages.append(cleaned_item)
+            cleaned_record = dict(record)
+            cleaned_record["messages"] = cleaned_messages
+            records.append(cleaned_record)
     if not records:
         raise ValueError(f"No valid conversations found in {path}.")
     return records

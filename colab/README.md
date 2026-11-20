@@ -1,23 +1,27 @@
-# Colab notebook index
+# Active Colab entry points — exactly two model lines
 
-## Current entry points
+Only the following two model families are active in this repository. Do not mix their datasets, tokenizers, checkpoints, configs or Drive folders.
 
-1. **[English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb)**  
-   Current English conversation-data pipeline. It uses pinned DailyDialog and OASST1 sources, verifies their manifests and resumes only a verified compatible checkpoint. Running the notebook starts/resumes training in the user's Google Drive; CI never launches this training job.
-2. **[Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb)**  
-   Existing-checkpoint chat/runtime experiment. It does not create a new training run.
+## 1. Legacy Q-Mini Light 0.7M
 
-## New independent model line
+- **Training:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb). Uses the pinned DailyDialog/OpenAssistant preparation path and resumes only compatible legacy checkpoints.
+- **Chat/demo:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb). This is a runtime demonstration for an existing legacy checkpoint; it does not create a new model family.
 
-3. **[Q-Mini Add/Sub v1 — from-scratch English training](QMini_AddSub_V1_From_Scratch.ipynb)**  
-   Separate model family inside the same repository. It reuses causal convolution, gated state-space memory and sparse Top-1 experts with independent code and checkpoints. Source-license acknowledgement is required. Data preparation is reproducible and non-synthetic; training and SFT are OFF by default until the user enables them. CPU is the default device. Full multiply-free model inference is not yet complete.
+Package: `qmini/`. Legacy artifacts and checkpoints stay in their existing format and location. This model uses its documented Q2 format and is not an Add/Sub-only runtime.
 
-## Historical / experimental notebooks
+## 2. New Q-Mini Add/Sub v1
 
-Other notebooks in this directory are retained for reproducibility and old checkpoint compatibility. They include older TinyStories, Hindi/Hinglish, T4 V6–V8, V9, SFT and teacher-distillation experiments. They are not the current recommended training path and must not be mixed with the V12 corpus/checkpoint lineage.
+- **From-scratch training:** [Q-Mini Add/Sub v1 notebook](QMini_AddSub_V1_From_Scratch.ipynb). English-first, independent random initialization, separate tokenizer/data/checkpoint paths, CPU by default. Pretraining and SFT are OFF until explicitly enabled.
 
-Do not delete a historical notebook until its Drive artifacts, README links, tests and checkpoint provenance have been mapped. A later archive-only change can move old notebooks without changing their contents or deleting old weights.
+Package: `qmini_addsub/`. It must never load legacy `qmini/` weights or artifacts. The current implementation has the training/data pipeline and an additive projection reference primitive; the complete full-graph multiply-free inference runtime and export are still under development. It is not yet a trained or deployable assistant.
 
-## Data rule
+## Archive policy
 
-Only the datasets named in the active notebook and their verified manifests are training inputs. Synthetic token IDs in CI, preflight and benchmarks are development fixtures only. Teacher-generated or synthetic examples must never be relabeled as human-written data.
+Older notebook variants were moved, without changing their contents, to [the legacy experiment archive](archive/README.md). They include historical Hindi/TinyStories runs, repeated English V-series notebooks, initial build/runner notebooks and teacher-distillation experiments. They are retained for historical links and checkpoint provenance only; do not start new training from them.
+
+## Data hygiene
+
+- The old model keeps its separate document cleaner, deduplication and source-manifest path.
+- Add/Sub v1 uses pinned sources, strict OASST1 review/deletion/synthetic/rank filters, Dolly record hygiene checks, exact-content deduplication and whole-conversation group splitting.
+- The Add/Sub text cleaner normalizes Unicode and whitespace, rejects email addresses, credential-like secrets and clearly labelled phone-contact strings, and records rejection reasons. Source metadata—not a text heuristic—is the English-language authority.
+- Synthetic/random fixtures under `tests/`, `scripts/learning_proof.py` and benchmark utilities are development-only. They are never production training data.

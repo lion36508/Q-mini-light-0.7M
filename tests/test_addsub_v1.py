@@ -9,6 +9,7 @@ from qmini_addsub.config import AddSubConfig
 from qmini_addsub.data import (
     accept_oasst1_message,
     escape_special_token_literals,
+    normalize_training_text,
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel
@@ -420,3 +421,43 @@ def test_new_model_rejects_legacy_context_overflow():
     model = AddSubLanguageModel(config)
     with pytest.raises(ValueError, match="maximum context"):
         model(torch.ones((1, 9), dtype=torch.long))
+
+
+def test_training_text_cleaner_normalizes_unicode_controls_and_whitespace():
+    cleaned, reason = normalize_training_text("Cafe\u0301\r\nhello\tworld\x00\n\n\nnext")
+    assert reason == "accepted"
+    assert cleaned == "Café\nhello world\n\nnext"
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("Contact me at person@example.com", "email"),
+        ("Use ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", "credential"),
+        ("Call me at +1 (415) 555-0134", "phone_contact"),
+        ("\x00\x01", "too_short"),
+        ("123456", "no_letters"),
+        ("x" * 32769, "too_long"),
+    ],
+)
+def test_training_text_cleaner_rejects_sensitive_or_low_quality_fields(value, reason):
+    _, actual_reason = normalize_training_text(value)
+    assert actual_reason == reason
+
+
+def test_oasst_rejects_missing_or_invalid_tree_identity():
+    base = {
+        "message_id": "m1",
+        "parent_id": None,
+        "text": "A reviewed English message.",
+        "role": "prompter",
+        "lang": "en",
+        "review_result": True,
+        "deleted": False,
+        "rank": None,
+        "synthetic": False,
+        "message_tree_id": "tree-1",
+        "tree_state": "ready_for_export",
+    }
+    invalid = dict(base, message_tree_id="")
+    assert accept_oasst1_message(invalid) == (False, "invalid_tree_id")

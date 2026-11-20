@@ -2,7 +2,10 @@
 
 A from-scratch, text-only language-model research project. This repository contains a legacy 0.7M baseline and a separately specified next-generation Add/Sub model line. It is **not yet a validated general-purpose assistant or a complete Android runtime**.
 
-## Model lines
+## Exactly two model lines
+
+This repository intentionally maintains only two model implementations: the preserved legacy Q-Mini Light baseline and the independent Q-Mini Add/Sub v1. Other JSON files under `configs/` are capacity, planning or smoke profiles for the legacy codebase—not additional implemented model families. Historical notebooks are archived and are not active training routes.
+
 
 | Line | Location | Status |
 |---|---|---|
@@ -67,7 +70,7 @@ The legacy profile and artifact format remain available for backward compatibili
 - `configs/` — legacy model profiles.
 - `scripts/` — data preparation, benchmark and development utilities.
 - `tests/` — unit and regression tests, including synthetic test fixtures.
-- `colab/` — active and historical Colab notebooks; see its index.
+- `colab/` — three active entry points for the two model lines; historical experiments are preserved under `colab/archive/legacy-experiments/`.
 - `docs/` — architecture, training, evaluation, data provenance and project audit.
 
 ## Development checks

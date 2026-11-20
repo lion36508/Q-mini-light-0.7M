@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def test_colab_setup_preserves_preinstalled_cuda_pytorch():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     setup = "".join(notebook["cells"][2]["source"])
 
@@ -18,7 +18,7 @@ def test_colab_setup_preserves_preinstalled_cuda_pytorch():
 
 
 def test_colab_expensive_stages_fail_closed_without_gpu_and_preflight_memory():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
     light_stage = "".join(notebook["cells"][8]["source"])
@@ -34,7 +34,7 @@ def test_colab_expensive_stages_fail_closed_without_gpu_and_preflight_memory():
     assert "LONG_TARGET_TOKENS_OVERRIDE must be a positive integer or None." in long_stage
 
 def test_colab_long_training_has_no_fixed_optimizer_step_cap():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     long_stage = "".join(notebook["cells"][10]["source"])
 
@@ -47,7 +47,7 @@ def test_colab_long_training_has_no_fixed_optimizer_step_cap():
 
 
 def test_colab_training_targets_do_not_change_checkpoint_run_identity():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
     long_stage = "".join(notebook["cells"][10]["source"])
@@ -67,7 +67,7 @@ def test_colab_training_targets_do_not_change_checkpoint_run_identity():
     assert "sft_args.append('--extend-schedule')" in sft_stage
 
 def test_sft_never_silently_selects_the_tiny_smoke_checkpoint():
-    notebook_path = Path(__file__).resolve().parents[1] / 'colab' / 'QMini_Training.ipynb'
+    notebook_path = Path(__file__).resolve().parents[1] / 'colab' / 'archive' / 'legacy-experiments' / 'QMini_Training.ipynb'
     notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
     sft_stage = ''.join(notebook['cells'][12]['source'])
     assert 'SFT_SOURCE_OVERRIDE = None' in sft_stage
@@ -80,7 +80,7 @@ def test_sft_never_silently_selects_the_tiny_smoke_checkpoint():
 
 
 def test_sft_requires_independent_task_and_conversation_holdouts():
-    notebook_path = Path(__file__).resolve().parents[1] / 'colab' / 'QMini_Training.ipynb'
+    notebook_path = Path(__file__).resolve().parents[1] / 'colab' / 'archive' / 'legacy-experiments' / 'QMini_Training.ipynb'
     notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
     sft_stage = ''.join(notebook['cells'][12]['source'])
     gate = sft_stage.index('if not SFT_HELDOUT_TASKS.is_file() or not SFT_HELDOUT_CONVERSATIONS.is_file():')
@@ -93,7 +93,7 @@ def test_sft_requires_independent_task_and_conversation_holdouts():
 
 
 def test_colab_runs_random_brain_architecture_preflight_before_dataset_loading():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     setup = "".join(notebook["cells"][2]["source"])
     preflight = "".join(notebook["cells"][3]["source"])
@@ -116,7 +116,7 @@ def test_colab_runs_random_brain_architecture_preflight_before_dataset_loading()
     assert setup.index("pip','install','--no-deps','-e','.'") < len(setup)
 
 def test_colab_smoke_learning_proof_loads_training_checkpoint_not_dense_snapshot():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     smoke_stage = "".join(notebook["cells"][6]["source"])
 
@@ -135,6 +135,8 @@ def test_training_ready_builder_bundles_dormant_training_runtime_and_never_start
     notebook_path = (
         Path(__file__).resolve().parents[1]
         / "colab"
+        / "archive"
+        / "legacy-experiments"
         / "QMini_Training_Ready_Build.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -176,6 +178,8 @@ def test_training_ready_package_identity_includes_preparation_contract():
     notebook_path = (
         Path(__file__).resolve().parents[1]
         / "colab"
+        / "archive"
+        / "legacy-experiments"
         / "QMini_Training_Ready_Build.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -188,7 +192,7 @@ def test_training_ready_package_identity_includes_preparation_contract():
     assert '"loss_mask_mode": LOSS_MASK_MODE' in identity_cell
     assert '"minimum_sequence_length": TRAIN_SEQUENCE_LENGTH' in identity_cell
 def test_training_runner_is_separate_and_has_verified_resume_controls():
-    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_Training_Runner.ipynb"
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / "QMini_Training_Runner.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     code_cells = [
         "".join(cell.get("source", []))
@@ -242,7 +246,7 @@ def test_training_ready_and_runner_notebooks_contain_executable_code():
         "QMini_Training_Ready_Build.ipynb",
         "QMini_Training_Runner.ipynb",
     ):
-        notebook_path = Path(__file__).resolve().parents[1] / "colab" / name
+        notebook_path = Path(__file__).resolve().parents[1] / "colab" / "archive" / "legacy-experiments" / name
         notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
         code_cells = [
             (index, cell)
@@ -261,10 +265,10 @@ def test_training_ready_and_runner_notebooks_contain_executable_code():
 def test_training_runner_defaults_match_the_bundled_package_contract():
     root = Path(__file__).resolve().parents[1]
     runner = json.loads(
-        (root / "colab" / "QMini_Training_Runner.ipynb").read_text(encoding="utf-8")
+        (root / "colab" / "archive" / "legacy-experiments" / "QMini_Training_Runner.ipynb").read_text(encoding="utf-8")
     )
     builder = json.loads(
-        (root / "colab" / "QMini_Training_Ready_Build.ipynb").read_text(encoding="utf-8")
+        (root / "colab" / "archive" / "legacy-experiments" / "QMini_Training_Ready_Build.ipynb").read_text(encoding="utf-8")
     )
     settings = "".join(runner["cells"][1]["source"])
     setup = "".join(runner["cells"][2]["source"])
@@ -289,6 +293,8 @@ def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     notebook_path = (
         Path(__file__).resolve().parents[1]
         / "colab"
+        / "archive"
+        / "legacy-experiments"
         / "QMini_One_Click_Training.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -350,7 +356,7 @@ def test_cpu_resume_notebook_trains_on_conversation_data():
 
 def test_english_cpu_only_resume_v9_is_syntax_valid_and_uses_safe_resume_flow():
     root = Path(__file__).resolve().parents[1]
-    notebook_path = root / "colab" / "QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
+    notebook_path = root / "colab" / "archive" / "legacy-experiments" / "QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
     assert notebook.get("nbformat") == 4
