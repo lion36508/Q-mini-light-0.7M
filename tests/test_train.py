@@ -862,7 +862,7 @@ def test_finetuning_rejects_legacy_q2_version_packed_source(
             "parameter_count": tiny_config.estimated_parameter_count(),
         },
     )
-    with pytest.raises(ValueError, match="verified Q2-v2 two-bit packed export"):
+    with pytest.raises(ValueError, match="versioned manifest"):
         train_model(
             tiny_config, train_bin, valid_bin, tmp_path / "q2-version-sft",
             steps=1, batch_size=1, seq_len=8, grad_accum=1,

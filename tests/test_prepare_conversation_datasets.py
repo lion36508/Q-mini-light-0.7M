@@ -65,15 +65,31 @@ def test_converted_records_use_only_user_and_assistant_roles():
     assert roles <= {"user", "assistant"}
 
 
-def _oasst1_row(message_id, parent_id, text, role="prompter", lang="en", deleted=False, tree="tree-1"):
+def _oasst1_row(
+    message_id,
+    parent_id,
+    text,
+    role="prompter",
+    lang="en",
+    deleted=False,
+    tree="tree-1",
+    review_result=True,
+    synthetic=False,
+    rank=0,
+    tree_state="ready_for_export",
+):
     return {
         "message_id": message_id,
         "parent_id": parent_id,
         "text": text,
         "role": role,
         "lang": lang,
+        "review_result": review_result,
         "deleted": deleted,
+        "rank": rank,
+        "synthetic": synthetic,
         "message_tree_id": tree,
+        "tree_state": tree_state,
     }
 
 
@@ -115,10 +131,43 @@ def test_oasst1_filters_non_english_deleted_and_empty():
     ]
     assert stats["dropped_messages"] == {
         "non_english": 1,
+        "not_ready": 0,
+        "unreviewed": 0,
         "deleted": 1,
+        "synthetic": 0,
+        "missing_rank": 0,
+        "non_top_rank": 0,
         "empty": 1,
         "other_role": 0,
     }
+
+
+def test_oasst1_excludes_synthetic_unreviewed_not_ready_and_non_top_ranked_rows():
+    rows = [
+        _oasst1_row("u1", None, "Question.", "prompter"),
+        _oasst1_row("a-synthetic", "u1", "Generated answer.", "assistant", synthetic=True),
+        _oasst1_row("a-unreviewed", "u1", "Unreviewed answer.", "assistant", review_result=False),
+        _oasst1_row("a-not-ready", "u1", "Not exported.", "assistant", tree_state="halted_by_moderator"),
+        _oasst1_row("a-ranked-1", "u1", "Second choice.", "assistant", rank=1),
+        _oasst1_row("a-missing-rank", "u1", "Unranked answer.", "assistant", rank=None),
+        _oasst1_row("a-best", "u1", "Reviewed human answer.", "assistant", rank=0),
+        _oasst1_row("u2", "a-best", "Thanks.", "prompter"),
+        _oasst1_row("a2", "u2", "You are welcome.", "assistant", rank=0),
+    ]
+    records, stats = prep.flatten_oasst1_rows(rows)
+
+    assert len(records) == 1
+    assert records[0]["messages"] == [
+        {"role": "user", "content": "Question."},
+        {"role": "assistant", "content": "Reviewed human answer."},
+        {"role": "user", "content": "Thanks."},
+        {"role": "assistant", "content": "You are welcome."},
+    ]
+    assert stats["dropped_messages"]["synthetic"] == 1
+    assert stats["dropped_messages"]["unreviewed"] == 1
+    assert stats["dropped_messages"]["not_ready"] == 1
+    assert stats["dropped_messages"]["non_top_rank"] == 1
+    assert stats["dropped_messages"]["missing_rank"] == 1
 
 
 def test_oasst1_merges_consecutive_same_role_turns():
@@ -231,8 +280,12 @@ def test_read_oasst1_train_rows_rejects_wrong_row_count(tmp_path):
             "text": ["Hi.", "Hello."],
             "role": ["prompter", "assistant"],
             "lang": ["en", "en"],
+            "review_result": [True, True],
             "deleted": [False, False],
+            "rank": [None, 0],
+            "synthetic": [False, False],
             "message_tree_id": ["t1", "t1"],
+            "tree_state": ["ready_for_export", "ready_for_export"],
         }
     )
     path = tmp_path / "train.parquet"
@@ -243,6 +296,9 @@ def test_read_oasst1_train_rows_rejects_wrong_row_count(tmp_path):
 
 def test_pinned_dataset_constants():
     assert len(prep.OASST1_TRAIN_PARQUET_SHA256) == 64
+    assert {
+        "review_result", "deleted", "rank", "synthetic", "tree_state"
+    }.issubset(prep.OASST1_REQUIRED_COLUMNS)
     assert prep.OASST1_TRAIN_ROWS == 84437
     assert prep.DAILYDIALOG_SPLITS["train"]["dialogues"] == 11118
     assert prep.DAILYDIALOG_SPLITS["validation"]["dialogues"] == 1000

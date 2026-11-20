@@ -11,8 +11,9 @@ import torch.nn.functional as F
 from .config import QMiniConfig
 from .quantization import (
     fake_quantize_int8,
-    pack_quaternary,
+    pack_q2,
     quantize_int8_per_token,
+    quantize_q2,
     quantize_quaternary,
 )
 
@@ -21,13 +22,18 @@ def _cache_key(weight: torch.Tensor) -> tuple[int, int, tuple[int, ...]]:
     return (int(weight._version), int(weight.data_ptr()), tuple(weight.shape))
 
 
+def _module_quantization_version(module: nn.Module) -> str:
+    return str(getattr(module, "_qmini_quantization_version", "q2-v2"))
+
+
 def _cached_quantized_weight(module: nn.Module, weight: torch.Tensor) -> torch.Tensor:
     """Cache only immutable eval/no-grad weights; training always uses fresh STE ops."""
+    version = _module_quantization_version(module)
     if module.training or torch.is_grad_enabled():
-        return quantize_quaternary(weight)
-    key = _cache_key(weight)
+        return quantize_q2(weight, version)
+    key = (*_cache_key(weight), version)
     if getattr(module, "_qmini_quantized_key", None) != key:
-        module._qmini_quantized_weight = quantize_quaternary(weight)
+        module._qmini_quantized_weight = quantize_q2(weight, version)
         module._qmini_quantized_key = key
     return module._qmini_quantized_weight
 
@@ -58,11 +64,13 @@ def _try_native_linear(
         return None
 
     key = _cache_key(weight)
-    if getattr(module, "_qmini_native_packed_key", None) != key:
-        packed, scales = pack_quaternary(weight)
+    q2_version = 3 if _module_quantization_version(module) == "q2-v3" else 2
+    packed_key = (*key, q2_version)
+    if getattr(module, "_qmini_native_packed_key", None) != packed_key:
+        packed, scales = pack_q2(weight, _module_quantization_version(module))
         module._qmini_native_packed_weight = packed
         module._qmini_native_weight_scales = scales
-        module._qmini_native_packed_key = key
+        module._qmini_native_packed_key = packed_key
 
     activations_i8, activation_scales = quantize_int8_per_token(x)
     output = kernel.linear(
@@ -71,6 +79,7 @@ def _try_native_linear(
         module._qmini_native_weight_scales,
         activation_scales.cpu().numpy(),
         bias.detach().float().cpu().numpy() if bias is not None else None,
+        q2_version=q2_version,
     )
     tensor = torch.from_numpy(output)
     return tensor.reshape(*x.shape[:-1], weight.shape[0])
@@ -105,12 +114,22 @@ class QLinear(nn.Linear):
 class QEmbedding(nn.Module):
     """Tied token embedding and language-model output projection."""
 
-    def __init__(self, vocab_size: int, dim: int):
+    def __init__(
+        self,
+        vocab_size: int,
+        dim: int,
+        quantize_embeddings: bool = True,
+        quantization_version: str = "q2-v2",
+    ):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(vocab_size, dim))
+        self.quantize_embeddings = bool(quantize_embeddings)
+        self._qmini_quantization_version = quantization_version
         nn.init.normal_(self.weight, mean=0.0, std=0.02)
 
     def quantized_weight(self) -> torch.Tensor:
+        if not self.quantize_embeddings:
+            return self.weight.float()
         return _cached_quantized_weight(self, self.weight)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -123,6 +142,10 @@ class QEmbedding(nn.Module):
         if getattr(self, "_qmini_packed_weight", None) is not None:
             from .packed_runtime import packed_linear_forward
             return packed_linear_forward(self, hidden, None)
+        if not self.quantize_embeddings:
+            # The vocabulary matrix remains FP32 in training and FP16 in the
+            # packed artifact; do not inject Q2 noise into the tied LM head.
+            return F.linear(fake_quantize_int8(hidden), self.weight.float())
         native_output = _try_native_linear(self, hidden, self.weight, None)
         if native_output is not None:
             return native_output
@@ -517,12 +540,20 @@ class QMiniMoE(nn.Module):
         super().__init__()
         self.config = config or QMiniConfig()
         self.config.validate()
-        self.embedding = QEmbedding(self.config.vocab_size, self.config.d_model)
+        self.embedding = QEmbedding(
+            self.config.vocab_size,
+            self.config.d_model,
+            quantize_embeddings=self.config.quantize_embeddings,
+            quantization_version=self.config.quantization_version,
+        )
         self.blocks = nn.ModuleList([
             QMiniBlock(self.config, dilation) for dilation in self.config.dilations
         ])
         self.refinement = QMiniBlock(self.config, dilation=1)
         self.final_norm = RMSNorm(self.config.d_model, self.config.rms_norm_eps)
+        for module in self.modules():
+            if isinstance(module, (QLinear, CausalGatedDepthwiseConv)):
+                module._qmini_quantization_version = self.config.quantization_version
 
     @staticmethod
     def _validate_token_id_dtype(input_ids: torch.Tensor) -> None:

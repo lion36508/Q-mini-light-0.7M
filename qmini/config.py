@@ -26,6 +26,8 @@ class QMiniConfig:
     use_state_space: bool = False
     gradient_checkpointing: bool = False
     seed: int = 42
+    quantize_embeddings: bool = False
+    quantization_version: str = "q2-v3"
 
     def validate(self) -> None:
         integer_fields = {
@@ -61,6 +63,12 @@ class QMiniConfig:
             raise TypeError("use_state_space must be a boolean.")
         if not isinstance(self.gradient_checkpointing, bool):
             raise TypeError("gradient_checkpointing must be a boolean.")
+        if not isinstance(self.quantize_embeddings, bool):
+            raise TypeError("quantize_embeddings must be a boolean.")
+        if self.quantization_version not in {"q2-v2", "q2-v3"}:
+            raise ValueError("quantization_version must be 'q2-v2' or 'q2-v3'.")
+        if self.quantization_version == "q2-v2" and not self.quantize_embeddings:
+            raise ValueError("FP16 embedding matrices require quantization_version='q2-v3'.")
 
         if isinstance(self.top_k, bool) or not isinstance(self.top_k, int) or self.top_k != 1:
             raise ValueError("Q-Mini currently implements sparse Top-1 routing only.")
@@ -104,6 +112,15 @@ class QMiniConfig:
         if unknown:
             raise ValueError("Unknown Q-Mini config keys: " + ", ".join(unknown))
         clean = dict(values)
+        # Configs/checkpoints written before Q2-v3 did not record either field.
+        # Interpret those files as the historical Q2-v2 + quantized-embedding
+        # layout so their tensors and packed archives retain exact semantics.
+        if "quantization_version" not in clean:
+            clean["quantization_version"] = "q2-v2"
+        if "quantize_embeddings" not in clean:
+            clean["quantize_embeddings"] = (
+                clean["quantization_version"] == "q2-v2"
+            )
         if "dilations" in clean:
             clean["dilations"] = tuple(clean["dilations"]) if isinstance(clean["dilations"], (list, tuple)) else clean["dilations"]
         config = cls(**clean)
@@ -197,8 +214,9 @@ class QMiniConfig:
         total = self.estimated_parameter_count()
         state_projection_factor = 4 if self.use_state_space else 0
         shared_projection_factor = 3 + state_projection_factor
+        quantized_embedding = self.quantize_embeddings
         matrix_parameters = (
-            vocab * d
+            (vocab * d if quantized_embedding else 0)
             + blocks * (
                 shared_projection_factor * d * d
                 + d * self.kernel_size
@@ -211,7 +229,7 @@ class QMiniConfig:
             raise RuntimeError("Packed layout estimate produced a negative vector count.")
 
         packed_weight_bytes = (
-            vocab * ceil4(d)
+            (vocab * ceil4(d) if quantized_embedding else 0)
             + blocks * (
                 shared_projection_factor * d * ceil4(d)
                 + d * ceil4(self.kernel_size)
@@ -224,17 +242,20 @@ class QMiniConfig:
         )
         # Depthwise convolution is a separate Q2 matrix with one row
         # per channel, in addition to the dense projection rows.
-        q2_row_count = vocab + blocks * (
+        q2_row_count = (vocab if quantized_embedding else 0) + blocks * (
             (shared_projection_factor + 1) * d
             + experts * (h + d)
             + (experts if experts > 1 else 0)
         )
         row_scale_bytes = q2_row_count * 4
-        fp16_vector_bytes = vector_parameters * 2
+        fp16_embedding_parameters = 0 if quantized_embedding else vocab * d
+        fp16_vector_bytes = (vector_parameters - fp16_embedding_parameters) * 2
+        fp16_embedding_matrix_bytes = fp16_embedding_parameters * 2
         return (
             packed_weight_bytes
             + row_scale_bytes
             + fp16_vector_bytes
+            + fp16_embedding_matrix_bytes
             + metadata_reserve_bytes
         )
 

@@ -15,6 +15,20 @@ def test_forward_shape_and_count(tiny_config):
     assert model.parameter_report()["total"] == sum(p.numel() for p in model.parameters())
 
 
+def test_q2_v3_embedding_and_tied_head_stay_outside_weight_quantization(tiny_config):
+    values = tiny_config.to_dict()
+    values["quantization_version"] = "q2-v3"
+    values["quantize_embeddings"] = False
+    config = QMiniConfig.from_dict(values)
+    model = QMiniMoE(config)
+    assert model.embedding.quantize_embeddings is False
+    assert torch.equal(model.embedding.quantized_weight(), model.embedding.weight.float())
+    ids = torch.randint(0, config.vocab_size, (2, 7))
+    output = model(ids)["logits"]
+    assert output.shape == (2, 7, config.vocab_size)
+    assert torch.isfinite(output).all()
+
+
 def test_future_tokens_do_not_change_past_logits(tiny_config):
     torch.manual_seed(7)
     model = QMiniMoE(tiny_config).eval()

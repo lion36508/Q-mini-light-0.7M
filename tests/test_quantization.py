@@ -4,9 +4,9 @@ import pytest
 import numpy as np
 import torch
 from qmini.quantization import (
-    fake_quantize_int8, pack_quaternary, pack_ternary,
+    fake_quantize_int8, pack_quaternary, pack_q2_v3, pack_ternary,
     pack_int4_groupwise, quantization_error_metrics,
-    quantize_quaternary, quantize_ternary_rowwise,
+    quantize_quaternary, quantize_q2_v3, quantize_ternary_rowwise,
     quantize_int8_rowwise, dequantize_int8_rowwise,
     unpack_quaternary, unpack_ternary, unpack_int4_groupwise,
 )
@@ -16,6 +16,65 @@ def test_packed_quaternary_roundtrip():
     packed, scales = pack_quaternary(w); restored = unpack_quaternary(packed, scales, 5)
     expected = quantize_quaternary(w).detach().numpy()
     assert np.allclose(restored, expected, atol=1e-6)
+
+def test_q2_v3_exact_thresholds_zero_row_and_fp32_row_scales():
+    weight = torch.tensor([
+        [-1.0, -0.5, 0.2499, 0.25, 0.7499, 0.75, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ], dtype=torch.float32)
+    quantized = quantize_q2_v3(weight)
+    expected = torch.tensor([
+        [-1.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 0.0],
+        [0.0] * 8,
+    ])
+    assert torch.equal(quantized, expected)
+
+    packed, scales = pack_q2_v3(weight)
+    assert packed.dtype == np.uint8
+    assert scales.dtype == np.float32
+    assert np.array_equal(scales, np.asarray([1.0, 0.0], dtype=np.float32))
+    restored = unpack_quaternary(packed, scales, 8, format_version=3)
+    assert np.array_equal(restored, expected.numpy())
+
+
+def test_q2_v3_two_bit_code_mapping_and_odd_width_zero_padding():
+    weight = torch.tensor([[-1.0, 0.0, 0.5, 1.0, -0.5, 0.25, 0.75]], dtype=torch.float32)
+    packed, scales = pack_q2_v3(weight)
+    assert scales.tolist() == [1.0]
+    # First four symbols are codes 00,01,10,11 => byte 0b11100100.
+    assert int(packed[0, 0]) == 0b11100100
+    # Odd-width padding uses the neutral true-zero code 01.
+    padded_code = (int(packed[0, 1]) >> 6) & 0b11
+    assert padded_code == 0b01
+    restored = unpack_quaternary(packed, scales, 7, format_version=3)
+    assert restored.tolist() == [[-1.0, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0]]
+
+
+def test_q2_v3_ste_passes_finite_master_weight_gradients():
+    weight = torch.tensor(
+        [[-1.0, -0.3, 0.2, 0.8], [0.0, 0.0, 0.0, 0.0]],
+        requires_grad=True,
+    )
+    result = quantize_q2_v3(weight)
+    result.square().sum().backward()
+    assert weight.grad is not None
+    assert torch.isfinite(weight.grad).all()
+    assert torch.equal(weight.grad, 2.0 * result.detach())
+
+
+def test_q2_v3_rejects_non_finite_weights_and_bad_scales():
+    with pytest.raises(ValueError, match="non-finite"):
+        quantize_q2_v3(torch.tensor([[float("nan"), 0.0]]))
+    with pytest.raises(ValueError, match="non-finite"):
+        pack_q2_v3(torch.tensor([[0.0, float("inf")]]))
+    with pytest.raises(ValueError, match="non-negative"):
+        unpack_quaternary(
+            np.zeros((1, 1), dtype=np.uint8),
+            np.asarray([-0.1], dtype=np.float32),
+            4,
+            format_version=3,
+        )
+
 
 def test_quaternary_ste_gradient():
     w = torch.randn(3, 7, requires_grad=True); quantize_quaternary(w).square().mean().backward()

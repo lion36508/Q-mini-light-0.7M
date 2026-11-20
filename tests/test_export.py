@@ -86,6 +86,33 @@ def test_verify_export_rejects_contradictory_q2_v2_codebook_metadata(
         verify_packed_export(corrupted)
 
 
+def test_q2_v3_export_reconstructs_codebook_and_fp16_embedding(tmp_path):
+    from qmini.config import QMiniConfig
+
+    config = QMiniConfig(
+        vocab_size=300, d_model=32, d_hidden=48, n_layers=1,
+        n_experts=1, top_k=1, max_context=32, kernel_size=3,
+        dilations=(1,), max_thinking_steps=1, thinking_steps=1,
+        quantization_version="q2-v3", quantize_embeddings=False,
+    )
+    model = QMiniMoE(config)
+    target = export_packed_state(
+        model.state_dict(), config, tmp_path / "q2-v3.npz"
+    )
+    report = verify_packed_export(target)
+    assert report["format"] == "qmini-packed-v3"
+    assert report["q2_version"] == 3
+    assert report["fp16_matrix_tensor_count"] == 1
+
+    restored_config, restored = reconstruct_packed_state(target)
+    assert restored_config.to_dict() == config.to_dict()
+    assert restored["embedding.weight"].shape == tuple(model.embedding.weight.shape)
+    expected_embedding = (
+        model.embedding.weight.detach().numpy().astype(np.float16).astype(np.float32)
+    )
+    assert np.array_equal(restored["embedding.weight"], expected_embedding)
+
+
 @pytest.mark.parametrize(
     "metadata_payload",
     [

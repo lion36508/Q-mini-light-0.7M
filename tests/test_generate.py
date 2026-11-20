@@ -293,7 +293,7 @@ def test_q2_only_manifest_ignores_stale_dense_snapshot_and_refuses_dense_gpu_fal
     assert getattr(loaded_model, "_qmini_packed_runtime", False) is True
     assert loaded_tokenizer.get_vocab_size() == tiny_config.vocab_size
 
-    with pytest.raises(RuntimeError, match="packed Q2-v2 inference runtime is CPU-only"):
+    with pytest.raises(RuntimeError, match="packed Q2 inference runtime is CPU-only"):
         load_model(model_dir, device="cuda")
 
 
@@ -355,6 +355,64 @@ def test_load_model_rejects_valid_but_unfingerprinted_replacement_q2_archive(
 
     with pytest.raises(ValueError, match="size/SHA-256"):
         load_model(model_dir, device="cpu")
+
+
+def test_load_model_accepts_q2_v3_manifest_and_fp16_embedding(tiny_config, tmp_path):
+    import hashlib
+    import json
+
+    from qmini.export import export_packed_state
+
+    root = tmp_path / "q2-v3-final"
+    root.mkdir()
+    corpus = root / "corpus.txt"
+    corpus.write_text(
+        "Q-Mini v3 preserves embedding rows in a higher precision format.\n\n"
+        "Zero is an exact two-bit symbol in the new matrix codebook.\n\n"
+        "The tokenizer uses separate training and validation documents.\n\n"
+        "The deployment archive keeps model provenance and version metadata.\n",
+        encoding="utf-8",
+    )
+    tokenizer_path = root / "tokenizer.json"
+    tokenizer = train_tokenizer([corpus], tokenizer_path, vocab_size=300, min_frequency=1)
+    values = tiny_config.to_dict()
+    values["vocab_size"] = tokenizer.get_vocab_size()
+    values["quantization_version"] = "q2-v3"
+    values["quantize_embeddings"] = False
+    config = type(tiny_config).from_dict(values)
+    config.save(root / "config.json")
+    model = QMiniMoE(config).eval()
+    packed_path = root / "model.qmini.npz"
+    export_packed_state(model.state_dict(), config, packed_path)
+    (root / "model_manifest.json").write_text(
+        json.dumps({
+            "format": "qmini-final-model-v2",
+            "config": config.to_dict(),
+            "parameters": config.estimated_parameter_count(),
+            "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+            "packed_export": packed_path.name,
+            "packed_export_bytes": packed_path.stat().st_size,
+            "packed_export_sha256": hashlib.sha256(packed_path.read_bytes()).hexdigest(),
+            "matrix_weight_format": "qmini-packed-v3",
+            "matrix_weight_bits": 2,
+            "q2_version": 3,
+            "q2_codebook": {"00": -1.0, "01": 0.0, "10": 0.5, "11": 1.0},
+            "quantize_embeddings": False,
+            "embedding_storage": "float16",
+            "dense_training_snapshot_included": False,
+            "dense_snapshot_bytes": None,
+            "dense_snapshot_sha256": None,
+        }),
+        encoding="utf-8",
+    )
+
+    loaded, loaded_tokenizer, device = load_model(root, device="cpu")
+    assert device.type == "cpu"
+    assert loaded.embedding.weight.dtype == torch.float16
+    assert loaded_tokenizer.get_vocab_size() == config.vocab_size
+    with torch.inference_mode():
+        ids = torch.randint(0, config.vocab_size, (1, 5))
+        assert loaded(ids)["logits"].shape == (1, 5, config.vocab_size)
 
 
 def test_load_model_rejects_manifest_config_drift(tiny_config, tmp_path):
