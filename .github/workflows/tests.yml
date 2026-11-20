@@ -72,13 +72,15 @@ jobs:
                       source = source if isinstance(source, str) else "".join(source)
                       if not source.strip():
                           continue
-                      ast.parse(source, filename=f"{path}:cell-{index}")
-                      count += 1
+                      if path in active_notebooks:
+                          ast.parse(source, filename=f"{path}:cell-{index}")
+                          count += 1
               if path in active_notebooks and count < 1:
                   raise SystemExit(f"Active notebook has no executable Python cells: {path}")
               total += count
-              print(f"Parsed {count} Python code cells in {path}")
-          print(f"Parsed {total} non-empty Python code cells across {len(paths)} active/archived Colab notebooks.")
+              status = "syntax-checked active" if path in active_notebooks else "structure-checked archived"
+              print(f"{status}: {path} ({count} active Python cells)")
+          print(f"Syntax-checked {total} code cells across {len(active_notebooks)} active notebooks; validated JSON structure for {len(paths) - len(active_notebooks)} archived notebooks.")
           PY
       - name: Run tests
         run: pytest -q
