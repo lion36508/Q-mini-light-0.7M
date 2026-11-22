@@ -1006,3 +1006,87 @@ def test_generation_uses_exact_same_system_prompt_as_sft_training():
     from qmini_addsub.sft import SYSTEM_TEXT as TRAINING_SYSTEM_TEXT
 
     assert GENERATION_SYSTEM_TEXT == TRAINING_SYSTEM_TEXT
+
+
+
+def test_custom_dataset_import_is_transactional_on_sft_leakage(tmp_path):
+    import json
+
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    pretrain = []
+    for split in ("train", "validation", "test"):
+        path = tmp_path / f"pretrain_{split}.txt"
+        path.write_text(f"English {split} material.\\n", encoding="utf-8")
+        pretrain.append(path)
+
+    sft_paths = [tmp_path / f"sft_{split}.jsonl" for split in ("train", "validation", "test")]
+    duplicate = {
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "What is a model?"},
+            {"role": "assistant", "content": "A model maps inputs to outputs."},
+        ],
+    }
+    distinct = {
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "What is a tokenizer?"},
+            {"role": "assistant", "content": "A tokenizer maps text to token IDs."},
+        ],
+    }
+    sft_paths[0].write_text(json.dumps(duplicate) + "\\n", encoding="utf-8")
+    sft_paths[1].write_text(json.dumps(duplicate) + "\\n", encoding="utf-8")
+    sft_paths[2].write_text(json.dumps(distinct) + "\\n", encoding="utf-8")
+
+    output = tmp_path / "transactional-output"
+    with pytest.raises(ValueError, match="leakage"):
+        import_user_dataset(
+            pretrain_train=pretrain[0],
+            pretrain_validation=pretrain[1],
+            pretrain_test=pretrain[2],
+            output_dir=output,
+            pretrain_source="chosen-English-corpus",
+            pretrain_license="reviewed-license",
+            confirm_rights_and_human_data=True,
+            confirm_english_data=True,
+            sft_train=sft_paths[0],
+            sft_validation=sft_paths[1],
+            sft_test=sft_paths[2],
+            sft_source="chosen-assistant-corpus",
+            sft_license="reviewed-instruction-license",
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".transactional-output.staging-*"))
+
+
+def test_custom_dataset_import_refuses_overwrite_without_explicit_flag(tmp_path):
+    import json
+
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    pretrain = []
+    for split in ("train", "validation", "test"):
+        path = tmp_path / f"{split}.txt"
+        path.write_text(f"English {split} material.\\n", encoding="utf-8")
+        pretrain.append(path)
+
+    output = tmp_path / "import-once"
+    kwargs = {
+        "pretrain_train": pretrain[0],
+        "pretrain_validation": pretrain[1],
+        "pretrain_test": pretrain[2],
+        "output_dir": output,
+        "pretrain_source": "chosen-English-corpus",
+        "pretrain_license": "reviewed-license",
+        "confirm_rights_and_human_data": True,
+        "confirm_english_data": True,
+    }
+    first = import_user_dataset(**kwargs)
+    before = (output / "dataset_manifest.json").read_bytes()
+    assert first["format"] == "qmini-addsub-data-v1"
+    with pytest.raises(FileExistsError, match="already contains prepared files"):
+        import_user_dataset(**kwargs)
+    assert (output / "dataset_manifest.json").read_bytes() == before
