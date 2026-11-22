@@ -194,6 +194,7 @@ def export_addsub_checkpoint(
 def load_addsub_export(
     export_path: str | Path,
     device_name: str = "cpu",
+    tokenizer_path: str | Path | None = None,
 ) -> tuple[AddSubLanguageModel, dict[str, Any]]:
     """Verify and reconstruct the PyTorch reference model from a packed Add/Sub container."""
     source = Path(export_path)
@@ -236,6 +237,18 @@ def load_addsub_export(
         raise ValueError("Export source checkpoint format is not accepted.")
     if manifest.get("reserved_codewords") != [5, 6, 7]:
         raise ValueError("Export reserved codeword declaration is invalid.")
+    tokenizer_sha = manifest.get("tokenizer_sha256")
+    dataset_sha = manifest.get("dataset_manifest_sha256")
+    if not isinstance(tokenizer_sha, str) or len(tokenizer_sha) != 64:
+        raise ValueError("Export tokenizer fingerprint is missing or invalid.")
+    if not isinstance(dataset_sha, str) or len(dataset_sha) != 64:
+        raise ValueError("Export dataset-manifest fingerprint is missing or invalid.")
+    if tokenizer_path is not None:
+        tokenizer_file = Path(tokenizer_path)
+        if not tokenizer_file.is_file():
+            raise FileNotFoundError(tokenizer_file)
+        if sha256_file(tokenizer_file) != tokenizer_sha:
+            raise ValueError("Tokenizer fingerprint does not match the packed model export.")
     model = AddSubLanguageModel(config, seed=config.seed)
     expected_state = model.state_dict()
     quantized_names = _quantized_parameter_names(model)
