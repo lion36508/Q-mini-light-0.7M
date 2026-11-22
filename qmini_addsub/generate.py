@@ -18,7 +18,7 @@ SYSTEM_TEXT = (
     "actual question clearly and accurately. Be concise when appropriate. "
     "Do not invent facts; say when you are uncertain."
 )
-RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v2"}
+RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v3", "qmini-addsub-sft-v2"}
 
 
 def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
@@ -94,7 +94,12 @@ def build_chat_prompt(
             last = segments[-1]
             content_ids = last[1:-1]
             available = max(0, len(content_ids) - overflow)
-            tail = content_ids[-available:] if available else []
+            if available < 1:
+                raise ValueError(
+                    "The current user message is too long for the configured context, "
+                    "even after removing older history and shortening the system prompt."
+                )
+            tail = content_ids[-available:]
             segments[-1] = [last[0], *tail, last[-1]]
 
     prompt = make_prefix()
@@ -234,6 +239,11 @@ def main() -> None:
 
     tokenizer = Tokenizer.from_file(str(args.tokenizer))
     model = load_addsub_model(args.checkpoint, args.device)
+    if tokenizer.get_vocab_size() != model.config.vocab_size:
+        raise ValueError(
+            f"Tokenizer vocabulary {tokenizer.get_vocab_size()} does not match "
+            f"checkpoint vocabulary {model.config.vocab_size}."
+        )
     if not args.interactive and args.prompt is None:
         parser.error("Provide --prompt or use --interactive.")
 
