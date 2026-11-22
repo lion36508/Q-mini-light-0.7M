@@ -153,9 +153,19 @@ def import_user_dataset(
 
     output = Path(output_dir)
     manifest_path = output / "dataset_manifest.json"
-    if manifest_path.exists() and not overwrite:
+    existing_outputs = [
+        manifest_path,
+        output / "pretrain_train.txt",
+        output / "pretrain_validation.txt",
+        output / "pretrain_test.txt",
+        output / "sft_train.jsonl",
+        output / "sft_validation.jsonl",
+        output / "sft_test.jsonl",
+    ]
+    if not overwrite and any(path.exists() for path in existing_outputs):
         raise FileExistsError(
-            f"{manifest_path} already exists. Use --overwrite only after backing up the old manifest."
+            f"Dataset output folder {output} already contains prepared files. "
+            "Choose a new folder or pass --overwrite after backing up the data."
         )
     output.mkdir(parents=True, exist_ok=True)
 
@@ -258,10 +268,12 @@ def import_user_dataset(
         "approved_instruction_sources": approved_sources,
         "instruction_splits": instruction_splits,
     }
-    manifest_path.write_text(
+    temporary_manifest = manifest_path.with_suffix(".json.tmp")
+    temporary_manifest.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    temporary_manifest.replace(manifest_path)
     return manifest
 
 
