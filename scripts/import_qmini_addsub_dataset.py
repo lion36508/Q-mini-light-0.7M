@@ -119,6 +119,7 @@ def import_user_dataset(
     pretrain_source: str,
     pretrain_license: str,
     confirm_rights_and_human_data: bool = False,
+    confirm_english_data: bool = False,
     sft_train: str | Path | None = None,
     sft_validation: str | Path | None = None,
     sft_source: str | None = None,
@@ -130,6 +131,8 @@ def import_user_dataset(
         raise ValueError(
             "Explicit confirmation of dataset rights and non-synthetic data is required."
         )
+    if not confirm_english_data:
+        raise ValueError("Explicit confirmation that all selected data is English is required.")
     if not pretrain_source.strip() or not pretrain_license.strip():
         raise ValueError("Pretraining source name and license must be supplied.")
     if len({
@@ -211,6 +214,7 @@ def import_user_dataset(
         "synthetic_training_records_included": 0,
         "source_attestation": {
             "rights_and_non_synthetic_confirmation": True,
+            "english_language_confirmation": True,
             "pretraining_source": pretrain_source,
             "pretraining_license": pretrain_license,
             "split_integrity": "User supplied distinct train/validation/test files; document-level leakage cannot be inferred from plain text files.",
@@ -256,7 +260,12 @@ def main() -> None:
     parser.add_argument(
         "--confirm-rights-and-human-data",
         action="store_true",
-        help="Confirm you have reviewed the source terms and supplied non-synthetic English training data.",
+        help="Confirm you have reviewed the source terms and supplied non-synthetic data.",
+    )
+    parser.add_argument(
+        "--confirm-english-data",
+        action="store_true",
+        help="Confirm that all supplied pretraining and optional SFT records are English.",
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -269,6 +278,7 @@ def main() -> None:
         pretrain_source=args.pretrain_source,
         pretrain_license=args.pretrain_license,
         confirm_rights_and_human_data=args.confirm_rights_and_human_data,
+        confirm_english_data=args.confirm_english_data,
         sft_train=args.sft_train,
         sft_validation=args.sft_validation,
         sft_source=args.sft_source,
