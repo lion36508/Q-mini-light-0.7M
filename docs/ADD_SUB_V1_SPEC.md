@@ -104,7 +104,7 @@ The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown a
 6. Test all nonlinear and normalization paths; no hidden multiply is allowed.
 7. Same seed/config/data produces deterministic initialization and reproducible export.
 8. Save/resume parity and packed-weight export tamper detection pass.
-9. Held-out English NLL and task evaluation are reported separately from synthetic smoke tests.
+9. Held-out English NLL/BPB and assistant-response test evaluation are reported separately from synthetic smoke tests. The initial lexical metrics do not establish semantic correctness.
 10. Real target-device RAM, speed, thermal and energy measurements are published before phone-support claims.
 
 ## 9. Explicit non-goals for v1
