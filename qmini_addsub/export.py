@@ -117,14 +117,39 @@ def export_addsub_checkpoint(
     auxiliary_payload = auxiliary_buffer.getvalue()
     weights_payload = bytes(packed_weights)
 
+    config_dict = config.to_dict()
+    canonical_config = json.dumps(
+        config_dict, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    tokenizer_sha = checkpoint.get("tokenizer_sha256")
+    dataset_manifest_sha = checkpoint.get("data_manifest_sha256")
+    if not isinstance(tokenizer_sha, str) or len(tokenizer_sha) != 64:
+        raise ValueError("Checkpoint is missing a valid tokenizer SHA-256 fingerprint.")
+    if not isinstance(dataset_manifest_sha, str) or len(dataset_manifest_sha) != 64:
+        raise ValueError("Checkpoint is missing a valid dataset-manifest SHA-256 fingerprint.")
+    run_contract = checkpoint.get("run_contract")
+    if run_contract is not None and not isinstance(run_contract, dict):
+        raise ValueError("Checkpoint training run contract is invalid.")
+
     manifest = {
         "format": EXPORT_FORMAT,
         "weight_format": FORMAT_NAME,
         "checkpoint_format": checkpoint_format,
         "checkpoint_step": int(checkpoint["step"]),
-        "config": config.to_dict(),
+        "training_run_contract": run_contract,
+        "config": config_dict,
+        "config_sha256": _sha256_bytes(canonical_config),
         "parameter_count": model.parameter_count(),
+        "tokenizer_vocab_size": config.vocab_size,
+        "tokenizer_sha256": tokenizer_sha,
+        "dataset_manifest_sha256": dataset_manifest_sha,
+        "base_checkpoint_sha256": checkpoint.get("base_sha256"),
         "weight_symbols": list(WEIGHT_SYMBOLS),
+        "weight_code_map": [
+            {"code": index, "value": value}
+            for index, value in enumerate(WEIGHT_SYMBOLS)
+        ],
+        "reserved_codewords": [5, 6, 7],
         "bits_per_weight": BITS_PER_WEIGHT,
         "packing": "little-endian continuous 3-bit codes; 0..4 valid, 5..7 reserved",
         "zero_symbol_code": 2,
@@ -198,7 +223,19 @@ def load_addsub_export(
     if _sha256_bytes(auxiliary_payload) != manifest.get("auxiliary_sha256"):
         raise ValueError("Auxiliary tensor payload failed SHA-256 verification.")
 
-    config = AddSubConfig.from_dict(manifest["config"])
+    config_dict = manifest["config"]
+    canonical_config = json.dumps(
+        config_dict, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    if _sha256_bytes(canonical_config) != manifest.get("config_sha256"):
+        raise ValueError("Export config failed SHA-256 verification.")
+    config = AddSubConfig.from_dict(config_dict)
+    if manifest.get("tokenizer_vocab_size") != config.vocab_size:
+        raise ValueError("Export tokenizer vocabulary does not match the model config.")
+    if manifest.get("checkpoint_format") not in ACCEPTED_CHECKPOINT_FORMATS:
+        raise ValueError("Export source checkpoint format is not accepted.")
+    if manifest.get("reserved_codewords") != [5, 6, 7]:
+        raise ValueError("Export reserved codeword declaration is invalid.")
     model = AddSubLanguageModel(config, seed=config.seed)
     expected_state = model.state_dict()
     quantized_names = _quantized_parameter_names(model)
