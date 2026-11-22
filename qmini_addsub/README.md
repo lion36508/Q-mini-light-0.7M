@@ -16,7 +16,7 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
-- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v3 checkpoints.
+- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v4 checkpoints, plus a separate held-out SFT test split.
 - Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
@@ -52,7 +52,7 @@ Import only the local files (no network download is performed):
 
     python scripts/import_qmini_addsub_dataset.py --pretrain-train /path/train.txt --pretrain-validation /path/validation.txt --pretrain-test /path/test.txt --pretrain-source "dataset name and revision" --pretrain-license "exact source license" --confirm-rights-and-human-data --confirm-english-data --output data/qmini_addsub_v1
 
-For supervised assistant training, add both `--sft-train` and `--sft-validation`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes the messages, rejects exact train/validation duplicates and records the declared source in `approved_instruction_sources`. Do not mark generated or unknown-provenance text as human-authored.
+For supervised assistant training, supply all three files `--sft-train`, `--sft-validation` and `--sft-test`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes messages and rejects exact duplicate conversations across every pair of splits. SFT reports validation response loss during training and held-out test response loss only after training is complete. Do not mark generated or unknown-provenance text as human-authored.
 
 Then build the tokenizer and streams. SFT data is optional at this stage; the tokenizer is trained on pretraining train text alone when no SFT train file exists. The tokenizer script also writes `model_config.json` with the exact vocabulary size it actually produced; pass this file to training so tokenizer and model cannot silently disagree:
 
@@ -96,7 +96,7 @@ After a checkpoint exists, the PyTorch reference chat can be opened with `python
 
 Instruction fine-tuning may begin only from a checkpoint produced by this Add/Sub v1 pretraining code:
 
-    python -m qmini_addsub.sft --base-checkpoint runs/qmini_addsub_v1_pretrain/checkpoint-step-000002000.pt --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --train-jsonl data/qmini_addsub_v1/sft_train.jsonl --valid-jsonl data/qmini_addsub_v1/sft_validation.jsonl --output runs/qmini_addsub_v1_sft --device cuda
+    python -m qmini_addsub.sft --base-checkpoint runs/qmini_addsub_v1_pretrain/checkpoint-step-000002000.pt --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --train-jsonl data/qmini_addsub_v1/sft_train.jsonl --valid-jsonl data/qmini_addsub_v1/sft_validation.jsonl --test-jsonl data/qmini_addsub_v1/sft_test.jsonl --output runs/qmini_addsub_v1_sft --device cpu
 
 Paths/step counts above are examples; only run after checking data preparation, available storage/compute and validation. No training begins during CI or by importing this package.
 
