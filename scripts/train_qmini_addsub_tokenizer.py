@@ -82,8 +82,9 @@ def main() -> None:
         with trainer_corpus.open("w", encoding="utf-8") as target:
             with pretrain.open("r", encoding="utf-8") as source:
                 for line in source:
-                    if line.strip():
-                        target.write(escape_special_token_literals(line))
+                    text = line.strip()
+                    if text:
+                        target.write(escape_special_token_literals(text) + "\\n")
             if sft_train_entry is not None:
                 with sft.open("r", encoding="utf-8") as source:
                     for line_number, line in enumerate(source, 1):
