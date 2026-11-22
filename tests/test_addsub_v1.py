@@ -1417,3 +1417,15 @@ def test_model_attention_mask_requires_right_padding_without_internal_gaps():
 def test_addsub_config_requires_context_room_for_chat_controls():
     with pytest.raises(ValueError, match="at least 8"):
         AddSubConfig(max_context=7).validate()
+
+
+
+def test_additive_projection_rejects_bias_accumulator_overflow():
+    activations = np.asarray([[3, -4]], dtype=np.int8)
+    weights = np.asarray([[4, 2]], dtype=np.uint8)
+    with pytest.raises(ValueError, match="signed int32"):
+        additive_projection(
+            activations,
+            weights,
+            bias_accumulator=np.asarray([2**40], dtype=np.int64),
+        )
