@@ -16,7 +16,7 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
-from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
+from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
@@ -349,33 +349,17 @@ def fine_tune_from_addsub_checkpoint(
                 "SFT output contains checkpoints newer than the requested resume point: "
                 + ", ".join(newer_checkpoints)
             )
-        if metrics_path.exists():
-            try:
-                existing_rows = [
-                    json.loads(line)
-                    for line in metrics_path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
-            except json.JSONDecodeError as exc:
-                raise ValueError("SFT metrics file is not valid JSONL.") from exc
-            expected_metric_identity = {
-                "train_sha256": hashes["train_sha256"],
-                "valid_sha256": hashes["valid_sha256"],
-                "test_sha256": hashes["test_sha256"],
-                "tokenizer_sha256": hashes["tokenizer_sha256"],
-                "data_manifest_sha256": hashes["data_manifest_sha256"],
-                "run_contract": run_contract,
-            }
-            for row in existing_rows:
-                if any(row.get(key) != value for key, value in expected_metric_identity.items()):
-                    raise ValueError(
-                        "SFT metrics belong to a different dataset, tokenizer or run contract."
-                    )
-                if int(row.get("step", -1)) > start_step:
-                    raise ValueError(
-                        "SFT metrics contain steps newer than the resume checkpoint; "
-                        "choose the latest compatible checkpoint."
-                    )
+        expected_metric_identity = {
+            "train_sha256": hashes["train_sha256"],
+            "valid_sha256": hashes["valid_sha256"],
+            "test_sha256": hashes["test_sha256"],
+            "tokenizer_sha256": hashes["tokenizer_sha256"],
+            "data_manifest_sha256": hashes["data_manifest_sha256"],
+            "run_contract": run_contract,
+        }
+        reconcile_metrics_file(
+            str(metrics_path), expected_metric_identity, start_step, "SFT"
+        )
 
     def evaluate(dataset: ConversationDataset, split_name: str) -> float:
         was_training = model.training
