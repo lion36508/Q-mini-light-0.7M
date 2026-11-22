@@ -127,8 +127,8 @@ def train_from_scratch(
         raise ValueError("save_every and validate_every must be positive.")
     if seed < 0:
         raise ValueError("seed must be non-negative.")
-    if learning_rate <= 0:
-        raise ValueError("learning_rate must be positive.")
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive.")
     if sequence_length > config.max_context:
         raise ValueError("sequence_length exceeds the configured context.")
     device = torch.device(device_name)
