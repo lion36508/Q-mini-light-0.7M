@@ -71,12 +71,12 @@ qmini_addsub/
     data.py                    # provenance and document-level split
     train.py                   # new training implementation
     checkpoint.py              # new checkpoint format; never reads qmini files
-    export.py                  # qmini-addsub-v1 packing and validation
-    runtime.py                 # deployed add/sub-only runtime
+    export.py                  # offline five-symbol weight container and validation
+    runtime.py                 # integer projection / residual primitives; full graph pending
     tests/
 ```
 
-Implemented files include config.py, model.py, quantization.py, runtime.py, data.py, train.py and sft.py. Data/tokenizer preparation scripts and tests live in scripts/ and tests/. A cached PyTorch streaming reference path now exists for parity-tested one-token generation. It is not the integer-only deployed runtime. The full inference export/loader, calibrated LUT set and native inference graph are still pending. The legacy package must not import from qmini_addsub, and the new package must not import model/runtime classes from qmini.
+Implemented files include config.py, model.py, quantization.py, runtime.py, data.py, train.py and sft.py. Data/tokenizer preparation scripts and tests live in scripts/ and tests/. A cached PyTorch streaming reference path now exists for parity-tested one-token generation. It is not the integer-only deployed runtime. The offline five-symbol checkpoint weight-container exporter and reconstruction loader now exist, with SHA-256 checks, shape/index validation and tamper tests. This export is not an inference runtime: auxiliary tensors remain float32. Calibrated LUTs and the full integer-only convolution/SSM/MoE/normalization/output graph plus native device runtime are still pending. The legacy package must not import from qmini_addsub, and the new package must not import model/runtime classes from qmini.
 
 ## 7. Artifact compatibility
 
@@ -103,7 +103,7 @@ The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown a
 5. Static and compiled-binary audit rejects multiply/divide/matmul/FMA instructions in the deployed inference graph.
 6. Test all nonlinear and normalization paths; no hidden multiply is allowed.
 7. Same seed/config/data produces deterministic initialization and reproducible export.
-8. Save/resume parity and artifact tamper detection pass.
+8. Save/resume parity and packed-weight export tamper detection pass.
 9. Held-out English NLL and task evaluation are reported separately from synthetic smoke tests.
 10. Real target-device RAM, speed, thermal and energy measurements are published before phone-support claims.
 
