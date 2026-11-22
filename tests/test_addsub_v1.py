@@ -387,8 +387,8 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
             "human_authored": True,
             "synthetic": False,
             "messages": [
-                {"role": "user", "content": "What is a compiler?"},
-                {"role": "assistant", "content": "A compiler translates program source."},
+                {"role": "user", "content": f"What is a compiler in {path.stem}?"},
+                {"role": "assistant", "content": f"A compiler translates program source for {path.stem}."},
             ],
         }
         path.write_text(json.dumps(record) + "\n", encoding="utf-8")
@@ -396,12 +396,16 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_train = data_dir / "sft_train.jsonl"
     sft_valid = data_dir / "sft_validation.jsonl"
+    sft_test = data_dir / "sft_test.jsonl"
     train_sft_sha = write_conversation(sft_train)
     valid_sft_sha = write_conversation(sft_valid)
+    test_sft_sha = write_conversation(sft_test)
     manifest["instruction_splits"] = {
         "train": {"path": sft_train.name, "sha256": train_sft_sha},
         "validation": {"path": sft_valid.name, "sha256": valid_sft_sha},
+        "test": {"path": sft_test.name, "sha256": test_sft_sha},
     }
+    manifest["approved_instruction_sources"] = ["databricks/databricks-dolly-15k"]
     (data_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, sort_keys=True), encoding="utf-8"
     )
@@ -411,13 +415,16 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         tokenizer_path=tokenizer_path,
         train_jsonl=sft_train,
         valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
         output_dir=tmp_path / "sft",
-        steps=1,
+        steps=2,
         batch_size=1,
+        save_every=1,
         device_name="cpu",
         seed=43,
     )
-    assert sft_result["steps"] == 1
+    assert sft_result["steps"] == 2
+    assert sft_result["heldout_test_response_loss"] > 0
     assert (tmp_path / "sft" / "sft-checkpoint-step-000000001.pt").is_file()
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
@@ -430,9 +437,11 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         tokenizer_path=tokenizer_path,
         train_jsonl=sft_train,
         valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
         output_dir=tmp_path / "sft-resumed",
         steps=2,
         batch_size=1,
+        save_every=1,
         device_name="cpu",
         seed=43,
         resume=sft_checkpoint,
@@ -619,8 +628,9 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
 
     sft_train = tmp_path / "chosen_sft_train.jsonl"
     sft_validation = tmp_path / "chosen_sft_valid.jsonl"
+    sft_test = tmp_path / "chosen_sft_test.jsonl"
     records = []
-    for split, path in (("train", sft_train), ("validation", sft_validation)):
+    for split, path in (("train", sft_train), ("validation", sft_validation), ("test", sft_test)):
         record = {
             "human_authored": True,
             "synthetic": False,
@@ -644,6 +654,7 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
         confirm_english_data=True,
         sft_train=sft_train,
         sft_validation=sft_validation,
+        sft_test=sft_test,
         sft_source="user-selected-assistant-corpus",
         sft_license="user-reviewed-instruction-license",
     )
