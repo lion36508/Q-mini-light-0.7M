@@ -14,10 +14,11 @@ from tokenizers import Tokenizer
 
 from .config import AddSubConfig
 from .model import AddSubLanguageModel
+from .data import escape_special_token_literals
 from .optim import build_adamw, cosine_warmup_lr
 
 
-CHECKPOINT_FORMAT = "qmini-addsub-training-v2"
+CHECKPOINT_FORMAT = "qmini-addsub-training-v3"
 
 
 def sha256_file(path: str | Path) -> str:
@@ -38,22 +39,33 @@ def encode_text_file(
     eos_id = tokenizer.token_to_id("<eos>")
     if eos_id is None:
         raise ValueError("Tokenizer must contain the <eos> token.")
+    if tokenizer.get_vocab_size() > 65536:
+        raise ValueError("Tokenizer vocabulary exceeds the uint16 token-stream capacity.")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
     count = 0
-    with Path(text_path).open("r", encoding="utf-8") as source, output.open("wb") as target:
-        for line in source:
-            text = line.strip()
-            if not text:
-                continue
-            ids = tokenizer.encode(text).ids
-            if not ids:
-                continue
-            values = np.asarray(ids + [eos_id], dtype=np.uint16)
-            values.tofile(target)
-            count += int(values.size)
-    if count < 2:
-        raise ValueError("Encoded token stream is empty or too short.")
+    try:
+        with Path(text_path).open("r", encoding="utf-8") as source, temporary.open("wb") as target:
+            for line in source:
+                text = line.strip()
+                if not text:
+                    continue
+                safe_text = escape_special_token_literals(text)
+                ids = tokenizer.encode(safe_text, add_special_tokens=False).ids
+                if not ids:
+                    continue
+                if any(token_id < 0 or token_id >= 65536 for token_id in ids):
+                    raise ValueError("Tokenizer emitted a token ID outside uint16 range.")
+                values = np.asarray(ids + [eos_id], dtype=np.uint16)
+                values.tofile(target)
+                count += int(values.size)
+        if count < 2:
+            raise ValueError("Encoded token stream is empty or too short.")
+        temporary.replace(output)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     return count, sha256_file(output)
 
 
@@ -174,6 +186,13 @@ def train_from_scratch(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
+    run_contract = {
+        "planned_steps": steps,
+        "batch_size": batch_size,
+        "sequence_length": sequence_length,
+        "learning_rate": learning_rate,
+        "seed": seed,
+    }
     model = AddSubLanguageModel(config).to(device)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
     start_step = 0
@@ -190,6 +209,7 @@ def train_from_scratch(
             "test_sha256": test_sha,
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
+            "run_contract": run_contract,
         }
         mismatches = [
             key for key, value in expected.items() if checkpoint.get(key) != value
@@ -273,6 +293,7 @@ def train_from_scratch(
             "test_sha256": test_sha,
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
+            "run_contract": run_contract,
             "valid_loss": valid_loss,
             "torch_rng": torch.get_rng_state(),
             "python_rng": rng.getstate(),
