@@ -27,7 +27,13 @@ SYSTEM_TEXT = (
 )
 
 
-def _load_conversations(path: Path) -> list[dict[str, Any]]:
+def _load_conversations(
+    path: Path, approved_sources: set[str] | None = None
+) -> list[dict[str, Any]]:
+    approved_sources = approved_sources or {
+        "OpenAssistant/oasst1",
+        "databricks/databricks-dolly-15k",
+    }
     records = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -39,10 +45,7 @@ def _load_conversations(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number}: invalid JSONL") from exc
             if not isinstance(record, dict):
                 raise ValueError(f"{path}:{line_number}: record must be a JSON object.")
-            if record.get("source") not in {
-                "OpenAssistant/oasst1",
-                "databricks/databricks-dolly-15k",
-            }:
+            if record.get("source") not in approved_sources:
                 raise ValueError(f"{path}:{line_number}: unapproved SFT source.")
             if record.get("human_authored") is not True or record.get("synthetic") is not False:
                 raise ValueError(f"{path}:{line_number}: synthetic/unverified SFT record rejected.")
@@ -215,8 +218,21 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("SFT training and validation files must be different.")
     data_manifest_sha = sha256_file(manifest_path)
 
-    train_records = _load_conversations(train_path)
-    valid_records = _load_conversations(valid_path)
+    approved_source_values = data_manifest.get("approved_instruction_sources")
+    if approved_source_values is None:
+        approved_source_values = [
+            "OpenAssistant/oasst1",
+            "databricks/databricks-dolly-15k",
+        ]
+    if (
+        not isinstance(approved_source_values, list)
+        or not approved_source_values
+        or any(not isinstance(value, str) or not value.strip() for value in approved_source_values)
+    ):
+        raise ValueError("Manifest must list approved_instruction_sources for SFT.")
+    approved_sources = set(approved_source_values)
+    train_records = _load_conversations(train_path, approved_sources)
+    valid_records = _load_conversations(valid_path, approved_sources)
     train_data = ConversationDataset(train_records, tokenizer, config.max_context)
     valid_data = ConversationDataset(valid_records, tokenizer, config.max_context)
     pad_id = int(tokenizer.token_to_id("<pad>"))
