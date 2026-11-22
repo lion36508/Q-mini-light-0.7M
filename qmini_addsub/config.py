@@ -32,6 +32,12 @@ class AddSubConfig:
             "kernel_size": self.kernel_size,
             "max_context": self.max_context,
         }
+        invalid_types = [
+            name for name, value in positive.items()
+            if isinstance(value, bool) or not isinstance(value, int)
+        ]
+        if invalid_types:
+            raise TypeError(f"Configuration dimensions must be integers: {invalid_types}")
         invalid = [name for name, value in positive.items() if value < 1]
         if invalid:
             raise ValueError(f"Configuration values must be positive: {invalid}")
