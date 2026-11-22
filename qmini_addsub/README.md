@@ -54,7 +54,7 @@ Import only the local files (no network download is performed):
 
 For supervised assistant training, add both `--sft-train` and `--sft-validation`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes the messages, rejects exact train/validation duplicates and records the declared source in `approved_instruction_sources`. Do not mark generated or unknown-provenance text as human-authored.
 
-Then build the tokenizer and streams. SFT data is optional at this stage; the tokenizer is trained on pretraining train text alone when no SFT train file exists:
+Then build the tokenizer and streams. SFT data is optional at this stage; the tokenizer is trained on pretraining train text alone when no SFT train file exists. The tokenizer script also writes `model_config.json` with the exact vocabulary size it actually produced; pass this file to training so tokenizer and model cannot silently disagree:
 
     python scripts/train_qmini_addsub_tokenizer.py
     python scripts/encode_qmini_addsub_streams.py
@@ -90,7 +90,7 @@ Train the tokenizer using only training splits, then encode pretraining text:
 
 Start a new model from random initialization:
 
-    python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --output runs/qmini_addsub_v1_pretrain --device cpu --steps 2000
+    python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --config artifacts/qmini_addsub_v1/model_config.json --output runs/qmini_addsub_v1_pretrain --device cpu --steps 2000
 
 After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
 
