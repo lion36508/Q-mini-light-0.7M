@@ -9,15 +9,10 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals
 from .model import AddSubLanguageModel
-from .sft import SFT_FORMAT
+from .sft import SFT_FORMAT, SYSTEM_TEXT
 from .train import CHECKPOINT_FORMAT
 
 
-SYSTEM_TEXT = (
-    "You are Q-Mini, a helpful English personal assistant. Answer the user's "
-    "actual question clearly and accurately. Be concise when appropriate. "
-    "Do not invent facts; say when you are uncertain."
-)
 RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v3", "qmini-addsub-sft-v2"}
 
 
