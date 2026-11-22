@@ -339,6 +339,10 @@ class AddSubLanguageModel(nn.Module):
             attention_mask = attention_mask.to(dtype=torch.bool)
             if not bool(attention_mask.any()):
                 raise ValueError("attention_mask must include at least one valid token.")
+            if attention_mask.shape[1] > 1 and bool(
+                (attention_mask[:, 1:] & ~attention_mask[:, :-1]).any()
+            ):
+                raise ValueError("attention_mask must be right-padded without internal gaps.")
         if input_ids.numel() and (
             int(input_ids.min()) < 0 or int(input_ids.max()) >= self.config.vocab_size
         ):
