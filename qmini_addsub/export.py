@@ -202,10 +202,11 @@ def load_addsub_export(
         raise FileNotFoundError(source)
 
     with zipfile.ZipFile(source, "r") as archive:
-        names = set(archive.namelist())
-        if names != ARCHIVE_MEMBERS:
+        member_names = archive.namelist()
+        names = set(member_names)
+        if len(member_names) != len(names) or names != ARCHIVE_MEMBERS:
             raise ValueError(
-                "Add/Sub export contains missing or unexpected archive members."
+                "Add/Sub export contains duplicate, missing or unexpected archive members."
             )
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         weights_payload = archive.read("weights.bin")
@@ -217,8 +218,20 @@ def load_addsub_export(
         raise ValueError("Export weight quantization format is not supported.")
     if manifest.get("weight_symbols") != list(WEIGHT_SYMBOLS):
         raise ValueError("Export weight alphabet does not match the five-symbol codebook.")
+    expected_code_map = [
+        {"code": index, "value": value}
+        for index, value in enumerate(WEIGHT_SYMBOLS)
+    ]
+    if manifest.get("weight_code_map") != expected_code_map:
+        raise ValueError("Export code map does not match the five-symbol codebook.")
+    if manifest.get("zero_symbol_code") != 2:
+        raise ValueError("Export zero symbol must use code 2.")
     if manifest.get("bits_per_weight") != BITS_PER_WEIGHT:
         raise ValueError("Export bit width is incompatible with the five-symbol codebook.")
+    if manifest.get("packing") != (
+        "little-endian continuous 3-bit codes; 0..4 valid, 5..7 reserved"
+    ):
+        raise ValueError("Export bit packing declaration is not supported.")
     if _sha256_bytes(weights_payload) != manifest.get("weights_sha256"):
         raise ValueError("Packed weight payload failed SHA-256 verification.")
     if _sha256_bytes(auxiliary_payload) != manifest.get("auxiliary_sha256"):
