@@ -16,10 +16,10 @@ def _normalize_pretraining_file(source: Path, destination: Path) -> dict[str, An
     if not source.is_file():
         raise FileNotFoundError(source)
     raw_text = source.read_text(encoding="utf-8")
-    raw_text = unicodedata.normalize("NFC", raw_text.replace("\\r\\n", "\\n").replace("\\r", "\\n"))
+    raw_text = unicodedata.normalize("NFC", raw_text.replace("\r\n", "\n").replace("\r", "\n"))
     cleaned_lines = []
     rejected: dict[str, int] = {}
-    for line in raw_text.split("\\n"):
+    for line in raw_text.split("\n"):
         if not line.strip():
             cleaned_lines.append("")
             continue
@@ -29,11 +29,11 @@ def _normalize_pretraining_file(source: Path, destination: Path) -> dict[str, An
         else:
             rejected[reason] = rejected.get(reason, 0) + 1
             cleaned_lines.append("")
-    text = "\\n".join(cleaned_lines).strip()
+    text = "\n".join(cleaned_lines).strip()
     if not text:
         raise ValueError(f"No usable English text remains after cleaning: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(text + "\\n", encoding="utf-8", newline="\\n")
+    destination.write_text(text + "\n", encoding="utf-8", newline="\n")
     return {
         "path": destination.name,
         "bytes": destination.stat().st_size,
