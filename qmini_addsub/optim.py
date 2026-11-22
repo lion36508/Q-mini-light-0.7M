@@ -77,16 +77,22 @@ def assert_finite_training_state(
     step: int,
 ) -> None:
     """Fail immediately if an optimizer update corrupts model or moment state."""
+    checks: list[torch.Tensor] = []
+    labels: list[str] = []
     for name, parameter in model.named_parameters():
-        if not bool(torch.isfinite(parameter).all()):
-            raise FloatingPointError(
-                f"Non-finite model parameter {name!r} after optimizer step {step}."
-            )
+        checks.append(torch.isfinite(parameter).all())
+        labels.append(f"model parameter {name!r}")
         state = optimizer.state.get(parameter, {})
         for state_name, value in state.items():
             if isinstance(value, torch.Tensor) and value.is_floating_point():
-                if not bool(torch.isfinite(value).all()):
-                    raise FloatingPointError(
-                        f"Non-finite optimizer state {state_name!r} for {name!r} "
-                        f"after optimizer step {step}."
-                    )
+                checks.append(torch.isfinite(value).all())
+                labels.append(f"optimizer state {state_name!r} for {name!r}")
+
+    if not checks:
+        raise ValueError("Cannot validate a model without parameters.")
+    finite = torch.stack(checks)
+    if not bool(finite.all()):
+        first_bad = int((~finite).nonzero(as_tuple=False)[0, 0].item())
+        raise FloatingPointError(
+            f"Non-finite {labels[first_bad]} after optimizer step {step}."
+        )
