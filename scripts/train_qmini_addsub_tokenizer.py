@@ -96,7 +96,7 @@ def main() -> None:
                         for message in record.get("messages", []):
                             content = str(message.get("content") or "").strip()
                             if content:
-                                target.write(escape_special_token_literals(content) + "\\n")
+                                target.write(escape_special_token_literals(content) + "\n")
 
         tokenizer = Tokenizer(BPE(unk_token="<unk>"))
         tokenizer.pre_tokenizer = ByteLevelPreTokenizer(add_prefix_space=False)
@@ -124,7 +124,7 @@ def main() -> None:
         model_config = AddSubConfig(vocab_size=actual_vocab_size)
         tokenizer.save(str(tokenizer_temporary))
         config_temporary.write_text(
-            json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\\n",
+            json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         tokenizer_temporary.replace(output)
