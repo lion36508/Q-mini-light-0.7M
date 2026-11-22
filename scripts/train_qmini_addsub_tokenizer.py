@@ -11,6 +11,7 @@ from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
 from tokenizers.trainers import BpeTrainer
 
 from qmini_addsub.config import AddSubConfig
+from qmini_addsub.train import sha256_file
 
 
 SPECIAL_TOKENS = [
@@ -40,6 +41,20 @@ def main() -> None:
     manifest = data_dir / "dataset_manifest.json"
     if not pretrain.is_file() or not manifest.is_file():
         raise FileNotFoundError("Prepare or import the selected English pretraining split first.")
+    data_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    if (
+        data_manifest.get("format") != "qmini-addsub-data-v1"
+        or data_manifest.get("language") != "English"
+        or data_manifest.get("synthetic_training_records_included") != 0
+    ):
+        raise ValueError("Tokenizer requires a verified English, non-synthetic Add/Sub dataset manifest.")
+    expected_pretrain = data_manifest.get("pretraining", {}).get("splits", {}).get("train", {})
+    if expected_pretrain.get("sha256") != sha256_file(pretrain):
+        raise ValueError("Pretraining train text does not match the dataset manifest.")
+    if sft.is_file():
+        expected_sft = data_manifest.get("instruction_splits", {}).get("train", {})
+        if expected_sft.get("path") != sft.name or expected_sft.get("sha256") != sha256_file(sft):
+            raise ValueError("SFT train file does not match the dataset manifest.")
     if not 264 <= args.vocab_size <= 65536:
         raise ValueError("Byte-level BPE vocab_size must be between 264 and 65536 (uint16 token streams).")
 
