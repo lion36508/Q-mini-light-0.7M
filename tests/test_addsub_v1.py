@@ -52,6 +52,8 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "START_PRETRAIN = False" in all_code
     assert "START_SFT = False" in all_code
     assert "EXPORT_PACKED_WEIGHTS = False" in all_code
+    assert "RUN_HELDOUT_EVAL = False" in all_code
+    assert "qmini_addsub.evaluate" in all_code
     assert "ACCEPT_SOURCE_LICENSES = False" in all_code
     assert "DEVICE = 'cpu'" in all_code
     assert "qmini_addsub.export" in all_code
