@@ -713,3 +713,9 @@ def test_user_dataset_importer_requires_explicit_english_confirmation(tmp_path):
             pretrain_license="test-license",
             confirm_rights_and_human_data=True,
         )
+
+
+
+def test_byte_bpe_config_rejects_vocab_larger_than_uint16_stream_capacity():
+    with pytest.raises(ValueError, match="between 264 and 65536"):
+        AddSubConfig(vocab_size=65537).validate()
