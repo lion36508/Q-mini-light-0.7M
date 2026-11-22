@@ -448,12 +448,12 @@ def test_optimizer_uses_no_decay_for_vectors_and_cosine_warmup_is_bounded():
         torch.nn.LayerNorm(8),
     )
     optimizer = build_adamw(model, learning_rate=1e-3, weight_decay=0.1)
-    decay_params = optimizer.param_groups[0]["params"]
-    no_decay_params = optimizer.param_groups[1]["params"]
-    assert model[0].weight in decay_params
-    assert model[0].bias in no_decay_params
-    assert model[1].weight in no_decay_params
-    assert model[1].bias in no_decay_params
+    decay_ids = {id(parameter) for parameter in optimizer.param_groups[0]["params"]}
+    no_decay_ids = {id(parameter) for parameter in optimizer.param_groups[1]["params"]}
+    assert id(model[0].weight) in decay_ids
+    assert id(model[0].bias) in no_decay_ids
+    assert id(model[1].weight) in no_decay_ids
+    assert id(model[1].bias) in no_decay_ids
     assert optimizer.param_groups[1]["weight_decay"] == 0.0
 
     assert cosine_warmup_lr(1, 100, 1e-3) < 1e-3
