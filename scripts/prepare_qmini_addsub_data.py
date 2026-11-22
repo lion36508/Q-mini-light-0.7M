@@ -315,8 +315,11 @@ def write_sft_splits(output: Path, conversations: list[dict]) -> dict:
 
     details = {}
     for split, records in splits.items():
-        if split == "train" and not records:
-            raise ValueError("The instruction training split is empty.")
+        if not records:
+            raise ValueError(
+                f"The instruction {split} split is empty; select more conversation data "
+                "or review the stable group split before training."
+            )
         count, digest = write_jsonl(output / f"sft_{split}.jsonl", records)
         details[split] = {
             "path": f"sft_{split}.jsonl",
