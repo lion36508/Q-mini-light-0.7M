@@ -15,11 +15,12 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
+from .optim import build_adamw, cosine_warmup_lr
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v1"
+SFT_FORMAT = "qmini-addsub-sft-v2"
 SYSTEM_TEXT = (
     "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
     "clearly and accurately. Do not invent facts; state uncertainty when needed."
@@ -232,7 +233,7 @@ def fine_tune_from_addsub_checkpoint(
     torch.manual_seed(seed)
     model = AddSubLanguageModel(config).to(device)
     model.load_state_dict(base["model"], strict=True)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
+    optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
     hashes = {
         "base_sha256": sha256_file(base_path),
         "tokenizer_sha256": sha256_file(tokenizer_path),
@@ -280,6 +281,9 @@ def fine_tune_from_addsub_checkpoint(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
+        current_lr = cosine_warmup_lr(step, steps, learning_rate)
+        for group in optimizer.param_groups:
+            group["lr"] = current_lr
         try:
             inputs, labels = next(iterator)
         except StopIteration:
@@ -305,7 +309,12 @@ def fine_tune_from_addsub_checkpoint(
 
         if step % 50 == 0 or step == steps:
             valid_loss = evaluate()
-            row = {"step": step, "train_loss": last_loss, "valid_response_loss": valid_loss}
+            row = {
+                "step": step,
+                "learning_rate": current_lr,
+                "train_loss": last_loss,
+                "valid_response_loss": valid_loss,
+            }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
             print(json.dumps(row, sort_keys=True))
@@ -329,6 +338,7 @@ def fine_tune_from_addsub_checkpoint(
         "train_records": len(train_data),
         "validation_records": len(valid_data),
         "parameter_count": model.parameter_count(),
+        "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_loss": last_loss,
         "output_dir": str(output),
         "note": "SFT is training-only; full additive inference export remains a separate gate.",

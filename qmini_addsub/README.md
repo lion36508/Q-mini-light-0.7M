@@ -2,9 +2,9 @@
 
 An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
 
-**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 experts, 248-wide expert MLP, and 512-token context. The instantiated training model has **699,176 parameters**. This size is a design baseline, not evidence of better model quality.
+**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 160-wide expert bottleneck, and 512-token context. The instantiated training model has **688,756 parameters**. This size is a design baseline, not evidence of better model quality.
 
-Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), and selected-expert dispatch. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
+Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
 
 ## Implementation status
 
@@ -15,7 +15,7 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 - Integer additive projection reference primitive; its AST regression test prohibits multiply, divide and matmul operators.
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
-- Random-init pretraining and Add/Sub-only checkpoint resume.
+- Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
 - Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint.
 
 **Not yet complete**

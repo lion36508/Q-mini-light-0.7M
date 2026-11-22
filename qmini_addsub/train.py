@@ -14,9 +14,10 @@ from tokenizers import Tokenizer
 
 from .config import AddSubConfig
 from .model import AddSubLanguageModel
+from .optim import build_adamw, cosine_warmup_lr
 
 
-CHECKPOINT_FORMAT = "qmini-addsub-training-v1"
+CHECKPOINT_FORMAT = "qmini-addsub-training-v2"
 
 
 def sha256_file(path: str | Path) -> str:
@@ -174,7 +175,7 @@ def train_from_scratch(
         torch.cuda.manual_seed_all(seed)
 
     model = AddSubLanguageModel(config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
+    optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
     start_step = 0
     rng = random.Random(seed)
 
@@ -276,6 +277,9 @@ def train_from_scratch(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
+        current_lr = cosine_warmup_lr(step, steps, learning_rate)
+        for group in optimizer.param_groups:
+            group["lr"] = current_lr
         inputs, targets = _sample_batch(
             train_tokens, batch_size, sequence_length, rng, device
         )
@@ -297,6 +301,7 @@ def train_from_scratch(
             valid_loss = evaluate(valid_tokens)
             record = {
                 "step": step,
+                "learning_rate": current_lr,
                 "train_token_loss": last_loss,
                 "valid_token_loss": valid_loss,
                 "train_sha256": train_sha,
@@ -317,6 +322,7 @@ def train_from_scratch(
         "format": CHECKPOINT_FORMAT,
         "steps": steps,
         "parameter_count": model.parameter_count(),
+        "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_token_loss": last_loss,
         "final_validation_token_loss": evaluate(valid_tokens),
         "heldout_test_token_loss": heldout_test_loss,

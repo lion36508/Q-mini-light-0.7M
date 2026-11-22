@@ -122,20 +122,26 @@ class GatedDiagonalStateSpace(nn.Module):
         return self.output_projection(gated)
 
 
+class SwiGLUExpert(nn.Module):
+    """Parameter-efficient gated expert MLP used by the sparse router."""
+
+    def __init__(self, config: AddSubConfig) -> None:
+        super().__init__()
+        self.up_gate = AddSubLinear(config.d_model, config.d_hidden * 2)
+        self.down = AddSubLinear(config.d_hidden, config.d_model)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        content, gate = self.up_gate(inputs).chunk(2, dim=-1)
+        return self.down(F.silu(content) * gate)
+
+
 class SparseTop1Experts(nn.Module):
     def __init__(self, config: AddSubConfig) -> None:
         super().__init__()
         self.n_experts = config.n_experts
         self.router = AddSubLinear(config.d_model, config.n_experts)
         self.experts = nn.ModuleList(
-            [
-                nn.Sequential(
-                    AddSubLinear(config.d_model, config.d_hidden),
-                    nn.SiLU(),
-                    AddSubLinear(config.d_hidden, config.d_model),
-                )
-                for _ in range(config.n_experts)
-            ]
+            [SwiGLUExpert(config) for _ in range(config.n_experts)]
         )
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -179,12 +185,21 @@ class AddSubBlock(nn.Module):
         self.expert_norm = RMSNorm(config.d_model)
         self.experts = SparseTop1Experts(config)
         self.dropout = nn.Dropout(config.dropout)
+        # Bounded, learnable branch strengths stabilize the residual stream
+        # without hard clipping activations or zeroing gradients at a threshold.
+        self.conv_residual_logit = nn.Parameter(torch.zeros(()))
+        self.state_residual_logit = nn.Parameter(torch.zeros(()))
+        self.expert_residual_logit = nn.Parameter(torch.zeros(()))
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        outputs = inputs + self.dropout(self.conv(self.conv_norm(inputs)))
-        outputs = outputs + self.dropout(self.state_space(self.state_norm(outputs)))
+        conv_update = self.dropout(self.conv(self.conv_norm(inputs)))
+        outputs = inputs + torch.sigmoid(self.conv_residual_logit) * conv_update
+
+        state_update = self.dropout(self.state_space(self.state_norm(outputs)))
+        outputs = outputs + torch.sigmoid(self.state_residual_logit) * state_update
+
         expert_output, auxiliary_loss = self.experts(self.expert_norm(outputs))
-        outputs = torch.clamp(outputs + self.dropout(expert_output), -12.0, 12.0)
+        outputs = outputs + torch.sigmoid(self.expert_residual_logit) * self.dropout(expert_output)
         return outputs, auxiliary_loss
 
 

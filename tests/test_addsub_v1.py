@@ -13,6 +13,7 @@ from qmini_addsub.data import (
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel, AddSubLinear
+from qmini_addsub.optim import build_adamw, cosine_warmup_lr
 from qmini_addsub.quantization import (
     codes_to_values,
     pack_3bit_codes,
@@ -422,7 +423,42 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 699176
+    assert model.parameter_count() == 688756
+
+
+def test_swglu_experts_and_bounded_residual_gates_are_active():
+    config = AddSubConfig()
+    model = AddSubLanguageModel(config)
+    block = model.blocks[0]
+    assert block.conv_residual_logit.item() == 0.0
+    assert block.state_residual_logit.item() == 0.0
+    assert block.expert_residual_logit.item() == 0.0
+    for expert in block.experts.experts:
+        assert expert.up_gate.out_features == config.d_hidden * 2
+        assert expert.down.in_features == config.d_hidden
+    inputs = torch.randint(0, config.vocab_size, (2, 32))
+    output = model(inputs)
+    assert torch.isfinite(output["logits"]).all()
+    assert torch.isfinite(output["aux_loss"])
+
+
+def test_optimizer_uses_no_decay_for_vectors_and_cosine_warmup_is_bounded():
+    model = torch.nn.Sequential(
+        torch.nn.Linear(8, 8),
+        torch.nn.LayerNorm(8),
+    )
+    optimizer = build_adamw(model, learning_rate=1e-3, weight_decay=0.1)
+    decay_params = optimizer.param_groups[0]["params"]
+    no_decay_params = optimizer.param_groups[1]["params"]
+    assert model[0].weight in decay_params
+    assert model[0].bias in no_decay_params
+    assert model[1].weight in no_decay_params
+    assert model[1].bias in no_decay_params
+    assert optimizer.param_groups[1]["weight_decay"] == 0.0
+
+    assert cosine_warmup_lr(1, 100, 1e-3) < 1e-3
+    assert cosine_warmup_lr(3, 100, 1e-3) == 1e-3
+    assert cosine_warmup_lr(100, 100, 1e-3) == 1e-4
 
 
 def test_default_model_initialization_is_live_and_five_symbol_aligned():
