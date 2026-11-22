@@ -10,21 +10,21 @@ This repository intentionally maintains only two model implementations: the pres
 | Line | Location | Status |
 |---|---|---|
 | Q-Mini Light legacy | `qmini/` | Existing 705,742-parameter research baseline; preserve its code, Q2-v2 artifacts and checkpoints |
-| Q-Mini Add/Sub v1 | `qmini_addsub/` | Independent training/data prototype; full multiply-free inference runtime remains incomplete |
+| Q-Mini Add/Sub v1 | `qmini_addsub/` | Independent training/SFT, cached reference chat and verified packed weight archive; full integer-only inference runtime remains incomplete |
 
 Do not mix the two model lines. The Add/Sub loader must never read legacy Q2-v2 checkpoints, and the legacy package must remain unchanged by Add/Sub development.
 
 ## Q-Mini Add/Sub v1 — independent from-scratch model
 
-The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline. The Add/Sub Colab entry point checks out the open draft branch `cleanup/verified-data-and-addsub-v1` until that PR is reviewed and merged.
+The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline, plus a verified offline packed-weight export/loader. The Add/Sub Colab entry point checks out the open draft branch `cleanup/verified-data-and-addsub-v1` until that PR is reviewed and merged.
 
-The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path; it is not yet the strict integer-only deployed runtime. The random-init pretraining model, local no-download dataset importer, optional pinned-source preparation and response-masked SFT stage are available. You can choose your own already-reviewed English dataset later; data import, tokenizer construction, pretraining and SFT are OFF by default in the Add/Sub Colab notebook. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
+The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path and an offline `.qma` archive exporter/loader for all five-symbol weights plus an integrity-checked float32 auxiliary sidecar; neither is the strict integer-only deployed runtime. The random-init pretraining model, local no-download dataset importer, optional pinned-source preparation and response-masked SFT stage are available. You can choose your own already-reviewed English dataset later; data import, tokenizer construction, pretraining and SFT are OFF by default in the Add/Sub Colab notebook. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
 
 Training uses three pinned, provenance-recorded English corpora: WikiText-103 raw for language pretraining, reviewed/non-synthetic English OASST1 conversations, and human-authored Databricks Dolly instruction pairs. TinyStories, Alpaca/UltraChat and model-generated teacher data are excluded. DailyDialog is excluded from the default mix because its license has non-commercial/share-alike terms. Review dataset licenses before use/redistribution.
 
 See qmini_addsub/README.md for build instructions and docs/ADD_SUB_V1_SPEC.md for the architecture contract.
 
-**Important limitation:** the current additive runtime implements the integer projection primitive only. Full model inference—convolution, recurrent-state, gates, experts, nonlinear LUTs, output projection and compiled device runtime—must pass its audit before Add/Sub v1 is described or used as a deployed multiply-free model. No Add/Sub weights have been trained yet.
+**Important limitation:** the offline packed archive is a verified model-weight container, not a deployed inference engine. The current integer runtime implements the additive projection and bounded residual-add primitives only. Full model inference—convolution, recurrent-state, gates, experts, nonlinear LUTs, normalization, output projection and compiled device runtime—must pass its audit before Add/Sub v1 is described or used as a deployed multiply-free model. No Add/Sub weights have been trained yet.
 
 ## Current Colab entry points
 
