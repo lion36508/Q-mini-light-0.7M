@@ -36,8 +36,8 @@ def main() -> None:
     pretrain = data_dir / "pretrain_train.txt"
     sft = data_dir / "sft_train.jsonl"
     manifest = data_dir / "dataset_manifest.json"
-    if not pretrain.is_file() or not sft.is_file() or not manifest.is_file():
-        raise FileNotFoundError("Run scripts/prepare_qmini_addsub_data.py first.")
+    if not pretrain.is_file() or not manifest.is_file():
+        raise FileNotFoundError("Prepare or import the selected English pretraining split first.")
     if args.vocab_size < 264:
         raise ValueError("Byte-level BPE vocab_size must be at least 264 (256 bytes + 8 special tokens).")
 
@@ -49,13 +49,14 @@ def main() -> None:
             for line in source:
                 if line.strip():
                     target.write(line)
-        with sft.open("r", encoding="utf-8") as source:
-            for line in source:
-                record = json.loads(line)
-                for message in record.get("messages", []):
-                    text = str(message.get("content") or "").strip()
-                    if text:
-                        target.write(text + "\n")
+        if sft.is_file():
+            with sft.open("r", encoding="utf-8") as source:
+                for line in source:
+                    record = json.loads(line)
+                    for message in record.get("messages", []):
+                        text = str(message.get("content") or "").strip()
+                        if text:
+                            target.write(text + "\\n")
 
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = ByteLevelPreTokenizer(add_prefix_space=False)
