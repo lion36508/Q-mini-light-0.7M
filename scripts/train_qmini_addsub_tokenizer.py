@@ -10,6 +10,8 @@ from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
 from tokenizers.trainers import BpeTrainer
 
+from qmini_addsub.config import AddSubConfig
+
 
 SPECIAL_TOKENS = [
     "<unk>",
@@ -38,8 +40,8 @@ def main() -> None:
     manifest = data_dir / "dataset_manifest.json"
     if not pretrain.is_file() or not manifest.is_file():
         raise FileNotFoundError("Prepare or import the selected English pretraining split first.")
-    if args.vocab_size < 264:
-        raise ValueError("Byte-level BPE vocab_size must be at least 264 (256 bytes + 8 special tokens).")
+    if not 264 <= args.vocab_size <= 65536:
+        raise ValueError("Byte-level BPE vocab_size must be between 264 and 65536 (uint16 token streams).")
 
     # Only the training split is used. Validation/test text is never read here.
     trainer_corpus = Path(args.output).with_suffix(".training-text.tmp")
@@ -56,7 +58,7 @@ def main() -> None:
                     for message in record.get("messages", []):
                         text = str(message.get("content") or "").strip()
                         if text:
-                            target.write(text + "\\n")
+                            target.write(text + "\n")
 
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = ByteLevelPreTokenizer(add_prefix_space=False)
@@ -78,13 +80,27 @@ def main() -> None:
     for token in SPECIAL_TOKENS:
         if tokenizer.token_to_id(token) is None:
             raise RuntimeError(f"Tokenizer is missing required token: {token}")
-    if tokenizer.get_vocab_size() > args.vocab_size:
-        raise RuntimeError("Tokenizer exceeded the requested vocabulary size.")
+    actual_vocab_size = tokenizer.get_vocab_size()
+    if not 264 <= actual_vocab_size <= args.vocab_size:
+        raise RuntimeError(
+            f"Tokenizer vocabulary {actual_vocab_size} is outside the valid range "
+            f"[264, {args.vocab_size}]."
+        )
+    model_config = AddSubConfig(vocab_size=actual_vocab_size)
+    config_path = output.with_name("model_config.json")
+    config_path.write_text(
+        json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\\n",
+        encoding="utf-8",
+    )
+    trained_on = ["pretrain_train.txt"]
+    if sft.is_file():
+        trained_on.append("sft_train.jsonl")
     print(json.dumps({
         "tokenizer": str(output),
-        "vocab_size": tokenizer.get_vocab_size(),
+        "model_config": str(config_path),
+        "vocab_size": actual_vocab_size,
         "special_tokens": {token: tokenizer.token_to_id(token) for token in SPECIAL_TOKENS},
-        "trained_on": ["pretrain_train.txt", "sft_train.jsonl"],
+        "trained_on": trained_on,
         "validation_test_used": False,
     }, indent=2))
 
