@@ -338,6 +338,7 @@ def main() -> None:
     parser.add_argument("--train-bin", required=True)
     parser.add_argument("--valid-bin", required=True)
     parser.add_argument("--tokenizer", required=True)
+    parser.add_argument("--config", default=None, help="Optional model_config.json written beside the trained tokenizer.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -349,11 +350,18 @@ def main() -> None:
     parser.add_argument("--resume", default=None)
     parser.add_argument("--seed", type=int, default=20261119)
     args = parser.parse_args()
+    config = None
+    if args.config is not None:
+        config_path = Path(args.config)
+        if not config_path.is_file():
+            raise FileNotFoundError(config_path)
+        config = AddSubConfig.from_dict(json.loads(config_path.read_text(encoding="utf-8")))
     result = train_from_scratch(
         train_bin=args.train_bin,
         valid_bin=args.valid_bin,
         tokenizer_path=args.tokenizer,
         output_dir=args.output,
+        config=config,
         steps=args.steps,
         batch_size=args.batch_size,
         sequence_length=args.sequence_length,
