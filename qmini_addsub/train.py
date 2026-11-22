@@ -236,13 +236,36 @@ def train_from_scratch(
 
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "metrics.jsonl"
-    if resume is None and (
-        metrics_path.exists() or any(output.glob("checkpoint-step-*.pt"))
-    ):
+    existing_checkpoints = list(output.glob("checkpoint-step-*.pt"))
+    if resume is None and (metrics_path.exists() or existing_checkpoints):
         raise FileExistsError(
             "Pretraining output already contains a run. Use a fresh output folder or "
             "resume from a compatible checkpoint; old metrics will not be mixed."
         )
+    if resume is not None:
+        newer_checkpoints = []
+        for checkpoint_file in existing_checkpoints:
+            try:
+                checkpoint_step = int(checkpoint_file.stem.rsplit("-", 1)[-1])
+            except ValueError as exc:
+                raise ValueError(f"Malformed checkpoint filename: {checkpoint_file.name}") from exc
+            if checkpoint_step > start_step:
+                newer_checkpoints.append(checkpoint_file.name)
+        if newer_checkpoints:
+            raise ValueError(
+                "Pretraining output contains checkpoints newer than the requested resume "
+                "point: " + ", ".join(newer_checkpoints)
+            )
+        if metrics_path.exists():
+            rows = [
+                json.loads(line)
+                for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if any(int(row.get("step", -1)) > start_step for row in rows):
+                raise ValueError(
+                    "Pretraining metrics contain steps newer than the resume checkpoint."
+                )
 
     def evaluate(tokens: np.ndarray) -> float:
         """Evaluate on fixed evenly spaced windows without advancing train RNG."""
