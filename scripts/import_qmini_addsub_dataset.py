@@ -314,7 +314,7 @@ def import_user_dataset(
         staged_manifest = staging / "dataset_manifest.json"
         temporary_manifest = staging / "dataset_manifest.json.tmp"
         temporary_manifest.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         temporary_manifest.replace(staged_manifest)
