@@ -12,27 +12,36 @@ from qmini_addsub.data import normalize_training_text, sha256_file
 
 
 def _normalize_pretraining_file(source: Path, destination: Path) -> dict[str, Any]:
-    """Copy user-selected UTF-8 text without downloading or inventing records."""
+    """Normalize user-selected UTF-8 English text and reject sensitive/low-quality lines."""
     if not source.is_file():
         raise FileNotFoundError(source)
-    text = source.read_text(encoding="utf-8")
-    text = unicodedata.normalize("NFC", text.replace("\r\n", "\n").replace("\r", "\n"))
-    text = "".join(
-        char for char in text
-        if char in "\n\t" or unicodedata.category(char) != "Cc"
-    )
-    text = "\n".join(line.rstrip() for line in text.split("\n")).strip()
+    raw_text = source.read_text(encoding="utf-8")
+    raw_text = unicodedata.normalize("NFC", raw_text.replace("\\r\\n", "\\n").replace("\\r", "\\n"))
+    cleaned_lines = []
+    rejected: dict[str, int] = {}
+    for line in raw_text.split("\\n"):
+        if not line.strip():
+            cleaned_lines.append("")
+            continue
+        cleaned, reason = normalize_training_text(line, min_chars=1, max_chars=32768)
+        if reason == "accepted":
+            cleaned_lines.append(cleaned)
+        else:
+            rejected[reason] = rejected.get(reason, 0) + 1
+            cleaned_lines.append("")
+    text = "\\n".join(cleaned_lines).strip()
     if not text:
-        raise ValueError(f"Pretraining split is empty: {source}")
+        raise ValueError(f"No usable English text remains after cleaning: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(text + "\n", encoding="utf-8", newline="\n")
+    destination.write_text(text + "\\n", encoding="utf-8", newline="\\n")
     return {
         "path": destination.name,
         "bytes": destination.stat().st_size,
         "sha256": sha256_file(destination),
         "source_file": source.name,
+        "source_sha256": sha256_file(source),
+        "rejected_line_counts": dict(sorted(rejected.items())),
     }
-
 
 def _curate_sft_file(
     source_path: Path,
