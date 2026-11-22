@@ -15,7 +15,7 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .model import AddSubLanguageModel
 from .data import escape_special_token_literals
-from .optim import build_adamw, cosine_warmup_lr
+from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
 
 
 CHECKPOINT_FORMAT = "qmini-addsub-training-v3"
@@ -358,8 +358,11 @@ def train_from_scratch(
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite training loss at step {step}.")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), 1.0, error_if_nonfinite=True
+        )
         optimizer.step()
+        assert_finite_training_state(model, optimizer, step)
         last_loss = float(token_loss.detach())
 
         if step % validate_every == 0 or step == steps:
