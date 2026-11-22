@@ -80,11 +80,10 @@ def saturating_add(left: np.ndarray, right: np.ndarray) -> np.ndarray:
         raise TypeError("Residual operands must be integer arrays.")
     if a.shape != b.shape:
         raise ValueError("Residual operands must have identical shapes.")
-    int64_max = np.iinfo(np.int64).max
     if (
-        (a.dtype.kind == "u" and a.size and int(a.max()) > int64_max)
-        or (b.dtype.kind == "u" and b.size and int(b.max()) > int64_max)
+        np.any(a < -127) or np.any(a > 127)
+        or np.any(b < -127) or np.any(b > 127)
     ):
-        raise ValueError("Residual operands exceed the supported int64 accumulator range.")
+        raise ValueError("Residual activation codes must be in [-127, 127].")
     total = np.add(a.astype(np.int64), b.astype(np.int64))
     return np.clip(total, -127, 127).astype(np.int8)
