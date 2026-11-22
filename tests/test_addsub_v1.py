@@ -21,7 +21,7 @@ from qmini_addsub.quantization import (
     unpack_3bit_codes,
     quantize_weight_ste,
 )
-from qmini_addsub.runtime import additive_projection
+from qmini_addsub.runtime import additive_projection, saturating_add
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -72,6 +72,13 @@ def test_five_symbol_quantizer_preserves_exact_zero_and_three_bit_round_trip():
     packed = pack_3bit_codes(codes)
     restored = unpack_3bit_codes(packed, codes.shape)
     assert np.array_equal(restored, codes)
+
+    tampered_padding = bytearray(packed)
+    tampered_padding[-1] |= 0b10000000
+    with pytest.raises(ValueError, match="padding bits"):
+        unpack_3bit_codes(tampered_padding, codes.shape)
+    with pytest.raises(ValueError, match="dimensions"):
+        unpack_3bit_codes(packed, (True, 6))
 
 
 def test_training_ste_quantizer_matches_exact_five_symbol_export_codebook():
@@ -814,3 +821,28 @@ def test_prompt_builder_rejects_a_user_message_that_would_be_fully_trimmed():
             max_context=8,
             system_text="a very long system prompt with many words",
         )
+
+
+
+def test_saturating_integer_add_rejects_float_inputs_and_clamps():
+    left = np.asarray([-120, -5, 0, 120], dtype=np.int16)
+    right = np.asarray([-20, 2, 5, 20], dtype=np.int16)
+    assert saturating_add(left, right).tolist() == [-127, -3, 5, 127]
+    with pytest.raises(TypeError, match="integer arrays"):
+        saturating_add(np.asarray([1.5]), np.asarray([2], dtype=np.int8))
+    with pytest.raises(ValueError, match="identical shapes"):
+        saturating_add(np.asarray([1], dtype=np.int8), np.asarray([[1]], dtype=np.int8))
+
+
+def test_additive_projection_exhausts_all_single_activation_weight_pairs():
+    activations = np.arange(-127, 128, dtype=np.int16).reshape(-1, 1)
+    codes = np.arange(5, dtype=np.uint8).reshape(5, 1)
+    result = additive_projection(activations, codes)
+    expected = np.empty((255, 5), dtype=np.int64)
+    for row, value in enumerate(range(-127, 128)):
+        expected[row, 0] = -(value + value + value)
+        expected[row, 1] = -value
+        expected[row, 2] = 0
+        expected[row, 3] = value
+        expected[row, 4] = value + value + value
+    assert np.array_equal(result, expected)
