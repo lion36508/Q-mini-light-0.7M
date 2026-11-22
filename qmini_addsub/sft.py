@@ -20,7 +20,7 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v3"
+SFT_FORMAT = "qmini-addsub-sft-v4"
 SYSTEM_TEXT = (
     "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
     "clearly and accurately. Do not invent facts; state uncertainty when needed."
@@ -167,10 +167,12 @@ def fine_tune_from_addsub_checkpoint(
     tokenizer_path: str | Path,
     train_jsonl: str | Path,
     valid_jsonl: str | Path,
+    test_jsonl: str | Path,
     output_dir: str | Path,
     steps: int = 800,
     batch_size: int = 4,
     learning_rate: float = 5e-5,
+    save_every: int = 100,
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
@@ -181,10 +183,14 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("batch_size must be a positive integer.")
     if learning_rate <= 0:
         raise ValueError("learning_rate must be positive.")
+    if isinstance(save_every, bool) or save_every < 1:
+        raise ValueError("save_every must be a positive integer.")
     device = torch.device(device_name)
     base_path, tokenizer_path = Path(base_checkpoint), Path(tokenizer_path)
-    train_path, valid_path, output = Path(train_jsonl), Path(valid_jsonl), Path(output_dir)
-    for path in (base_path, tokenizer_path, train_path, valid_path):
+    train_path, valid_path, test_path, output = (
+        Path(train_jsonl), Path(valid_jsonl), Path(test_jsonl), Path(output_dir)
+    )
+    for path in (base_path, tokenizer_path, train_path, valid_path, test_path):
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -210,12 +216,16 @@ def fine_tune_from_addsub_checkpoint(
     tokenizer_meta = data_manifest.get("tokenizer", {})
     if tokenizer_meta.get("sha256") != sha256_file(tokenizer_path):
         raise ValueError("SFT tokenizer does not match the curated dataset/tokenizer manifest.")
-    for split_name, source_path in (("train", train_path), ("validation", valid_path)):
+    for split_name, source_path in (
+        ("train", train_path),
+        ("validation", valid_path),
+        ("test", test_path),
+    ):
         entry = sft_manifest.get(split_name, {})
         if entry.get("path") != source_path.name or entry.get("sha256") != sha256_file(source_path):
             raise ValueError(f"{split_name} SFT file does not match the curated data manifest.")
-    if train_path.resolve() == valid_path.resolve():
-        raise ValueError("SFT training and validation files must be different.")
+    if len({train_path.resolve(), valid_path.resolve(), test_path.resolve()}) != 3:
+        raise ValueError("SFT train, validation and test files must be distinct.")
     data_manifest_sha = sha256_file(manifest_path)
 
     approved_source_values = data_manifest.get("approved_instruction_sources")
@@ -233,8 +243,10 @@ def fine_tune_from_addsub_checkpoint(
     approved_sources = set(approved_source_values)
     train_records = _load_conversations(train_path, approved_sources)
     valid_records = _load_conversations(valid_path, approved_sources)
+    test_records = _load_conversations(test_path, approved_sources)
     train_data = ConversationDataset(train_records, tokenizer, config.max_context)
     valid_data = ConversationDataset(valid_records, tokenizer, config.max_context)
+    test_data = ConversationDataset(test_records, tokenizer, config.max_context)
     pad_id = int(tokenizer.token_to_id("<pad>"))
     torch.manual_seed(seed)
     if device.type == "cuda":
@@ -249,6 +261,7 @@ def fine_tune_from_addsub_checkpoint(
         "tokenizer_sha256": sha256_file(tokenizer_path),
         "train_sha256": sha256_file(train_path),
         "valid_sha256": sha256_file(valid_path),
+        "test_sha256": sha256_file(test_path),
         "data_manifest_sha256": data_manifest_sha,
     }
     start_step = 0
@@ -272,6 +285,10 @@ def fine_tune_from_addsub_checkpoint(
                 raise ValueError("CUDA RNG state is missing or device count changed.")
             torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
+        if checkpoint.get("planned_steps") != steps:
+            raise ValueError(
+                "SFT resume must use the original planned step count so the LR schedule remains unchanged."
+            )
     if steps <= start_step:
         raise ValueError("steps must be greater than the checkpoint's completed step.")
 
@@ -285,19 +302,21 @@ def fine_tune_from_addsub_checkpoint(
             "from a compatible checkpoint; old metrics will not be mixed."
         )
 
-    def evaluate() -> float:
+    def evaluate(dataset: ConversationDataset, split_name: str) -> float:
+        was_training = model.training
         model.eval()
         loss_sum = 0.0
         target_count = 0
         with torch.inference_mode():
-            for offset in range(0, len(valid_data), batch_size):
+            for offset in range(0, len(dataset), batch_size):
                 batch = [
-                    valid_data[index]
-                    for index in range(offset, min(offset + batch_size, len(valid_data)))
+                    dataset[index]
+                    for index in range(offset, min(offset + batch_size, len(dataset)))
                 ]
                 inputs, labels = _collate(batch, pad_id)
-                result = model(inputs.to(device))
+                inputs = inputs.to(device)
                 labels = labels.to(device)
+                result = model(inputs, attention_mask=inputs.ne(pad_id))
                 count = int((labels != -100).sum())
                 if count:
                     loss_sum += float(F.cross_entropy(
@@ -307,9 +326,9 @@ def fine_tune_from_addsub_checkpoint(
                         reduction="sum",
                     ))
                     target_count += count
-        model.train()
+        model.train(was_training)
         if not target_count:
-            raise ValueError("Validation set contains no assistant response targets.")
+            raise ValueError(f"{split_name} set contains no assistant response targets.")
         return loss_sum / target_count
 
     model.train()
@@ -324,7 +343,7 @@ def fine_tune_from_addsub_checkpoint(
         inputs, labels = _collate(batch, pad_id)
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad(set_to_none=True)
-        result = model(inputs)
+        result = model(inputs, attention_mask=inputs.ne(pad_id))
         target_count = int((labels != -100).sum())
         if target_count == 0:
             continue
@@ -341,7 +360,7 @@ def fine_tune_from_addsub_checkpoint(
         last_loss = float(loss.detach())
 
         if step % 50 == 0 or step == steps:
-            valid_loss = evaluate()
+            valid_loss = evaluate(valid_data, "validation")
             row = {
                 "step": step,
                 "learning_rate": current_lr,
@@ -351,10 +370,11 @@ def fine_tune_from_addsub_checkpoint(
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
             print(json.dumps(row, sort_keys=True))
-        if step % 100 == 0 or step == steps:
+        if step % save_every == 0 or step == steps:
             payload = {
                 "format": SFT_FORMAT,
                 "step": step,
+                "planned_steps": steps,
                 "config": config.to_dict(),
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
@@ -375,10 +395,13 @@ def fine_tune_from_addsub_checkpoint(
         "steps": steps,
         "train_records": len(train_data),
         "validation_records": len(valid_data),
+        "test_records": len(test_data),
         "parameter_count": model.parameter_count(),
         "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_loss": last_loss,
-        "final_validation_response_loss": evaluate(),
+        "final_validation_response_loss": evaluate(valid_data, "validation"),
+        "heldout_test_response_loss": evaluate(test_data, "test"),
+        "heldout_test_sha256": hashes["test_sha256"],
         "output_dir": str(output),
         "note": "SFT is training-only; full additive inference export remains a separate gate.",
     }
@@ -390,10 +413,12 @@ def main() -> None:
     parser.add_argument("--tokenizer", required=True)
     parser.add_argument("--train-jsonl", required=True)
     parser.add_argument("--valid-jsonl", required=True)
+    parser.add_argument("--test-jsonl", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=800)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
     args = parser.parse_args()
@@ -402,10 +427,12 @@ def main() -> None:
         tokenizer_path=args.tokenizer,
         train_jsonl=args.train_jsonl,
         valid_jsonl=args.valid_jsonl,
+        test_jsonl=args.test_jsonl,
         output_dir=args.output,
         steps=args.steps,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        save_every=args.save_every,
         device_name=args.device,
         resume=args.resume,
     )
