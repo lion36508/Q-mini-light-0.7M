@@ -41,6 +41,10 @@ class AddSubConfig:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+            raise ValueError("seed must be a non-negative integer.")
+        if self.n_experts < 2:
+            raise ValueError("n_experts must be at least 2 for sparse Top-1 routing.")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
