@@ -373,7 +373,7 @@ def train_from_scratch(
             "valid_loss": valid_loss,
             "torch_rng": torch.get_rng_state(),
             "python_rng": rng.getstate(),
-            "cuda_rng_states": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "cuda_rng_states": torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
         }
         temporary = path.with_suffix(".tmp")
         torch.save(payload, temporary)
