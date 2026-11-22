@@ -117,13 +117,32 @@ class ConversationDataset(Dataset):
                 if len(encoded) > 2:
                     encoded.pop(1)
             if required_length(encoded) > max_context:
-                last_role, last_token, last_ids = encoded[-1]
-                if last_role != "assistant":
+                if len(encoded) < 3 or encoded[-1][0] != "assistant":
                     continue
-                room = max_context - (required_length(encoded[:-1]) + 2)
-                if room < 1:
+                assistant_role, assistant_token, assistant_ids = encoded[-1]
+                user_role, user_token, user_ids = encoded[-2]
+                if user_role != "user":
                     continue
-                encoded[-1] = (last_role, last_token, last_ids[:room])
+
+                room_for_answer = max_context - (required_length(encoded[:-1]) + 2)
+                if room_for_answer < 1:
+                    continue
+                overflow = max(0, len(assistant_ids) - room_for_answer)
+                if overflow:
+                    # Keep the newest part of the user prompt, never cut the answer.
+                    available_user_tokens = len(user_ids) - overflow
+                    if available_user_tokens < 1:
+                        continue
+                    encoded[-2] = (
+                        user_role,
+                        user_token,
+                        user_ids[-available_user_tokens:],
+                    )
+
+                room_for_answer = max_context - (required_length(encoded[:-1]) + 2)
+                if len(assistant_ids) > room_for_answer:
+                    # The complete target cannot fit, even after trimming user context.
+                    continue
 
             token_ids = [special["<bos>"]]
             label_ids = [-100]
