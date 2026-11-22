@@ -96,3 +96,74 @@ def assert_finite_training_state(
         raise FloatingPointError(
             f"Non-finite {labels[first_bad]} after optimizer step {step}."
         )
+
+
+
+def reconcile_metrics_file(
+    path: str,
+    expected_identity: dict[str, object],
+    maximum_committed_step: int,
+    run_name: str,
+) -> int:
+    """Validate metrics provenance and discard rows beyond the resumed checkpoint.
+
+    Metric rows can be written more frequently than checkpoints. On recovery,
+    rows newer than the selected checkpoint describe updates that will be
+    repeated, so they are atomically truncated rather than mixed with the
+    resumed trajectory. Different data/tokenizer/schedule identities fail closed.
+    """
+    from pathlib import Path
+    import json
+
+    metrics_path = Path(path)
+    if maximum_committed_step < 0:
+        raise ValueError("maximum_committed_step must be non-negative.")
+    if not metrics_path.exists():
+        return 0
+
+    rows = []
+    try:
+        for line_number, line in enumerate(
+            metrics_path.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"{run_name} metrics row {line_number} must be a JSON object."
+                )
+            rows.append(row)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{run_name} metrics file is not valid JSONL.") from exc
+
+    kept = []
+    discarded = 0
+    for row in rows:
+        for key, expected_value in expected_identity.items():
+            if row.get(key) != expected_value:
+                raise ValueError(
+                    f"{run_name} metrics belong to a different dataset, tokenizer "
+                    f"or run contract ({key})."
+                )
+        try:
+            step = int(row["step"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{run_name} metrics contain an invalid step.") from exc
+        if step < 1:
+            raise ValueError(f"{run_name} metrics contain a non-positive step.")
+        if step > maximum_committed_step:
+            discarded += 1
+        else:
+            kept.append(row)
+
+    if discarded:
+        temporary = metrics_path.with_suffix(metrics_path.suffix + ".tmp")
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\\n") as handle:
+                for row in kept:
+                    handle.write(json.dumps(row, sort_keys=True) + "\\n")
+            temporary.replace(metrics_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return discarded
