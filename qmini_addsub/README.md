@@ -46,11 +46,11 @@ The model does not require the repository's optional pinned corpus. After review
 - `validation.txt`
 - `test.txt`
 
-The files must be distinct and should already be split by document/source group to avoid leakage. The importer records the user-declared source, license, file hashes and split paths; it cannot independently prove that a source is human-authored or that plain-text splits have no document-level overlap. The required confirmation flag is your attestation, not an automatic license or authorship verification.
+The files must be distinct and should already be split by document/source group to avoid leakage. The importer records the user-declared source, license, file hashes and split paths; it cannot independently prove that a source is human-authored or that plain-text splits have no document-level overlap. You must explicitly attest both that the data is English and that you reviewed the rights/non-synthetic provenance; these flags are declarations, not automatic language, license or authorship verification.
 
 Import only the local files (no network download is performed):
 
-    python scripts/import_qmini_addsub_dataset.py --pretrain-train /path/train.txt --pretrain-validation /path/validation.txt --pretrain-test /path/test.txt --pretrain-source "dataset name and revision" --pretrain-license "exact source license" --confirm-rights-and-human-data --output data/qmini_addsub_v1
+    python scripts/import_qmini_addsub_dataset.py --pretrain-train /path/train.txt --pretrain-validation /path/validation.txt --pretrain-test /path/test.txt --pretrain-source "dataset name and revision" --pretrain-license "exact source license" --confirm-rights-and-human-data --confirm-english-data --output data/qmini_addsub_v1
 
 For supervised assistant training, add both `--sft-train` and `--sft-validation`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes the messages, rejects exact train/validation duplicates and records the declared source in `approved_instruction_sources`. Do not mark generated or unknown-provenance text as human-authored.
 
