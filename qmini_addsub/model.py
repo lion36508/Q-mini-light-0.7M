@@ -362,10 +362,12 @@ class AddSubLanguageModel(nn.Module):
         device: torch.device | str | None = None,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """Create independent convolution and recurrent-state caches per block."""
-        if isinstance(batch_size, bool) or batch_size < 1:
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer.")
         parameter = self.token_embedding.weight
         target_device = parameter.device if device is None else torch.device(device)
+        if target_device != parameter.device:
+            raise ValueError("Move the model to the target device before initializing its cache.")
         dtype = parameter.dtype
         caches = []
         for block in self.blocks:
@@ -393,8 +395,10 @@ class AddSubLanguageModel(nn.Module):
         """
         if self.training:
             raise RuntimeError("Call model.eval() before using forward_step().")
-        if input_ids.ndim != 1:
-            raise ValueError("forward_step input_ids must have shape [batch].")
+        if input_ids.ndim != 1 or input_ids.shape[0] < 1:
+            raise ValueError("forward_step input_ids must have non-empty [batch] shape.")
+        if input_ids.dtype not in (torch.int32, torch.int64):
+            raise TypeError("forward_step input_ids must use torch.int32 or torch.int64.")
         if len(caches) != len(self.blocks):
             raise ValueError("One convolution/state cache pair is required per block.")
         if input_ids.numel() and (
