@@ -160,9 +160,9 @@ def reconcile_metrics_file(
     if discarded:
         temporary = metrics_path.with_suffix(metrics_path.suffix + ".tmp")
         try:
-            with temporary.open("w", encoding="utf-8", newline="\\n") as handle:
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
                 for row in kept:
-                    handle.write(json.dumps(row, sort_keys=True) + "\\n")
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
             temporary.replace(metrics_path)
         finally:
             temporary.unlink(missing_ok=True)
