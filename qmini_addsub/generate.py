@@ -10,7 +10,7 @@ from .config import AddSubConfig
 from .data import escape_special_token_literals
 from .model import AddSubLanguageModel
 from .sft import SFT_FORMAT, SYSTEM_TEXT
-from .train import CHECKPOINT_FORMAT
+from .train import CHECKPOINT_FORMAT, sha256_file
 
 
 RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v3", "qmini-addsub-sft-v2"}
@@ -198,6 +198,7 @@ def generate_reply(
 def load_addsub_model(
     checkpoint_path: str | Path,
     device_name: str = "cpu",
+    tokenizer_path: str | Path | None = None,
 ) -> AddSubLanguageModel:
     device = torch.device(device_name)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -209,6 +210,16 @@ def load_addsub_model(
         raise ValueError(
             "Only Q-Mini Add/Sub v1 pretraining or SFT checkpoints are accepted."
         )
+    if tokenizer_path is not None:
+        tokenizer_file = Path(tokenizer_path)
+        if not tokenizer_file.is_file():
+            raise FileNotFoundError(tokenizer_file)
+        expected_tokenizer_sha = checkpoint.get("tokenizer_sha256")
+        actual_tokenizer_sha = sha256_file(tokenizer_file)
+        if not expected_tokenizer_sha or actual_tokenizer_sha != expected_tokenizer_sha:
+            raise ValueError(
+                "Tokenizer fingerprint does not match the selected model checkpoint."
+            )
     config = AddSubConfig.from_dict(checkpoint["config"])
     model = AddSubLanguageModel(config).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
@@ -233,7 +244,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tokenizer = Tokenizer.from_file(str(args.tokenizer))
-    model = load_addsub_model(args.checkpoint, args.device)
+    model = load_addsub_model(args.checkpoint, args.device, tokenizer_path=args.tokenizer)
     if tokenizer.get_vocab_size() != model.config.vocab_size:
         raise ValueError(
             f"Tokenizer vocabulary {tokenizer.get_vocab_size()} does not match "
