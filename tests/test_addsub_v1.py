@@ -599,3 +599,95 @@ def test_additive_runtime_rejects_negative_weight_codes():
 def test_byte_bpe_config_requires_bytes_and_all_control_tokens():
     with pytest.raises(ValueError, match="256 byte symbols"):
         AddSubConfig(vocab_size=263).validate()
+
+
+
+def test_user_dataset_importer_accepts_selected_local_splits_without_download(tmp_path):
+    import json
+
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    pretrain_paths = {}
+    for split, content in (
+        ("train", "  English train text.  \\r\\n"),
+        ("validation", "English validation text.\\n"),
+        ("test", "English held-out test text.\\n"),
+    ):
+        path = tmp_path / f"{split}.txt"
+        path.write_text(content, encoding="utf-8", newline="")
+        pretrain_paths[split] = path
+
+    sft_train = tmp_path / "chosen_sft_train.jsonl"
+    sft_validation = tmp_path / "chosen_sft_valid.jsonl"
+    records = []
+    for split, path in (("train", sft_train), ("validation", sft_validation)):
+        record = {
+            "human_authored": True,
+            "synthetic": False,
+            "messages": [
+                {"role": "user", "content": f"What is {split}?"},
+                {"role": "assistant", "content": f"This is {split}."},
+            ],
+        }
+        path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+        records.append(path)
+
+    output = tmp_path / "imported"
+    manifest = import_user_dataset(
+        pretrain_train=pretrain_paths["train"],
+        pretrain_validation=pretrain_paths["validation"],
+        pretrain_test=pretrain_paths["test"],
+        output_dir=output,
+        pretrain_source="user-selected-English-corpus",
+        pretrain_license="user-reviewed-license",
+        confirm_rights_and_human_data=True,
+        sft_train=sft_train,
+        sft_validation=sft_validation,
+        sft_source="user-selected-assistant-corpus",
+        sft_license="user-reviewed-instruction-license",
+    )
+    assert manifest["synthetic_training_records_included"] == 0
+    assert manifest["pretraining"]["splits"]["train"]["sha256"]
+    assert manifest["approved_instruction_sources"] == ["user-selected-assistant-corpus"]
+    imported_record = json.loads((output / "sft_train.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert imported_record["source"] == "user-selected-assistant-corpus"
+    assert imported_record["human_authored"] is True
+    assert imported_record["synthetic"] is False
+
+
+def test_sft_loader_accepts_only_manifest_approved_custom_sources(tmp_path):
+    import json
+
+    path = tmp_path / "custom_sft.jsonl"
+    record = {
+        "source": "user-selected-corpus",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "Explain a test."},
+            {"role": "assistant", "content": "A test checks expected behaviour."},
+        ],
+    }
+    path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unapproved"):
+        _load_conversations(path)
+    assert len(_load_conversations(path, {"user-selected-corpus"})) == 1
+
+
+def test_user_dataset_importer_requires_explicit_rights_and_non_synthetic_confirmation(tmp_path):
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    paths = []
+    for name in ("train", "validation", "test"):
+        path = tmp_path / f"{name}.txt"
+        path.write_text("English text.\\n", encoding="utf-8")
+        paths.append(path)
+    with pytest.raises(ValueError, match="Explicit confirmation"):
+        import_user_dataset(
+            pretrain_train=paths[0],
+            pretrain_validation=paths[1],
+            pretrain_test=paths[2],
+            output_dir=tmp_path / "out",
+            pretrain_source="test-corpus",
+            pretrain_license="test-license",
+        )
