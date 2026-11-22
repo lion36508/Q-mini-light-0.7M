@@ -16,7 +16,7 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .model import AddSubLanguageModel
 from .data import escape_special_token_literals
-from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
+from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 
 
 CHECKPOINT_FORMAT = "qmini-addsub-training-v3"
@@ -293,32 +293,17 @@ def train_from_scratch(
                 "Pretraining output contains checkpoints newer than the requested resume "
                 "point: " + ", ".join(newer_checkpoints)
             )
-        if metrics_path.exists():
-            try:
-                rows = [
-                    json.loads(line)
-                    for line in metrics_path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
-            except json.JSONDecodeError as exc:
-                raise ValueError("Pretraining metrics file is not valid JSONL.") from exc
-            expected_metric_identity = {
-                "train_sha256": train_sha,
-                "valid_sha256": valid_sha,
-                "test_sha256": test_sha,
-                "tokenizer_sha256": tokenizer_sha,
-                "data_manifest_sha256": manifest_sha,
-                "run_contract": run_contract,
-            }
-            for row in rows:
-                if any(row.get(key) != value for key, value in expected_metric_identity.items()):
-                    raise ValueError(
-                        "Pretraining metrics belong to a different dataset, tokenizer or run contract."
-                    )
-                if int(row.get("step", -1)) > start_step:
-                    raise ValueError(
-                        "Pretraining metrics contain steps newer than the resume checkpoint."
-                    )
+        expected_metric_identity = {
+            "train_sha256": train_sha,
+            "valid_sha256": valid_sha,
+            "test_sha256": test_sha,
+            "tokenizer_sha256": tokenizer_sha,
+            "data_manifest_sha256": manifest_sha,
+            "run_contract": run_contract,
+        }
+        reconcile_metrics_file(
+            str(metrics_path), expected_metric_identity, start_step, "Pretraining"
+        )
 
     def evaluate(tokens: np.ndarray) -> float:
         """Evaluate on fixed evenly spaced windows without advancing train RNG."""
