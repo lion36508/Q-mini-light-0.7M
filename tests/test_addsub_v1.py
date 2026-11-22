@@ -1447,7 +1447,7 @@ def test_metrics_reconciliation_discards_only_uncommitted_future_rows(tmp_path):
         {"step": 150, **identity},
     ]
     metrics.write_text(
-        "".join(json.dumps(row) + "\\n" for row in rows),
+        "".join(json.dumps(row) + "\n" for row in rows),
         encoding="utf-8",
     )
 
@@ -1473,7 +1473,7 @@ def test_metrics_reconciliation_rejects_a_different_dataset_or_schedule(tmp_path
             "step": 50,
             "train_sha256": "a" * 64,
             "run_contract": {"planned_steps": 100, "seed": 1},
-        }) + "\\n",
+        }) + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="different dataset"):
