@@ -202,18 +202,27 @@ def train_from_scratch(
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
-        torch.set_rng_state(checkpoint["torch_rng"])
+        torch.set_rng_state(checkpoint["torch_rng"].cpu())
         if device.type == "cuda":
             saved_cuda_rng = checkpoint.get("cuda_rng_states")
             if not saved_cuda_rng or len(saved_cuda_rng) != torch.cuda.device_count():
                 raise ValueError(
                     "CUDA RNG state is missing or device count changed; exact resume is unsafe."
                 )
-            torch.cuda.set_rng_state_all(saved_cuda_rng)
+            torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
+    if steps <= start_step:
+        raise ValueError("steps must be greater than the checkpoint's completed step.")
 
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "metrics.jsonl"
+    if resume is None and (
+        metrics_path.exists() or any(output.glob("checkpoint-step-*.pt"))
+    ):
+        raise FileExistsError(
+            "Pretraining output already contains a run. Use a fresh output folder or "
+            "resume from a compatible checkpoint; old metrics will not be mixed."
+        )
 
     def evaluate(tokens: np.ndarray) -> float:
         """Evaluate on fixed evenly spaced windows without advancing train RNG."""
