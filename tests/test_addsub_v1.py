@@ -420,6 +420,27 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert sft_result["steps"] == 1
     assert (tmp_path / "sft" / "sft-checkpoint-step-000000001.pt").is_file()
 
+    sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
+    sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
+    assert sft_state["format"] == "qmini-addsub-sft-v3"
+    assert "torch_rng" in sft_state and "python_rng" in sft_state
+
+    resumed_sft = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        output_dir=tmp_path / "sft-resumed",
+        steps=2,
+        batch_size=1,
+        device_name="cpu",
+        seed=43,
+        resume=sft_checkpoint,
+    )
+    assert resumed_sft["steps"] == 2
+    assert resumed_sft["final_validation_response_loss"] > 0
+    assert (tmp_path / "sft-resumed" / "sft-checkpoint-step-000000002.pt").is_file()
+
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
