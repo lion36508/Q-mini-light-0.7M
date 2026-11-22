@@ -13,7 +13,7 @@ from qmini_addsub.data import (
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel, AddSubLinear
-from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
+from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
     pack_3bit_codes,
@@ -1429,3 +1429,61 @@ def test_additive_projection_rejects_bias_accumulator_overflow():
             weights,
             bias_accumulator=np.asarray([2**40], dtype=np.int64),
         )
+
+
+
+def test_metrics_reconciliation_discards_only_uncommitted_future_rows(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    identity = {
+        "train_sha256": "a" * 64,
+        "tokenizer_sha256": "b" * 64,
+        "run_contract": {"planned_steps": 200, "seed": 99},
+    }
+    rows = [
+        {"step": 50, **identity},
+        {"step": 100, **identity},
+        {"step": 150, **identity},
+    ]
+    metrics.write_text(
+        "".join(json.dumps(row) + "\\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    discarded = reconcile_metrics_file(
+        str(metrics), identity, maximum_committed_step=100, run_name="Pretraining"
+    )
+    remaining = [
+        json.loads(line)
+        for line in metrics.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert discarded == 1
+    assert [row["step"] for row in remaining] == [50, 100]
+    assert not metrics.with_suffix(".jsonl.tmp").exists()
+
+
+def test_metrics_reconciliation_rejects_a_different_dataset_or_schedule(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text(
+        json.dumps({
+            "step": 50,
+            "train_sha256": "a" * 64,
+            "run_contract": {"planned_steps": 100, "seed": 1},
+        }) + "\\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="different dataset"):
+        reconcile_metrics_file(
+            str(metrics),
+            {
+                "train_sha256": "c" * 64,
+                "run_contract": {"planned_steps": 100, "seed": 1},
+            },
+            maximum_committed_step=40,
+            run_name="SFT",
+        )
+    assert json.loads(metrics.read_text(encoding="utf-8").splitlines()[0])["step"] == 50
