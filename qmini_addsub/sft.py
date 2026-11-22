@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from tokenizers import Tokenizer
 
 from .config import AddSubConfig
@@ -20,7 +20,7 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v2"
+SFT_FORMAT = "qmini-addsub-sft-v3"
 SYSTEM_TEXT = (
     "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
     "clearly and accurately. Do not invent facts; state uncertainty when needed."
@@ -172,6 +172,12 @@ def fine_tune_from_addsub_checkpoint(
     device_name: str = "cpu",
     resume: str | Path | None = None,
 ) -> dict[str, Any]:
+    if isinstance(steps, bool) or steps < 1:
+        raise ValueError("steps must be a positive integer.")
+    if isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer.")
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive.")
     device = torch.device(device_name)
     base_path, tokenizer_path = Path(base_checkpoint), Path(tokenizer_path)
     train_path, valid_path, output = Path(train_jsonl), Path(valid_jsonl), Path(output_dir)
@@ -214,23 +220,11 @@ def fine_tune_from_addsub_checkpoint(
     train_data = ConversationDataset(train_records, tokenizer, config.max_context)
     valid_data = ConversationDataset(valid_records, tokenizer, config.max_context)
     pad_id = int(tokenizer.token_to_id("<pad>"))
-    generator = torch.Generator().manual_seed(seed)
-    train_loader = DataLoader(
-        train_data,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=False,
-        generator=generator,
-        collate_fn=lambda batch: _collate(batch, pad_id),
-    )
-    valid_loader = DataLoader(
-        valid_data,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=lambda batch: _collate(batch, pad_id),
-    )
-
     torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+    rng = random.Random(seed)
+
     model = AddSubLanguageModel(config).to(device)
     model.load_state_dict(base["model"], strict=True)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
@@ -251,17 +245,34 @@ def fine_tune_from_addsub_checkpoint(
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
+        if "torch_rng" not in checkpoint or "python_rng" not in checkpoint:
+            raise ValueError(
+                "This SFT checkpoint predates exact RNG resume; start a new v3 SFT run."
+            )
+        torch.set_rng_state(checkpoint["torch_rng"].cpu())
+        if device.type == "cuda":
+            saved_cuda_rng = checkpoint.get("cuda_rng_states")
+            if not saved_cuda_rng or len(saved_cuda_rng) != torch.cuda.device_count():
+                raise ValueError("CUDA RNG state is missing or device count changed.")
+            torch.cuda.set_rng_state_all(saved_cuda_rng)
+        rng.setstate(checkpoint["python_rng"])
+    if steps <= start_step:
+        raise ValueError("steps must be greater than the checkpoint's completed step.")
 
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "sft_metrics.jsonl"
-    iterator = iter(train_loader)
 
     def evaluate() -> float:
         model.eval()
         loss_sum = 0.0
         target_count = 0
         with torch.inference_mode():
-            for inputs, labels in valid_loader:
+            for offset in range(0, len(valid_data), batch_size):
+                batch = [
+                    valid_data[index]
+                    for index in range(offset, min(offset + batch_size, len(valid_data)))
+                ]
+                inputs, labels = _collate(batch, pad_id)
                 result = model(inputs.to(device))
                 labels = labels.to(device)
                 count = int((labels != -100).sum())
@@ -284,11 +295,10 @@ def fine_tune_from_addsub_checkpoint(
         current_lr = cosine_warmup_lr(step, steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
-        try:
-            inputs, labels = next(iterator)
-        except StopIteration:
-            iterator = iter(train_loader)
-            inputs, labels = next(iterator)
+        sample_count = min(batch_size, len(train_data))
+        sampled_indices = rng.sample(range(len(train_data)), k=sample_count)
+        batch = [train_data[index] for index in sampled_indices]
+        inputs, labels = _collate(batch, pad_id)
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad(set_to_none=True)
         result = model(inputs)
@@ -325,6 +335,11 @@ def fine_tune_from_addsub_checkpoint(
                 "config": config.to_dict(),
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "torch_rng": torch.get_rng_state(),
+                "python_rng": rng.getstate(),
+                "cuda_rng_states": (
+                    torch.cuda.get_rng_state_all() if device.type == "cuda" else None
+                ),
                 **hashes,
             }
             destination = output / f"sft-checkpoint-step-{step:09d}.pt"
@@ -340,6 +355,7 @@ def fine_tune_from_addsub_checkpoint(
         "parameter_count": model.parameter_count(),
         "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_loss": last_loss,
+        "final_validation_response_loss": evaluate(),
         "output_dir": str(output),
         "note": "SFT is training-only; full additive inference export remains a separate gate.",
     }
