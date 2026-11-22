@@ -252,6 +252,12 @@ def fine_tune_from_addsub_checkpoint(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
     rng = random.Random(seed)
+    run_contract = {
+        "planned_steps": steps,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "seed": seed,
+    }
 
     model = AddSubLanguageModel(config).to(device)
     model.load_state_dict(base["model"], strict=True)
@@ -267,7 +273,12 @@ def fine_tune_from_addsub_checkpoint(
     start_step = 0
     if resume is not None:
         checkpoint = torch.load(resume, map_location=device, weights_only=True)
-        expected = {"format": SFT_FORMAT, "config": config.to_dict(), **hashes}
+        expected = {
+            "format": SFT_FORMAT,
+            "config": config.to_dict(),
+            "run_contract": run_contract,
+            **hashes,
+        }
         mismatch = [key for key, value in expected.items() if checkpoint.get(key) != value]
         if mismatch:
             raise ValueError("Incompatible Add/Sub SFT resume: " + ", ".join(mismatch))
@@ -285,10 +296,6 @@ def fine_tune_from_addsub_checkpoint(
                 raise ValueError("CUDA RNG state is missing or device count changed.")
             torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
-        if checkpoint.get("planned_steps") != steps:
-            raise ValueError(
-                "SFT resume must use the original planned step count so the LR schedule remains unchanged."
-            )
     if steps <= start_step:
         raise ValueError("steps must be greater than the checkpoint's completed step.")
 
@@ -301,6 +308,17 @@ def fine_tune_from_addsub_checkpoint(
             "SFT output already contains a run. Use a fresh output folder or resume "
             "from a compatible checkpoint; old metrics will not be mixed."
         )
+    if resume is not None and metrics_path.exists():
+        existing_rows = [
+            json.loads(line)
+            for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if any(int(row.get("step", -1)) > start_step for row in existing_rows):
+            raise ValueError(
+                "SFT metrics contain steps newer than the resume checkpoint; "
+                "choose the latest compatible checkpoint."
+            )
 
     def evaluate(dataset: ConversationDataset, split_name: str) -> float:
         was_training = model.training
@@ -375,6 +393,7 @@ def fine_tune_from_addsub_checkpoint(
                 "format": SFT_FORMAT,
                 "step": step,
                 "planned_steps": steps,
+                "run_contract": run_contract,
                 "config": config.to_dict(),
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
