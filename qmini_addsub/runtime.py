@@ -68,7 +68,10 @@ def additive_projection(
         bias = np.asarray(bias_accumulator)
         if bias.shape != (weights.shape[0],) or bias.dtype.kind not in "iu":
             raise ValueError("Bias must be an integer vector matching out_features.")
-        accumulator = np.add(accumulator, bias, dtype=np.int64)
+        int32 = np.iinfo(np.int32)
+        if np.any(bias < int32.min) or np.any(bias > int32.max):
+            raise ValueError("Bias accumulator values must fit in signed int32.")
+        accumulator = np.add(accumulator, bias.astype(np.int64), dtype=np.int64)
     return accumulator
 
 
