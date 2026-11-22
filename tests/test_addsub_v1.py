@@ -1316,3 +1316,60 @@ def test_tokenizer_builder_rejects_sft_manifest_with_missing_training_file(tmp_p
     )
     assert result.returncode != 0
     assert "SFT training split" in result.stderr
+
+
+
+def test_heldout_evaluation_lexical_metrics_are_deterministic_and_transparent():
+    from qmini_addsub.evaluate import lexical_scores
+
+    exact = lexical_scores("The quick brown fox.", "the quick brown fox")
+    assert exact["exact_match"] == 1.0
+    assert exact["token_precision"] == 1.0
+    assert exact["token_recall"] == 1.0
+    assert exact["token_f1"] == 1.0
+
+    partial = lexical_scores("alpha beta gamma", "alpha beta delta delta")
+    assert partial["exact_match"] == 0.0
+    assert partial["token_precision"] == 0.5
+    assert partial["token_recall"] == 2.0 / 3.0
+    assert 0.0 < partial["token_f1"] < 1.0
+
+    empty = lexical_scores("", "")
+    assert empty["exact_match"] == 1.0
+    assert empty["token_f1"] == 0.0
+
+
+def test_heldout_evaluation_refuses_validation_data_and_wrong_tokenizer_hash(tmp_path):
+    import json
+    from qmini_addsub.evaluate import evaluate_heldout_conversations
+
+    checkpoint = tmp_path / "checkpoint.pt"
+    tokenizer = tmp_path / "tokenizer.json"
+    validation = tmp_path / "sft_validation.jsonl"
+    manifest = tmp_path / "dataset_manifest.json"
+    checkpoint.write_bytes(b"placeholder")
+    tokenizer.write_text("{}", encoding="utf-8")
+    validation.write_text("{}", encoding="utf-8")
+    import hashlib
+
+    validation_sha = hashlib.sha256(validation.read_bytes()).hexdigest()
+    tokenizer_sha = hashlib.sha256(tokenizer.read_bytes()).hexdigest()
+    manifest.write_text(
+        json.dumps({
+            "format": "qmini-addsub-data-v1",
+            "instruction_splits": {
+                "test": {"path": "sft_test.jsonl", "sha256": "0" * 64},
+            },
+            "tokenizer": {"sha256": tokenizer_sha},
+            "approved_instruction_sources": ["approved-source"],
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="held-out SFT test split"):
+        evaluate_heldout_conversations(
+            checkpoint_path=checkpoint,
+            tokenizer_path=tokenizer,
+            test_jsonl=validation,
+            dataset_manifest_path=manifest,
+            output_dir=tmp_path / "eval",
+        )
