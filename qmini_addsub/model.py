@@ -291,14 +291,31 @@ class AddSubBlock(nn.Module):
 class AddSubLanguageModel(nn.Module):
     """Independent random-initialized Add/Sub language model for pretraining."""
 
-    def __init__(self, config: AddSubConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AddSubConfig | None = None,
+        seed: int | None = None,
+    ) -> None:
         super().__init__()
         self.config = config or AddSubConfig()
         self.config.validate()
+        model_seed = self.config.seed if seed is None else seed
+        if isinstance(model_seed, bool) or not isinstance(model_seed, int) or model_seed < 0:
+            raise ValueError("Model seed must be a non-negative integer.")
+        # Isolate parameter initialization so constructing a model does not
+        # consume or reset the caller's training/dropout RNG stream.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(model_seed)
+            self._initialize_parameters()
+
+    def _initialize_parameters(self) -> None:
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
         initialize_five_symbol_weight_(self.token_embedding.weight)
         self.blocks = nn.ModuleList(
-            [AddSubBlock(self.config, dilation=2 ** index) for index in range(self.config.n_layers)]
+            [
+                AddSubBlock(self.config, dilation=2 ** index)
+                for index in range(self.config.n_layers)
+            ]
         )
         self.final_norm = RMSNorm(self.config.d_model)
         self.final_bias = nn.Parameter(torch.zeros(self.config.vocab_size))
