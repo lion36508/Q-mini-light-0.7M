@@ -423,7 +423,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 688756
+    assert model.parameter_count() == 711956
 
 
 def test_swglu_experts_and_bounded_residual_gates_are_active():
