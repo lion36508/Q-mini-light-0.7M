@@ -46,10 +46,15 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
         ast.parse(source, filename=f"{notebook_path}:cell-{index}")
     all_code = "\n".join(code)
     assert "QMini-Light-AddSub-v1" in all_code
+    assert "PREPARE_PINNED_CORPUS = False" in all_code
+    assert "IMPORT_USER_DATA = False" in all_code
+    assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
     assert "START_PRETRAIN = False" in all_code
     assert "START_SFT = False" in all_code
     assert "ACCEPT_SOURCE_LICENSES = False" in all_code
     assert "DEVICE = 'cpu'" in all_code
+    assert "--sft-test" in all_code
+    assert "--test-jsonl" in all_code
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
