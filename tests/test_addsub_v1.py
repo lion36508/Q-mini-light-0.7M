@@ -44,7 +44,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     ]
     for index, source in enumerate(code):
         ast.parse(source, filename=f"{notebook_path}:cell-{index}")
-    all_code = "\\n".join(code)
+    all_code = "\n".join(code)
     assert "QMini-Light-AddSub-v1" in all_code
     assert "START_PRETRAIN = False" in all_code
     assert "START_SFT = False" in all_code
@@ -609,9 +609,9 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
 
     pretrain_paths = {}
     for split, content in (
-        ("train", "  English train text.  \\r\\n"),
-        ("validation", "English validation text.\\n"),
-        ("test", "English held-out test text.\\n"),
+        ("train", "  English train text.  \r\n"),
+        ("validation", "English validation text.\n"),
+        ("test", "English held-out test text.\n"),
     ):
         path = tmp_path / f"{split}.txt"
         path.write_text(content, encoding="utf-8", newline="")
@@ -629,7 +629,7 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
                 {"role": "assistant", "content": f"This is {split}."},
             ],
         }
-        path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
         records.append(path)
 
     output = tmp_path / "imported"
@@ -668,7 +668,7 @@ def test_sft_loader_accepts_only_manifest_approved_custom_sources(tmp_path):
             {"role": "assistant", "content": "A test checks expected behaviour."},
         ],
     }
-    path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unapproved"):
         _load_conversations(path)
     assert len(_load_conversations(path, {"user-selected-corpus"})) == 1
@@ -680,7 +680,7 @@ def test_user_dataset_importer_requires_explicit_rights_and_non_synthetic_confir
     paths = []
     for name in ("train", "validation", "test"):
         path = tmp_path / f"{name}.txt"
-        path.write_text("English text.\\n", encoding="utf-8")
+        path.write_text("English text.\n", encoding="utf-8")
         paths.append(path)
     with pytest.raises(ValueError, match="Explicit confirmation"):
         import_user_dataset(
