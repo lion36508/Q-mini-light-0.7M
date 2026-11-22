@@ -165,11 +165,11 @@ def evaluate_heldout_conversations(
     try:
         results_path = staging / "heldout_responses.jsonl"
         summary_path = staging / "heldout_summary.json"
-        with results_path.open("w", encoding="utf-8", newline="\\n") as handle:
+        with results_path.open("w", encoding="utf-8", newline="\n") as handle:
             for row in rows:
-                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\\n")
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         summary_path.write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         staging.replace(output)
