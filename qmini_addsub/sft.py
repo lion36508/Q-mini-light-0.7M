@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 from pathlib import Path
 from typing import Any
@@ -196,14 +197,20 @@ def fine_tune_from_addsub_checkpoint(
     device_name: str = "cpu",
     resume: str | Path | None = None,
 ) -> dict[str, Any]:
-    if isinstance(steps, bool) or steps < 1:
-        raise ValueError("steps must be a positive integer.")
-    if isinstance(batch_size, bool) or batch_size < 1:
-        raise ValueError("batch_size must be a positive integer.")
-    if learning_rate <= 0:
-        raise ValueError("learning_rate must be positive.")
-    if isinstance(save_every, bool) or save_every < 1:
-        raise ValueError("save_every must be a positive integer.")
+    for name, value in (
+        ("steps", steps),
+        ("batch_size", batch_size),
+        ("save_every", save_every),
+        ("seed", seed),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer.")
+    if steps < 1 or batch_size < 1 or save_every < 1:
+        raise ValueError("steps, batch_size and save_every must be positive.")
+    if seed < 0:
+        raise ValueError("seed must be non-negative.")
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive.")
     device = torch.device(device_name)
     base_path, tokenizer_path = Path(base_checkpoint), Path(tokenizer_path)
     train_path, valid_path, test_path, output = (
