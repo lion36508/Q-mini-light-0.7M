@@ -73,10 +73,18 @@ def additive_projection(
 
 
 def saturating_add(left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    """Add two integer activation arrays and saturate to signed int8 range."""
-    a = np.asarray(left, dtype=np.int32)
-    b = np.asarray(right, dtype=np.int32)
+    """Add integer activation arrays and saturate to the signed int8 range."""
+    a = np.asarray(left)
+    b = np.asarray(right)
+    if a.dtype.kind not in "iu" or b.dtype.kind not in "iu":
+        raise TypeError("Residual operands must be integer arrays.")
     if a.shape != b.shape:
         raise ValueError("Residual operands must have identical shapes.")
-    total = np.add(a, b)
+    int64_max = np.iinfo(np.int64).max
+    if (
+        (a.dtype.kind == "u" and a.size and int(a.max()) > int64_max)
+        or (b.dtype.kind == "u" and b.size and int(b.max()) > int64_max)
+    ):
+        raise ValueError("Residual operands exceed the supported int64 accumulator range.")
+    total = np.add(a.astype(np.int64), b.astype(np.int64))
     return np.clip(total, -127, 127).astype(np.int8)
