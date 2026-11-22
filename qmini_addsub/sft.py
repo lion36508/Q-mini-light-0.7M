@@ -343,16 +343,32 @@ def fine_tune_from_addsub_checkpoint(
                 + ", ".join(newer_checkpoints)
             )
         if metrics_path.exists():
-            existing_rows = [
-                json.loads(line)
-                for line in metrics_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            if any(int(row.get("step", -1)) > start_step for row in existing_rows):
-                raise ValueError(
-                    "SFT metrics contain steps newer than the resume checkpoint; "
-                    "choose the latest compatible checkpoint."
-                )
+            try:
+                existing_rows = [
+                    json.loads(line)
+                    for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except json.JSONDecodeError as exc:
+                raise ValueError("SFT metrics file is not valid JSONL.") from exc
+            expected_metric_identity = {
+                "train_sha256": hashes["train_sha256"],
+                "valid_sha256": hashes["valid_sha256"],
+                "test_sha256": hashes["test_sha256"],
+                "tokenizer_sha256": hashes["tokenizer_sha256"],
+                "data_manifest_sha256": hashes["data_manifest_sha256"],
+                "run_contract": run_contract,
+            }
+            for row in existing_rows:
+                if any(row.get(key) != value for key, value in expected_metric_identity.items()):
+                    raise ValueError(
+                        "SFT metrics belong to a different dataset, tokenizer or run contract."
+                    )
+                if int(row.get("step", -1)) > start_step:
+                    raise ValueError(
+                        "SFT metrics contain steps newer than the resume checkpoint; "
+                        "choose the latest compatible checkpoint."
+                    )
 
     def evaluate(dataset: ConversationDataset, split_name: str) -> float:
         was_training = model.training
@@ -421,6 +437,12 @@ def fine_tune_from_addsub_checkpoint(
                 "learning_rate": current_lr,
                 "train_loss": last_loss,
                 "valid_response_loss": valid_loss,
+                "train_sha256": hashes["train_sha256"],
+                "valid_sha256": hashes["valid_sha256"],
+                "test_sha256": hashes["test_sha256"],
+                "tokenizer_sha256": hashes["tokenizer_sha256"],
+                "data_manifest_sha256": hashes["data_manifest_sha256"],
+                "run_contract": run_contract,
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
