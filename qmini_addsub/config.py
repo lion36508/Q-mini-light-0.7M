@@ -36,7 +36,7 @@ class AddSubConfig:
         if invalid:
             raise ValueError(f"Configuration values must be positive: {invalid}")
         if not 264 <= self.vocab_size <= 65536:
-            raise ValueError("vocab_size must be between 264 (256 byte symbols + 8 special tokens) and 65536 for uint16 token streams.")
+            raise ValueError("vocab_size must be between 264 and 65536 (256 byte symbols + 8 special tokens; uint16 token streams).")
         if self.d_model % 8:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
         if not 0.0 <= self.dropout < 1.0:
