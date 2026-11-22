@@ -84,7 +84,7 @@ def main() -> None:
                 for line in source:
                     text = line.strip()
                     if text:
-                        target.write(escape_special_token_literals(text) + "\\n")
+                        target.write(escape_special_token_literals(text) + "\n")
             if sft_train_entry is not None:
                 with sft.open("r", encoding="utf-8") as source:
                     for line_number, line in enumerate(source, 1):
