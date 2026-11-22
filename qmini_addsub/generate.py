@@ -18,7 +18,7 @@ RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v3", "qmini-addsub-sft-v
 
 def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
     tokens = (
-        "<bos>", "<eos>", "<pad>", "<|system|>", "<|user|>",
+        "<unk>", "<bos>", "<eos>", "<pad>", "<|system|>", "<|user|>",
         "<|assistant|>", "<|end|>",
     )
     values = {token: tokenizer.token_to_id(token) for token in tokens}
