@@ -43,6 +43,8 @@ class AddSubConfig:
             raise ValueError(f"Configuration values must be positive: {invalid}")
         if not 264 <= self.vocab_size <= 65536:
             raise ValueError("vocab_size must be between 264 and 65536 (256 byte symbols + 8 special tokens; uint16 token streams).")
+        if self.max_context < 8:
+            raise ValueError("max_context must be at least 8 tokens for the chat control format.")
         if self.d_model % 8:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
         if not 0.0 <= self.dropout < 1.0:
