@@ -108,6 +108,14 @@ Instruction fine-tuning may begin only from a checkpoint produced by this Add/Su
 
 Paths/step counts above are examples; only run after checking data preparation, available storage/compute and validation. No training begins during CI or by importing this package.
 
+## Held-out assistant evaluation
+
+After SFT, run greedy generation only on the manifest-declared held-out test split:
+
+    python -m qmini_addsub.evaluate --checkpoint runs/qmini_addsub_v1_sft/sft-checkpoint-step-000000500.pt --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --test-jsonl data/qmini_addsub_v1/sft_test.jsonl --dataset-manifest data/qmini_addsub_v1/dataset_manifest.json --output runs/qmini_addsub_v1_eval
+
+The evaluator verifies the test-file hash and tokenizer fingerprint, keeps prior turns as context, and writes every generated answer/reference pair plus exact-match and token-overlap metrics. These are lexical baselines only; they do not prove factuality, reasoning or semantic correctness. Never use the SFT training or validation split as the reported held-out result.
+
 ## Inference arithmetic contract
 
 The required weight codebook is {-1.5, -0.5, 0, +0.5, +1.5}. Five symbols require at least three bits; they cannot be encoded in fixed two-bit storage.
