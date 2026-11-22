@@ -978,3 +978,11 @@ def test_sft_drops_conversations_when_a_complete_answer_cannot_fit():
             tokenizer,
             max_context=32,
         )
+
+
+
+def test_generation_uses_exact_same_system_prompt_as_sft_training():
+    from qmini_addsub.generate import SYSTEM_TEXT as GENERATION_SYSTEM_TEXT
+    from qmini_addsub.sft import SYSTEM_TEXT as TRAINING_SYSTEM_TEXT
+
+    assert GENERATION_SYSTEM_TEXT == TRAINING_SYSTEM_TEXT
