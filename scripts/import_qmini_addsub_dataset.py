@@ -122,6 +122,7 @@ def import_user_dataset(
     confirm_english_data: bool = False,
     sft_train: str | Path | None = None,
     sft_validation: str | Path | None = None,
+    sft_test: str | Path | None = None,
     sft_source: str | None = None,
     sft_license: str | None = None,
     overwrite: bool = False,
@@ -141,13 +142,14 @@ def import_user_dataset(
         Path(pretrain_test).resolve(),
     }) != 3:
         raise ValueError("Pretraining train/validation/test inputs must be separate files.")
-    if (sft_train is None) != (sft_validation is None):
-        raise ValueError("Provide both SFT train and validation files, or neither.")
+    sft_paths = (sft_train, sft_validation, sft_test)
+    if any(value is None for value in sft_paths) and not all(value is None for value in sft_paths):
+        raise ValueError("Provide SFT train, validation and test files together, or none.")
     has_sft = sft_train is not None
     if has_sft and (not (sft_source or "").strip() or not (sft_license or "").strip()):
         raise ValueError("SFT source name and license are required when SFT files are supplied.")
-    if has_sft and Path(sft_train).resolve() == Path(sft_validation).resolve():
-        raise ValueError("SFT train and validation inputs must be separate files.")
+    if has_sft and len({Path(value).resolve() for value in sft_paths}) != 3:
+        raise ValueError("SFT train, validation and test inputs must be separate files.")
 
     output = Path(output_dir)
     manifest_path = output / "dataset_manifest.json"
@@ -177,27 +179,47 @@ def import_user_dataset(
         valid_meta = _curate_sft_file(
             Path(sft_validation), output / "sft_validation.jsonl", str(sft_source), str(sft_license)
         )
-        # Reject exact conversation leakage between user-provided train and validation sets.
-        train_records = {
-            hashlib.sha256(
-                json.dumps(record["messages"], ensure_ascii=False, sort_keys=True).encode("utf-8")
-            ).hexdigest()
-            for record in (
-                json.loads(line) for line in (output / "sft_train.jsonl").read_text(encoding="utf-8").splitlines()
-            )
+        test_meta = _curate_sft_file(
+            Path(sft_test), output / "sft_test.jsonl", str(sft_source), str(sft_license)
+        )
+
+        def conversation_fingerprints(path: Path) -> set[str]:
+            return {
+                hashlib.sha256(
+                    json.dumps(
+                        record["messages"], ensure_ascii=False, sort_keys=True
+                    ).encode("utf-8")
+                ).hexdigest()
+                for record in (
+                    json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                )
+            }
+
+        split_paths = {
+            "train": output / "sft_train.jsonl",
+            "validation": output / "sft_validation.jsonl",
+            "test": output / "sft_test.jsonl",
         }
-        valid_records = {
-            hashlib.sha256(
-                json.dumps(record["messages"], ensure_ascii=False, sort_keys=True).encode("utf-8")
-            ).hexdigest()
-            for record in (
-                json.loads(line) for line in (output / "sft_validation.jsonl").read_text(encoding="utf-8").splitlines()
-            )
+        fingerprints = {
+            name: conversation_fingerprints(path)
+            for name, path in split_paths.items()
         }
-        overlap = train_records & valid_records
-        if overlap:
-            raise ValueError(f"SFT train/validation leakage: {len(overlap)} duplicate conversations.")
-        instruction_splits = {"train": train_meta, "validation": valid_meta}
+        split_names = tuple(fingerprints)
+        for left_index, left_name in enumerate(split_names):
+            for right_name in split_names[left_index + 1:]:
+                overlap = fingerprints[left_name] & fingerprints[right_name]
+                if overlap:
+                    raise ValueError(
+                        f"SFT {left_name}/{right_name} leakage: "
+                        f"{len(overlap)} duplicate conversations."
+                    )
+        instruction_splits = {
+            "train": train_meta,
+            "validation": valid_meta,
+            "test": test_meta,
+        }
         instruction_sources = {
             str(sft_source): {
                 "license": str(sft_license),
@@ -254,6 +276,7 @@ def main() -> None:
     parser.add_argument("--pretrain-license", required=True)
     parser.add_argument("--sft-train")
     parser.add_argument("--sft-validation")
+    parser.add_argument("--sft-test")
     parser.add_argument("--sft-source")
     parser.add_argument("--sft-license")
     parser.add_argument("--output", default="data/qmini_addsub_v1")
@@ -281,6 +304,7 @@ def main() -> None:
         confirm_english_data=args.confirm_english_data,
         sft_train=args.sft_train,
         sft_validation=args.sft_validation,
+        sft_test=args.sft_test,
         sft_source=args.sft_source,
         sft_license=args.sft_license,
         overwrite=args.overwrite,
