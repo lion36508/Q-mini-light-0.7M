@@ -429,7 +429,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v3"
+    assert sft_state["format"] == "qmini-addsub-sft-v4"
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
     resumed_sft = fine_tune_from_addsub_checkpoint(
@@ -730,3 +730,87 @@ def test_user_dataset_importer_requires_explicit_english_confirmation(tmp_path):
 def test_byte_bpe_config_rejects_vocab_larger_than_uint16_stream_capacity():
     with pytest.raises(ValueError, match="between 264 and 65536"):
         AddSubConfig(vocab_size=65537).validate()
+
+
+
+def test_moe_auxiliary_loss_ignores_right_padding_tokens():
+    torch.manual_seed(211)
+    model = AddSubLanguageModel(
+        AddSubConfig(
+            vocab_size=300,
+            d_model=32,
+            d_hidden=48,
+            n_layers=2,
+            n_experts=2,
+            kernel_size=3,
+            max_context=32,
+            dropout=0.0,
+        )
+    ).eval()
+    inputs = torch.randint(0, model.config.vocab_size, (1, 17))
+    mask = torch.zeros_like(inputs, dtype=torch.bool)
+    mask[:, :9] = True
+    with torch.inference_mode():
+        padded = model(inputs, attention_mask=mask)
+        unpadded = model(inputs[:, :9])
+    torch.testing.assert_close(
+        padded["logits"][:, :9],
+        unpadded["logits"],
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    torch.testing.assert_close(
+        padded["aux_loss"],
+        unpadded["aux_loss"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_model_rejects_empty_inputs_and_invalid_attention_masks():
+    model = AddSubLanguageModel(
+        AddSubConfig(
+            vocab_size=300,
+            d_model=32,
+            d_hidden=48,
+            n_layers=1,
+            n_experts=2,
+            kernel_size=3,
+            max_context=32,
+            dropout=0.0,
+        )
+    )
+    with pytest.raises(ValueError, match="non-empty"):
+        model(torch.empty((1, 0), dtype=torch.long))
+    inputs = torch.ones((1, 4), dtype=torch.long)
+    with pytest.raises(ValueError, match="at least one valid token"):
+        model(inputs, attention_mask=torch.zeros_like(inputs, dtype=torch.bool))
+    with pytest.raises(ValueError, match="match input_ids"):
+        model(inputs, attention_mask=torch.ones((1, 3), dtype=torch.bool))
+
+
+def test_prompt_builder_rejects_a_user_message_that_would_be_fully_trimmed():
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+    from qmini_addsub.generate import build_chat_prompt
+
+    vocab = {
+        "<unk>": 0,
+        "<pad>": 1,
+        "<bos>": 2,
+        "<eos>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    with pytest.raises(ValueError, match="current user message is too long"):
+        build_chat_prompt(
+            tokenizer,
+            [{"role": "user", "content": "question"}],
+            max_context=8,
+            system_text="a very long system prompt with many words",
+        )
