@@ -35,8 +35,8 @@ class AddSubConfig:
         invalid = [name for name, value in positive.items() if value < 1]
         if invalid:
             raise ValueError(f"Configuration values must be positive: {invalid}")
-        if self.vocab_size < 263:
-            raise ValueError("Byte-level BPE needs room for 256 bytes and special tokens.")
+        if self.vocab_size < 264:
+            raise ValueError("Byte-level BPE needs room for 256 byte symbols and eight required special tokens.")
         if self.d_model % 8:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
         if not 0.0 <= self.dropout < 1.0:

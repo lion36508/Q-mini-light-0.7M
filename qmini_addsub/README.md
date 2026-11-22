@@ -2,7 +2,7 @@
 
 An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
 
-**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **711,956 parameters**. This size is a design baseline, not evidence of better model quality.
+**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **710,676 parameters**. This size is a design baseline, not evidence of better model quality.
 
 Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
 
@@ -17,9 +17,10 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
 - Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint.
+- Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
-- The complete network inference graph is not yet wired through additive lookup tables. The current runtime implements the projection primitive only.
+- The cached PyTorch generation path avoids reprocessing the full prompt, but it is a reference path and still uses floating-point operators. The complete integer-only inference graph is not yet wired through additive lookup tables; the current integer runtime implements the projection primitive only.
 - Full-model export/loader, calibrated activation/state/gating LUTs and compiled ARM64/Android runtime are not implemented.
 - No Add/Sub weights have been trained and no quality/phone performance results exist.
 
@@ -67,6 +68,8 @@ Train the tokenizer using only training splits, then encode pretraining text:
 Start a new model from random initialization:
 
     python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --output runs/qmini_addsub_v1_pretrain --device cuda --steps 2000
+
+After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
 
 Instruction fine-tuning may begin only from a checkpoint produced by this Add/Sub v1 pretraining code:
 

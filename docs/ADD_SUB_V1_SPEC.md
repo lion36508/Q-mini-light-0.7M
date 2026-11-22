@@ -47,7 +47,7 @@ The independent Add/Sub v1 training graph currently reuses three useful architec
 - gated diagonal state-space recurrence for running context;
 - sparse Top-1 expert routing with per-token selected expert computation.
 
-The default configuration is English-first with a 512-token vocabulary, width 96, four blocks, two experts and a 170-wide SwiGLU bottleneck per expert. Each block uses RMSNorm, causal depthwise convolution with dilations 1/2/4/8, an input-dependent gated diagonal state-space recurrence with an associative parallel scan, and sparse Top-1 expert dispatch. Three learnable sigmoid-bounded residual branch gates control the local convolution, state-space and expert updates. A hard activation clamp is intentionally avoided so gradients are not cut at a clipping boundary. The current instantiated training model has **711,956 parameters**. This is an experimental design, not a claim of lower validation loss until measured on held-out English data.
+The default configuration is English-first with a 512-token vocabulary, width 96, four blocks, two experts and a 170-wide SwiGLU bottleneck per expert. Each block uses RMSNorm, causal depthwise convolution with dilations 1/2/4/8, an input-dependent gated diagonal state-space recurrence with an associative parallel scan, and sparse Top-1 expert dispatch. Three learnable sigmoid-bounded residual branch gates control the local convolution, state-space and expert updates. A hard activation clamp is intentionally avoided so gradients are not cut at a clipping boundary. The current instantiated training model has **710,676 parameters**. This is an experimental design, not a claim of lower validation loss until measured on held-out English data.
 
 The training graph uses five-symbol STE/QAT matrix weights and sparse SwiGLU experts. Pretraining and SFT use AdamW with matrix-weight decay, no decay on vector/bias/norm parameters, linear LR warm-up and cosine decay to a 10% floor. Training/optimization is allowed to use floating-point arithmetic, multiplication and gradient operations. The deployment restriction applies to the inference graph only. Do not call the training model the Add/Sub-only runtime.
 
@@ -76,7 +76,7 @@ qmini_addsub/
     tests/
 ```
 
-Implemented files include config.py, model.py, quantization.py, runtime.py, data.py, train.py and sft.py. Data/tokenizer preparation scripts and tests live in scripts/ and tests/. The full inference export/loader, calibrated LUT set and native inference graph are still pending. The legacy package must not import from qmini_addsub, and the new package must not import model/runtime classes from qmini.
+Implemented files include config.py, model.py, quantization.py, runtime.py, data.py, train.py and sft.py. Data/tokenizer preparation scripts and tests live in scripts/ and tests/. A cached PyTorch streaming reference path now exists for parity-tested one-token generation. It is not the integer-only deployed runtime. The full inference export/loader, calibrated LUT set and native inference graph are still pending. The legacy package must not import from qmini_addsub, and the new package must not import model/runtime classes from qmini.
 
 ## 7. Artifact compatibility
 

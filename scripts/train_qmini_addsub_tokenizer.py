@@ -38,8 +38,8 @@ def main() -> None:
     manifest = data_dir / "dataset_manifest.json"
     if not pretrain.is_file() or not sft.is_file() or not manifest.is_file():
         raise FileNotFoundError("Run scripts/prepare_qmini_addsub_data.py first.")
-    if args.vocab_size < 263:
-        raise ValueError("Byte-level BPE vocab_size must be at least 263.")
+    if args.vocab_size < 264:
+        raise ValueError("Byte-level BPE vocab_size must be at least 264 (256 bytes + 8 special tokens).")
 
     # Only the training split is used. Validation/test text is never read here.
     trainer_corpus = Path(args.output).with_suffix(".training-text.tmp")

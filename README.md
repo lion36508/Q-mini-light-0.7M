@@ -18,7 +18,7 @@ Do not mix the two model lines. The Add/Sub loader must never read legacy Q2-v2 
 
 The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline.
 
-The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The random-init pretraining model, source-preparation scripts and response-masked SFT stage are available. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
+The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path; it is not yet the strict integer-only deployed runtime. The random-init pretraining model, source-preparation scripts and response-masked SFT stage are available. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
 
 Training uses three pinned, provenance-recorded English corpora: WikiText-103 raw for language pretraining, reviewed/non-synthetic English OASST1 conversations, and human-authored Databricks Dolly instruction pairs. TinyStories, Alpaca/UltraChat and model-generated teacher data are excluded. DailyDialog is excluded from the default mix because its license has non-commercial/share-alike terms. Review dataset licenses before use/redistribution.
 

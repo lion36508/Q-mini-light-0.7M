@@ -54,6 +54,31 @@ class CausalConvMixer(nn.Module):
         activated = F.silu(content) * torch.sigmoid(gate)
         return self.output_projection(activated)
 
+    def step(
+        self, inputs: torch.Tensor, history: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Process one token and retain only the causal convolution history."""
+        if inputs.ndim != 3 or inputs.shape[1] != 1:
+            raise ValueError("Convolution step expects [batch, 1, features].")
+        padding = self.dilation * (self.kernel_size - 1)
+        expected_history = (inputs.shape[0], padding, inputs.shape[2])
+        if tuple(history.shape) != expected_history:
+            raise ValueError(
+                f"Convolution cache shape must be {expected_history}, got {tuple(history.shape)}."
+            )
+        joined = torch.cat((history, inputs), dim=1)
+        mixed = F.conv1d(
+            joined.transpose(1, 2),
+            quantize_weight_ste(self.depthwise_weight),
+            self.depthwise_bias,
+            dilation=self.dilation,
+            groups=inputs.shape[-1],
+        ).transpose(1, 2)
+        content, gate = self.gate_projection(mixed).chunk(2, dim=-1)
+        activated = F.silu(content) * torch.sigmoid(gate)
+        updated_history = joined[:, -padding:, :] if padding else joined[:, :0, :]
+        return self.output_projection(activated), updated_history
+
 
 class RMSNorm(nn.Module):
     """Pre-normalization for stable residual streams."""
@@ -120,6 +145,23 @@ class GatedDiagonalStateSpace(nn.Module):
         states = self.parallel_scan(decay, (1.0 - decay) * drive)
         gated = states.to(dtype=inputs.dtype) * torch.sigmoid(self.gate_projection(inputs))
         return self.output_projection(gated)
+
+    def step(
+        self, inputs: torch.Tensor, previous_state: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Process one token using the diagonal recurrent state."""
+        if inputs.ndim != 3 or inputs.shape[1] != 1:
+            raise ValueError("State-space step expects [batch, 1, features].")
+        if tuple(previous_state.shape) != (inputs.shape[0], inputs.shape[2]):
+            raise ValueError("State-space cache must have shape [batch, features].")
+        drive = torch.tanh(self.drive_projection(inputs)).float()[:, 0, :]
+        decay = torch.exp(
+            -F.softplus(self.decay_projection(inputs).float())
+        ).clamp_min(1e-6)[:, 0, :]
+        current_state = decay * previous_state.float() + (1.0 - decay) * drive
+        gated = current_state.to(dtype=inputs.dtype).unsqueeze(1)
+        gated = gated * torch.sigmoid(self.gate_projection(inputs))
+        return self.output_projection(gated), current_state
 
 
 class SwiGLUExpert(nn.Module):
@@ -202,6 +244,27 @@ class AddSubBlock(nn.Module):
         outputs = outputs + torch.sigmoid(self.expert_residual_logit) * self.dropout(expert_output)
         return outputs, auxiliary_loss
 
+    def step(
+        self,
+        inputs: torch.Tensor,
+        cache: tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Run one token through this block and return its updated local caches."""
+        conv_history, state = cache
+        conv_update, conv_history = self.conv.step(
+            self.conv_norm(inputs), conv_history
+        )
+        outputs = inputs + torch.sigmoid(self.conv_residual_logit) * conv_update
+
+        state_update, state = self.state_space.step(
+            self.state_norm(outputs), state
+        )
+        outputs = outputs + torch.sigmoid(self.state_residual_logit) * state_update
+
+        expert_output, _ = self.experts(self.expert_norm(outputs))
+        outputs = outputs + torch.sigmoid(self.expert_residual_logit) * expert_output
+        return outputs, (conv_history, state)
+
 
 class AddSubLanguageModel(nn.Module):
     """Independent random-initialized Add/Sub language model for pretraining."""
@@ -239,6 +302,63 @@ class AddSubLanguageModel(nn.Module):
         logits = F.linear(self.final_norm(hidden), tied_output_weight, self.final_bias)
         auxiliary_loss = torch.stack(auxiliary_losses).mean()
         return {"logits": logits, "aux_loss": auxiliary_loss}
+
+    def init_cache(
+        self,
+        batch_size: int = 1,
+        device: torch.device | str | None = None,
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Create independent convolution and recurrent-state caches per block."""
+        if isinstance(batch_size, bool) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer.")
+        parameter = self.token_embedding.weight
+        target_device = parameter.device if device is None else torch.device(device)
+        dtype = parameter.dtype
+        caches = []
+        for block in self.blocks:
+            padding = block.conv.dilation * (block.conv.kernel_size - 1)
+            history = torch.zeros(
+                batch_size, padding, self.config.d_model,
+                device=target_device, dtype=dtype,
+            )
+            state = torch.zeros(
+                batch_size, self.config.d_model,
+                device=target_device, dtype=torch.float32,
+            )
+            caches.append((history, state))
+        return caches
+
+    def forward_step(
+        self,
+        input_ids: torch.Tensor,
+        caches: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
+        """Evaluate one token per batch item with bounded sequence caches.
+
+        This is a streaming reference path for the PyTorch graph. It does not
+        claim the separate integer-only deployed runtime contract.
+        """
+        if self.training:
+            raise RuntimeError("Call model.eval() before using forward_step().")
+        if input_ids.ndim != 1:
+            raise ValueError("forward_step input_ids must have shape [batch].")
+        if len(caches) != len(self.blocks):
+            raise ValueError("One convolution/state cache pair is required per block.")
+        if input_ids.numel() and (
+            int(input_ids.min()) < 0 or int(input_ids.max()) >= self.config.vocab_size
+        ):
+            raise ValueError("Token ID is outside the configured vocabulary.")
+
+        embedding_weight = quantize_weight_ste(self.token_embedding.weight)
+        hidden = F.embedding(input_ids, embedding_weight).unsqueeze(1)
+        updated_caches = []
+        for block, cache in zip(self.blocks, caches):
+            hidden, updated = block.step(hidden, cache)
+            updated_caches.append(updated)
+        hidden = self.final_norm(hidden[:, 0, :])
+        tied_output_weight = quantize_weight_ste(self.token_embedding.weight)
+        logits = F.linear(hidden, tied_output_weight, self.final_bias)
+        return logits, updated_caches
 
     def parameter_count(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters())

@@ -423,7 +423,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 711956
+    assert model.parameter_count() == 710676
 
 
 def test_swglu_experts_and_bounded_residual_gates_are_active():
@@ -550,3 +550,31 @@ def test_oasst_rejects_missing_or_invalid_tree_identity():
     }
     invalid = dict(base, message_tree_id="")
     assert accept_oasst1_message(invalid) == (False, "invalid_tree_id")
+
+
+def test_incremental_cached_forward_matches_full_sequence_logits():
+    torch.manual_seed(17)
+    model = AddSubLanguageModel(AddSubConfig(dropout=0.0)).eval()
+    token_ids = torch.randint(0, model.config.vocab_size, (2, 19))
+    with torch.inference_mode():
+        expected = model(token_ids)["logits"]
+        caches = model.init_cache(batch_size=token_ids.shape[0])
+        actual_steps = []
+        for position in range(token_ids.shape[1]):
+            logits, caches = model.forward_step(token_ids[:, position], caches)
+            actual_steps.append(logits)
+        actual = torch.stack(actual_steps, dim=1)
+    torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-5)
+
+
+def test_additive_runtime_rejects_negative_weight_codes():
+    with pytest.raises(ValueError, match="integers in"):
+        additive_projection(
+            np.asarray([[1, -1]], dtype=np.int8),
+            np.asarray([[-1, 2]], dtype=np.int8),
+        )
+
+
+def test_byte_bpe_config_requires_bytes_and_all_control_tokens():
+    with pytest.raises(ValueError, match="256 byte symbols"):
+        AddSubConfig(vocab_size=263).validate()

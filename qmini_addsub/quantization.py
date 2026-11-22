@@ -78,7 +78,7 @@ def quantize_to_codes(weight: np.ndarray) -> np.ndarray:
 
 def codes_to_values(codes: np.ndarray) -> np.ndarray:
     values = np.asarray(codes)
-    if values.dtype.kind not in "iu" or np.any(values > 4):
+    if values.dtype.kind not in "iu" or np.any(values < 0) or np.any(values > 4):
         raise ValueError("Add/Sub weight codes must be integers in [0, 4].")
     levels = np.asarray(WEIGHT_SYMBOLS, dtype=np.float32)
     return levels[values]
@@ -90,7 +90,7 @@ def pack_3bit_codes(codes: np.ndarray) -> bytes:
     This is an offline storage operation, not part of the inference arithmetic.
     """
     values = np.asarray(codes)
-    if values.dtype.kind not in "iu" or np.any(values > 4):
+    if values.dtype.kind not in "iu" or np.any(values < 0) or np.any(values > 4):
         raise ValueError("Only integer codes 0..4 can be packed.")
     flat = values.reshape(-1)
     output = bytearray((len(flat) * 3 + 7) // 8)

@@ -19,6 +19,7 @@ addsub-data = ["huggingface_hub>=0.28", "pyarrow>=15.0"]
 qmini = "qmini.cli:main"
 qmini-addsub = "qmini_addsub.train:main"
 qmini-addsub-sft = "qmini_addsub.sft:main"
+qmini-addsub-chat = "qmini_addsub.generate:main"
 qmini-addsub-prepare = "scripts.prepare_qmini_addsub_data:main"
 
 [tool.setuptools.packages.find]

@@ -49,7 +49,7 @@ def additive_projection(
         raise ValueError("Input feature count does not match weight feature count.")
     if np.any(activations < -127) or np.any(activations > 127):
         raise ValueError("Activation codes must be in [-127, 127].")
-    if weights.dtype.kind not in "iu" or np.any(weights > 4):
+    if weights.dtype.kind not in "iu" or np.any(weights < 0) or np.any(weights > 4):
         raise ValueError("Weight codes must be integers in [0, 4].")
 
     encoded = activations.astype(np.int16) + 128
