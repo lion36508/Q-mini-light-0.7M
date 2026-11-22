@@ -305,7 +305,7 @@ class AddSubLanguageModel(nn.Module):
         # Isolate parameter initialization so constructing a model does not
         # consume or reset the caller's training/dropout RNG stream.
         with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(model_seed)
+            torch.random.default_generator.manual_seed(model_seed)
             self._initialize_parameters()
 
     def _initialize_parameters(self) -> None:
