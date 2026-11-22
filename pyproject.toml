@@ -20,6 +20,7 @@ qmini = "qmini.cli:main"
 qmini-addsub = "qmini_addsub.train:main"
 qmini-addsub-sft = "qmini_addsub.sft:main"
 qmini-addsub-chat = "qmini_addsub.generate:main"
+qmini-addsub-export = "qmini_addsub.export:main"
 qmini-addsub-prepare = "scripts.prepare_qmini_addsub_data:main"
 qmini-addsub-import = "scripts.import_qmini_addsub_dataset:main"
 
