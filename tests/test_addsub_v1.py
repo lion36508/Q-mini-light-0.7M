@@ -1184,6 +1184,7 @@ def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
 
 
 def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(tmp_path):
+    import hashlib
     from tokenizers import Tokenizer
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
@@ -1192,7 +1193,7 @@ def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(
     vocab = {
         "<unk>": 0,
         "<eos>": 1,
-        "<\\u200b|user|>": 2,
+        "<\u200b|user|>": 2,
         "hello": 3,
         "world": 4,
     }
@@ -1202,14 +1203,14 @@ def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(
     tokenizer.save(str(tokenizer_path))
 
     source = tmp_path / "input.txt"
-    source.write_text("<|user|> hello\\n\\nworld\\n", encoding="utf-8")
+    source.write_text("<|user|> hello\n\nworld\n", encoding="utf-8")
     output = tmp_path / "tokens.u16"
     count, digest, source_bytes = encode_text_file(source, tokenizer_path, output)
 
     expected_ids = np.asarray([2, 3, 1, 4, 1], dtype=np.uint16)
     assert count == expected_ids.size
     assert np.array_equal(np.fromfile(output, dtype=np.uint16), expected_ids)
-    expected_text = "<\\u200b|user|> hello" + "world"
+    expected_text = "<\u200b|user|> hello" + "world"
     assert source_bytes == len(expected_text.encode("utf-8"))
     assert digest == hashlib.sha256(output.read_bytes()).hexdigest()
 
@@ -1227,7 +1228,7 @@ def test_tokenizer_build_is_manifest_verified_and_writes_actual_model_config(tmp
     data_dir.mkdir()
     train_text = data_dir / "pretrain_train.txt"
     train_text.write_text(
-        "English assistant conversation.\\nThe quick brown fox jumps over the lazy dog.\\n",
+        "English assistant conversation.\nThe quick brown fox jumps over the lazy dog.\n",
         encoding="utf-8",
     )
     manifest = {
@@ -1289,7 +1290,7 @@ def test_tokenizer_builder_rejects_sft_manifest_with_missing_training_file(tmp_p
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     train_text = data_dir / "pretrain_train.txt"
-    train_text.write_text("English source text.\\n", encoding="utf-8")
+    train_text.write_text("English source text.\n", encoding="utf-8")
     manifest = {
         "format": "qmini-addsub-data-v1",
         "language": "English",
