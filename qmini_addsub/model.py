@@ -186,15 +186,31 @@ class SparseTop1Experts(nn.Module):
             [SwiGLUExpert(config) for _ in range(config.n_experts)]
         )
 
-    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.router(inputs)
         probabilities = torch.softmax(logits.float(), dim=-1)
         selected = torch.argmax(logits, dim=-1)
         selected_probability = probabilities.gather(-1, selected.unsqueeze(-1))
 
-        assignments = F.one_hot(selected, num_classes=self.n_experts).float()
-        load = assignments.mean(dim=(0, 1))
-        importance = probabilities.mean(dim=(0, 1))
+        if token_mask is None:
+            valid_probabilities = probabilities.reshape(-1, self.n_experts)
+            valid_selected = selected.reshape(-1)
+        else:
+            if token_mask.shape != inputs.shape[:2]:
+                raise ValueError("MoE token_mask must match [batch, sequence] inputs.")
+            valid = token_mask.to(device=inputs.device, dtype=torch.bool).reshape(-1)
+            if not bool(valid.any()):
+                raise ValueError("MoE token_mask must include at least one valid token.")
+            valid_probabilities = probabilities.reshape(-1, self.n_experts)[valid]
+            valid_selected = selected.reshape(-1)[valid]
+
+        assignments = F.one_hot(valid_selected, num_classes=self.n_experts).float()
+        load = assignments.mean(dim=0)
+        importance = valid_probabilities.mean(dim=0)
         auxiliary_loss = self.n_experts * torch.sum(load * importance)
 
         flat_inputs = inputs.reshape(-1, inputs.shape[-1])
@@ -233,14 +249,20 @@ class AddSubBlock(nn.Module):
         self.state_residual_logit = nn.Parameter(torch.zeros(()))
         self.expert_residual_logit = nn.Parameter(torch.zeros(()))
 
-    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         conv_update = self.dropout(self.conv(self.conv_norm(inputs)))
         outputs = inputs + torch.sigmoid(self.conv_residual_logit) * conv_update
 
         state_update = self.dropout(self.state_space(self.state_norm(outputs)))
         outputs = outputs + torch.sigmoid(self.state_residual_logit) * state_update
 
-        expert_output, auxiliary_loss = self.experts(self.expert_norm(outputs))
+        expert_output, auxiliary_loss = self.experts(
+            self.expert_norm(outputs), token_mask=token_mask
+        )
         outputs = outputs + torch.sigmoid(self.expert_residual_logit) * self.dropout(expert_output)
         return outputs, auxiliary_loss
 
@@ -281,11 +303,25 @@ class AddSubLanguageModel(nn.Module):
         self.final_norm = RMSNorm(self.config.d_model)
         self.final_bias = nn.Parameter(torch.zeros(self.config.vocab_size))
 
-    def forward(self, input_ids: torch.Tensor) -> dict[str, torch.Tensor]:
-        if input_ids.ndim != 2:
-            raise ValueError("input_ids must have shape [batch, sequence].")
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if input_ids.ndim != 2 or input_ids.shape[0] < 1 or input_ids.shape[1] < 1:
+            raise ValueError("input_ids must have non-empty [batch, sequence] shape.")
+        if input_ids.dtype not in (torch.int32, torch.int64):
+            raise TypeError("input_ids must use an integer torch.int32 or torch.int64 dtype.")
         if input_ids.shape[1] > self.config.max_context:
             raise ValueError("Sequence exceeds configured maximum context.")
+        if attention_mask is not None:
+            if attention_mask.shape != input_ids.shape:
+                raise ValueError("attention_mask must match input_ids shape.")
+            if attention_mask.device != input_ids.device:
+                raise ValueError("attention_mask and input_ids must be on the same device.")
+            attention_mask = attention_mask.to(dtype=torch.bool)
+            if not bool(attention_mask.any()):
+                raise ValueError("attention_mask must include at least one valid token.")
         if input_ids.numel() and (
             int(input_ids.min()) < 0 or int(input_ids.max()) >= self.config.vocab_size
         ):
@@ -295,7 +331,7 @@ class AddSubLanguageModel(nn.Module):
         hidden = F.embedding(input_ids, embedding_weight)
         auxiliary_losses = []
         for block in self.blocks:
-            hidden, aux_loss = block(hidden)
+            hidden, aux_loss = block(hidden, token_mask=attention_mask)
             auxiliary_losses.append(aux_loss)
 
         tied_output_weight = quantize_weight_ste(self.token_embedding.weight)
