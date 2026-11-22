@@ -11,7 +11,8 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 **Implemented in this branch**
 - Independent random-initialized training model and validated configuration.
 - Five-symbol QAT weight alphabet: {-1.5, -0.5, 0, +0.5, +1.5}.
-- Three-bit packing/unpacking with invalid-code rejection.
+- Three-bit packing/unpacking with invalid-code and non-canonical padding rejection.
+- Checkpoint-to-archive export of every five-symbol model weight, a separate auxiliary tensor sidecar, SHA-256 manifest validation and a strict reconstruction loader with parity/tamper tests.
 - Integer additive projection reference primitive; its AST regression test prohibits multiply, divide and matmul operators.
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
@@ -20,8 +21,9 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 - Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
-- The cached PyTorch generation path avoids reprocessing the full prompt, but it is a reference path and still uses floating-point operators. The complete integer-only inference graph is not yet wired through additive lookup tables; the current integer runtime implements the projection primitive only.
-- Full-model export/loader, calibrated activation/state/gating LUTs and compiled ARM64/Android runtime are not implemented.
+- The packed `.qma` export is an offline model-weight container. Its auxiliary normalization, bias and gate tensors are stored as float32; its loader reconstructs the PyTorch reference model. It is not the integer-only deployed inference graph.
+- The cached PyTorch generation path avoids reprocessing the full prompt, but it is a reference path and still uses floating-point operators. The integer runtime currently proves the projection primitive and bounded integer residual addition only.
+- Calibrated activation/state/gating LUTs, complete integer convolution/SSM/MoE/normalization/output execution and the compiled ARM64/Android runtime are not implemented.
 - No Add/Sub weights have been trained and no quality/phone performance results exist.
 
 Do not use the PyTorch training graph as a production inference runtime. The training graph intentionally uses floating-point operations and optimizer arithmetic; the project requirement is that the deployed inference graph use only lookup, comparisons, integer addition and subtraction.
@@ -91,6 +93,12 @@ Train the tokenizer using only training splits, then encode pretraining text:
 Start a new model from random initialization:
 
     python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --config artifacts/qmini_addsub_v1/model_config.json --output runs/qmini_addsub_v1_pretrain --device cpu --steps 2000
+
+After a pretraining or SFT checkpoint exists, create a verified offline five-symbol weight archive:
+
+    python -m qmini_addsub.export --checkpoint runs/qmini_addsub_v1_sft/sft-checkpoint-step-000000500.pt --output artifacts/qmini_addsub_v1/model.qma
+
+The archive contains all quantized matrix/embedding/depthwise weights packed at 3 bits per symbol, checksums, a configuration/tensor index and a float32 auxiliary tensor sidecar. Load it for PyTorch reference parity/tamper checks with `load_addsub_export`. It is not yet a production integer-only/mobile runtime.
 
 After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
 
