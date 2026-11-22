@@ -1392,3 +1392,28 @@ def test_heldout_evaluation_refuses_validation_data_and_wrong_tokenizer_hash(tmp
             dataset_manifest_path=manifest,
             output_dir=tmp_path / "eval",
         )
+
+
+
+def test_model_attention_mask_requires_right_padding_without_internal_gaps():
+    model = AddSubLanguageModel(
+        AddSubConfig(
+            vocab_size=300,
+            d_model=32,
+            d_hidden=48,
+            n_layers=1,
+            n_experts=2,
+            kernel_size=3,
+            max_context=32,
+            dropout=0.0,
+        )
+    ).eval()
+    inputs = torch.ones((1, 4), dtype=torch.long)
+    mask = torch.tensor([[True, False, True, False]])
+    with pytest.raises(ValueError, match="right-padded"):
+        model(inputs, attention_mask=mask)
+
+
+def test_addsub_config_requires_context_room_for_chat_controls():
+    with pytest.raises(ValueError, match="at least 8"):
+        AddSubConfig(max_context=7).validate()
