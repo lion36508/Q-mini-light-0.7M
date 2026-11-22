@@ -1090,3 +1090,91 @@ def test_custom_dataset_import_refuses_overwrite_without_explicit_flag(tmp_path)
     with pytest.raises(FileExistsError, match="already contains prepared files"):
         import_user_dataset(**kwargs)
     assert (output / "dataset_manifest.json").read_bytes() == before
+
+
+
+def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(tmp_path):
+    from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
+    from qmini_addsub.train import CHECKPOINT_FORMAT
+
+    config = AddSubConfig(
+        vocab_size=300,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+        seed=1234,
+    )
+    original = AddSubLanguageModel(config).eval()
+    checkpoint_path = tmp_path / "trained-addsub.pt"
+    torch.save(
+        {
+            "format": CHECKPOINT_FORMAT,
+            "step": 1,
+            "config": config.to_dict(),
+            "model": original.state_dict(),
+        },
+        checkpoint_path,
+    )
+
+    export_path = tmp_path / "model.qma"
+    export_result = export_addsub_checkpoint(checkpoint_path, export_path)
+    restored, manifest = load_addsub_export(export_path)
+    assert manifest["format"] == "qmini-addsub-packed-weights-v1"
+    assert export_result["parameter_count"] == original.parameter_count()
+    assert export_result["quantized_tensors"] > 0
+    assert export_result["auxiliary_tensors"] > 0
+
+    input_ids = torch.randint(0, config.vocab_size, (2, 13))
+    with torch.inference_mode():
+        expected = original(input_ids)["logits"]
+        actual = restored(input_ids)["logits"]
+    torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+
+
+def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
+    import zipfile
+
+    from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
+    from qmini_addsub.train import CHECKPOINT_FORMAT
+
+    config = AddSubConfig(
+        vocab_size=300,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+        seed=1235,
+    )
+    model = AddSubLanguageModel(config)
+    checkpoint = tmp_path / "base.pt"
+    torch.save(
+        {
+            "format": CHECKPOINT_FORMAT,
+            "step": 1,
+            "config": config.to_dict(),
+            "model": model.state_dict(),
+        },
+        checkpoint,
+    )
+    valid_export = tmp_path / "valid.qma"
+    tampered_export = tmp_path / "tampered.qma"
+    export_addsub_checkpoint(checkpoint, valid_export)
+
+    with zipfile.ZipFile(valid_export, "r") as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    damaged = bytearray(members["weights.bin"])
+    damaged[0] ^= 1
+    members["weights.bin"] = bytes(damaged)
+    with zipfile.ZipFile(tampered_export, "w") as target:
+        for name, payload in members.items():
+            target.writestr(name, payload)
+
+    with pytest.raises(ValueError, match="SHA-256 verification"):
+        load_addsub_export(tampered_export)
