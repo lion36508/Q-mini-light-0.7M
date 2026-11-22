@@ -349,6 +349,8 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
             "path": token_path.name,
             "tokens": count,
             "sha256": hashlib.sha256(token_path.read_bytes()).hexdigest(),
+            "source_sha256": raw_sha,
+            "source_bytes": text_path.stat().st_size,
         }
 
     manifest = {
