@@ -12,12 +12,13 @@ from qmini_addsub.data import (
     normalize_training_text,
     stable_split,
 )
-from qmini_addsub.model import AddSubLanguageModel
+from qmini_addsub.model import AddSubLanguageModel, AddSubLinear
 from qmini_addsub.quantization import (
     codes_to_values,
     pack_3bit_codes,
     quantize_to_codes,
     unpack_3bit_codes,
+    quantize_weight_ste,
 )
 from qmini_addsub.runtime import additive_projection
 from tokenizers import Tokenizer
@@ -70,6 +71,21 @@ def test_five_symbol_quantizer_preserves_exact_zero_and_three_bit_round_trip():
     packed = pack_3bit_codes(codes)
     restored = unpack_3bit_codes(packed, codes.shape)
     assert np.array_equal(restored, codes)
+
+
+def test_training_ste_quantizer_matches_exact_five_symbol_export_codebook():
+    values = torch.tensor(
+        [-2.0, -1.5, -1.25, -1.0, -0.75, -0.5, -0.25,
+         0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    actual = quantize_weight_ste(values)
+    expected_codes = quantize_to_codes(values.detach().cpu().numpy())
+    expected = torch.from_numpy(codes_to_values(expected_codes))
+    assert torch.equal(actual.detach(), expected)
+    actual.sum().backward()
+    assert torch.equal(values.grad, torch.ones_like(values))
 
 
 def test_five_symbol_packer_rejects_reserved_codes():
@@ -406,7 +422,44 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 711528
+    assert model.parameter_count() == 699176
+
+
+def test_default_model_initialization_is_live_and_five_symbol_aligned():
+    torch.manual_seed(29)
+    model = AddSubLanguageModel(AddSubConfig())
+    zero_decay_projections = {
+        id(block.state_space.decay_projection) for block in model.blocks
+    }
+    linear_count = 0
+    for module in model.modules():
+        if not isinstance(module, AddSubLinear):
+            continue
+        linear_count += 1
+        quantized = quantize_weight_ste(module.weight).detach()
+        if id(module) in zero_decay_projections:
+            assert torch.count_nonzero(quantized) == 0
+            continue
+        assert torch.isin(
+            quantized,
+            torch.tensor([-1.5, -0.5, 0.0, 0.5, 1.5]),
+        ).all()
+        assert torch.all(torch.count_nonzero(quantized, dim=1) == 4)
+
+    embedding = quantize_weight_ste(model.token_embedding.weight).detach()
+    assert torch.isin(
+        embedding, torch.tensor([-1.5, -0.5, 0.0, 0.5, 1.5])
+    ).all()
+    assert torch.all(torch.count_nonzero(embedding, dim=1) == 4)
+
+    for block in model.blocks:
+        depthwise = quantize_weight_ste(block.conv.depthwise_weight).detach()
+        assert torch.all(
+            torch.count_nonzero(
+                depthwise.reshape(depthwise.shape[0], -1), dim=1
+            ) == 4
+        )
+    assert linear_count > 0
 
 
 def test_new_model_rejects_legacy_context_overflow():

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import AddSubConfig
-from .quantization import quantize_weight_ste
+from .quantization import initialize_five_symbol_weight_, quantize_weight_ste
 
 
 class AddSubLinear(nn.Linear):
@@ -15,6 +15,12 @@ class AddSubLinear(nn.Linear):
     floating-point arithmetic during optimization. The deployed inference
     graph must use qmini_addsub.runtime and its integer lookup/add path.
     """
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+        super().__init__(in_features, out_features, bias=bias)
+        initialize_five_symbol_weight_(self.weight)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return F.linear(inputs, quantize_weight_ste(self.weight), self.bias)
@@ -31,7 +37,7 @@ class CausalConvMixer(nn.Module):
         self.depthwise_bias = nn.Parameter(torch.zeros(config.d_model))
         self.gate_projection = AddSubLinear(config.d_model, config.d_model * 2)
         self.output_projection = AddSubLinear(config.d_model, config.d_model)
-        nn.init.normal_(self.depthwise_weight, mean=0.0, std=0.15)
+        initialize_five_symbol_weight_(self.depthwise_weight)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         channel_first = inputs.transpose(1, 2)
@@ -190,6 +196,7 @@ class AddSubLanguageModel(nn.Module):
         self.config = config or AddSubConfig()
         self.config.validate()
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
+        initialize_five_symbol_weight_(self.token_embedding.weight)
         self.blocks = nn.ModuleList(
             [AddSubBlock(self.config, dilation=2 ** index) for index in range(self.config.n_layers)]
         )

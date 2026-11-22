@@ -14,7 +14,7 @@ class AddSubConfig:
 
     vocab_size: int = 512
     d_model: int = 96
-    d_hidden: int = 256
+    d_hidden: int = 248
     n_layers: int = 4
     n_experts: int = 2
     kernel_size: int = 7
