@@ -259,7 +259,7 @@ def fine_tune_from_addsub_checkpoint(
         "seed": seed,
     }
 
-    model = AddSubLanguageModel(config).to(device)
+    model = AddSubLanguageModel(config, seed=seed).to(device)
     model.load_state_dict(base["model"], strict=True)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
     hashes = {
