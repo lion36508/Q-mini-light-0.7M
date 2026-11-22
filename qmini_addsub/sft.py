@@ -15,7 +15,7 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
-from .optim import build_adamw, cosine_warmup_lr
+from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
@@ -388,8 +388,11 @@ def fine_tune_from_addsub_checkpoint(
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite SFT loss at step {step}.")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), 1.0, error_if_nonfinite=True
+        )
         optimizer.step()
+        assert_finite_training_state(model, optimizer, step)
         last_loss = float(loss.detach())
 
         if step % 50 == 0 or step == steps:
