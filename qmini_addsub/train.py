@@ -193,7 +193,7 @@ def train_from_scratch(
         "learning_rate": learning_rate,
         "seed": seed,
     }
-    model = AddSubLanguageModel(config).to(device)
+    model = AddSubLanguageModel(config, seed=seed).to(device)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
     start_step = 0
     rng = random.Random(seed)
