@@ -1120,6 +1120,9 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
             "step": 1,
             "config": config.to_dict(),
             "model": original.state_dict(),
+            "tokenizer_sha256": "a" * 64,
+            "data_manifest_sha256": "b" * 64,
+            "run_contract": {"planned_steps": 2, "seed": config.seed},
         },
         checkpoint_path,
     )
@@ -1164,6 +1167,9 @@ def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
             "step": 1,
             "config": config.to_dict(),
             "model": model.state_dict(),
+            "tokenizer_sha256": "c" * 64,
+            "data_manifest_sha256": "d" * 64,
+            "run_contract": {"planned_steps": 2, "seed": config.seed},
         },
         checkpoint,
     )
