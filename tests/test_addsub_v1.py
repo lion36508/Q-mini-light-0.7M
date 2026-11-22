@@ -865,3 +865,32 @@ def test_additive_projection_exhausts_all_single_activation_weight_pairs():
         expected[row, 3] = value
         expected[row, 4] = value + value + value
     assert np.array_equal(result, expected)
+
+
+
+def test_model_seed_is_deterministic_and_does_not_advance_global_rng():
+    config = AddSubConfig(
+        vocab_size=300,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+        seed=911,
+    )
+    torch.manual_seed(77)
+    before = torch.get_rng_state().clone()
+    first = AddSubLanguageModel(config)
+    after = torch.get_rng_state()
+    second = AddSubLanguageModel(config)
+    assert torch.equal(before, after)
+    for name, tensor in first.state_dict().items():
+        assert torch.equal(tensor, second.state_dict()[name]), name
+
+    other = AddSubLanguageModel(AddSubConfig.from_dict({**config.to_dict(), "seed": 912}))
+    assert any(
+        not torch.equal(tensor, other.state_dict()[name])
+        for name, tensor in first.state_dict().items()
+    )
