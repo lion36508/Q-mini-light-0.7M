@@ -372,6 +372,10 @@ def main() -> None:
             "oasst1": oasst_info,
             "dolly": dolly_info,
         },
+        "approved_instruction_sources": [
+            OASST_REPOSITORY,
+            DOLLY_REPOSITORY,
+        ],
         "instruction_splits": sft_splits,
         "excluded_sources": {
             "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
