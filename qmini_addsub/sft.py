@@ -308,17 +308,32 @@ def fine_tune_from_addsub_checkpoint(
             "SFT output already contains a run. Use a fresh output folder or resume "
             "from a compatible checkpoint; old metrics will not be mixed."
         )
-    if resume is not None and metrics_path.exists():
-        existing_rows = [
-            json.loads(line)
-            for line in metrics_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        if any(int(row.get("step", -1)) > start_step for row in existing_rows):
+    if resume is not None:
+        existing_checkpoints = list(output.glob("sft-checkpoint-step-*.pt"))
+        newer_checkpoints = []
+        for checkpoint_file in existing_checkpoints:
+            try:
+                checkpoint_step = int(checkpoint_file.stem.rsplit("-", 1)[-1])
+            except ValueError as exc:
+                raise ValueError(f"Malformed SFT checkpoint filename: {checkpoint_file.name}") from exc
+            if checkpoint_step > start_step:
+                newer_checkpoints.append(checkpoint_file.name)
+        if newer_checkpoints:
             raise ValueError(
-                "SFT metrics contain steps newer than the resume checkpoint; "
-                "choose the latest compatible checkpoint."
+                "SFT output contains checkpoints newer than the requested resume point: "
+                + ", ".join(newer_checkpoints)
             )
+        if metrics_path.exists():
+            existing_rows = [
+                json.loads(line)
+                for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if any(int(row.get("step", -1)) > start_step for row in existing_rows):
+                raise ValueError(
+                    "SFT metrics contain steps newer than the resume checkpoint; "
+                    "choose the latest compatible checkpoint."
+                )
 
     def evaluate(dataset: ConversationDataset, split_name: str) -> float:
         was_training = model.training
