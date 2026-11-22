@@ -294,15 +294,31 @@ def train_from_scratch(
                 "point: " + ", ".join(newer_checkpoints)
             )
         if metrics_path.exists():
-            rows = [
-                json.loads(line)
-                for line in metrics_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            if any(int(row.get("step", -1)) > start_step for row in rows):
-                raise ValueError(
-                    "Pretraining metrics contain steps newer than the resume checkpoint."
-                )
+            try:
+                rows = [
+                    json.loads(line)
+                    for line in metrics_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except json.JSONDecodeError as exc:
+                raise ValueError("Pretraining metrics file is not valid JSONL.") from exc
+            expected_metric_identity = {
+                "train_sha256": train_sha,
+                "valid_sha256": valid_sha,
+                "test_sha256": test_sha,
+                "tokenizer_sha256": tokenizer_sha,
+                "data_manifest_sha256": manifest_sha,
+                "run_contract": run_contract,
+            }
+            for row in rows:
+                if any(row.get(key) != value for key, value in expected_metric_identity.items()):
+                    raise ValueError(
+                        "Pretraining metrics belong to a different dataset, tokenizer or run contract."
+                    )
+                if int(row.get("step", -1)) > start_step:
+                    raise ValueError(
+                        "Pretraining metrics contain steps newer than the resume checkpoint."
+                    )
 
     def evaluate(tokens: np.ndarray) -> float:
         """Evaluate on fixed evenly spaced windows without advancing train RNG."""
@@ -403,6 +419,9 @@ def train_from_scratch(
                 "train_sha256": train_sha,
                 "valid_sha256": valid_sha,
                 "test_sha256": test_sha,
+                "tokenizer_sha256": tokenizer_sha,
+                "data_manifest_sha256": manifest_sha,
+                "run_contract": run_contract,
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
