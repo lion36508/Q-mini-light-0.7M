@@ -270,13 +270,20 @@ def fine_tune_from_addsub_checkpoint(
             saved_cuda_rng = checkpoint.get("cuda_rng_states")
             if not saved_cuda_rng or len(saved_cuda_rng) != torch.cuda.device_count():
                 raise ValueError("CUDA RNG state is missing or device count changed.")
-            torch.cuda.set_rng_state_all(saved_cuda_rng)
+            torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
     if steps <= start_step:
         raise ValueError("steps must be greater than the checkpoint's completed step.")
 
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "sft_metrics.jsonl"
+    if resume is None and (
+        metrics_path.exists() or any(output.glob("sft-checkpoint-step-*.pt"))
+    ):
+        raise FileExistsError(
+            "SFT output already contains a run. Use a fresh output folder or resume "
+            "from a compatible checkpoint; old metrics will not be mixed."
+        )
 
     def evaluate() -> float:
         model.eval()
