@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -58,7 +57,7 @@ def main() -> None:
     }
     temporary_manifest = manifest_path.with_suffix(".json.tmp")
     temporary_manifest.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     temporary_manifest.replace(manifest_path)
