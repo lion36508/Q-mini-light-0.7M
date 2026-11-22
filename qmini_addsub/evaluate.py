@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -105,21 +106,27 @@ def evaluate_heldout_conversations(
             raise ValueError(f"Test record {index} does not end with an assistant reference.")
         reference = messages[-1]["content"]
         history = messages[:-1]
-        prediction = generate_reply(
-            model,
-            tokenizer,
-            history,
-            max_new_tokens=max_new_tokens,
-            temperature=0.0,
-            top_k=0,
-            top_p=1.0,
-            greedy=True,
-        )
+        generation_error = None
+        try:
+            prediction = generate_reply(
+                model,
+                tokenizer,
+                history,
+                max_new_tokens=max_new_tokens,
+                temperature=0.0,
+                top_k=0,
+                top_p=1.0,
+                greedy=True,
+            )
+        except ValueError as exc:
+            prediction = ""
+            generation_error = str(exc)
         row = {
             "index": index,
             "source": record["source"],
             "prediction": prediction,
             "reference": reference,
+            "generation_error": generation_error,
             "scores": lexical_scores(reference, prediction),
         }
         rows.append(row)
@@ -134,6 +141,7 @@ def evaluate_heldout_conversations(
         "dataset_manifest_sha256": sha256_file(manifest_file),
         "test_sha256": sha256_file(test_file),
         "test_records": len(scores),
+        "generation_failures": sum(row["generation_error"] is not None for row in rows),
         "max_new_tokens": max_new_tokens,
         "decoding": "greedy",
         "mean_exact_match": sum(item["exact_match"] for item in scores) / len(scores),
@@ -148,28 +156,25 @@ def evaluate_heldout_conversations(
         ),
     }
 
-    output.mkdir(parents=True, exist_ok=True)
-    results_path = output / "heldout_responses.jsonl"
-    summary_path = output / "heldout_summary.json"
-    if results_path.exists() or summary_path.exists():
+    if output.exists():
         raise FileExistsError(
-            "Evaluation output already exists. Choose a fresh output folder to avoid mixing runs."
+            "Evaluation output path already exists. Choose a new folder to avoid mixing reports."
         )
-    temporary_results = results_path.with_suffix(".jsonl.tmp")
-    temporary_summary = summary_path.with_suffix(".json.tmp")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent))
     try:
-        with temporary_results.open("w", encoding="utf-8", newline="\n") as handle:
+        results_path = staging / "heldout_responses.jsonl"
+        summary_path = staging / "heldout_summary.json"
+        with results_path.open("w", encoding="utf-8", newline="\\n") as handle:
             for row in rows:
-                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-        temporary_summary.write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\\n")
+        summary_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
             encoding="utf-8",
         )
-        temporary_results.replace(results_path)
-        temporary_summary.replace(summary_path)
+        staging.replace(output)
     finally:
-        temporary_results.unlink(missing_ok=True)
-        temporary_summary.unlink(missing_ok=True)
+        shutil.rmtree(staging, ignore_errors=True)
     return summary
 
 
