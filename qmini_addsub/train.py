@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 from pathlib import Path
 from typing import Any
@@ -191,6 +192,14 @@ def train_from_scratch(
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
     test_sha = sha256_file(test_path)
     manifest_sha = sha256_file(manifest_path)
+    validation_source_bytes = (train_path.parent / "pretrain_validation.txt").stat().st_size
+    test_source_bytes = (train_path.parent / "pretrain_test.txt").stat().st_size
+    if validation_source_bytes < 1 or test_source_bytes < 1:
+        raise ValueError("Validation and held-out test source text must contain bytes.")
+
+    def bits_per_byte_estimate(token_loss: float, token_count: int, byte_count: int) -> float:
+        """Convert sampled token NLL to an approximate, tokenizer-comparable BPB."""
+        return token_loss * max(1, token_count - 1) / byte_count / math.log(2.0)
 
     random.seed(seed)
     np.random.seed(seed)
@@ -372,6 +381,9 @@ def train_from_scratch(
                 "learning_rate": current_lr,
                 "train_token_loss": last_loss,
                 "valid_token_loss": valid_loss,
+                "valid_bits_per_byte_estimate": bits_per_byte_estimate(
+                    valid_loss, len(valid_tokens), validation_source_bytes
+                ),
                 "train_sha256": train_sha,
                 "valid_sha256": valid_sha,
                 "test_sha256": test_sha,
@@ -386,14 +398,22 @@ def train_from_scratch(
             save_checkpoint(step, valid_loss)
 
     heldout_test_loss = evaluate(test_tokens)
+    final_validation_loss = evaluate(valid_tokens)
     return {
         "format": CHECKPOINT_FORMAT,
         "steps": steps,
         "parameter_count": model.parameter_count(),
         "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_token_loss": last_loss,
-        "final_validation_token_loss": evaluate(valid_tokens),
+        "final_validation_token_loss": final_validation_loss,
+        "final_validation_bits_per_byte_estimate": bits_per_byte_estimate(
+            final_validation_loss, len(valid_tokens), validation_source_bytes
+        ),
         "heldout_test_token_loss": heldout_test_loss,
+        "heldout_test_bits_per_byte_estimate": bits_per_byte_estimate(
+            heldout_test_loss, len(test_tokens), test_source_bytes
+        ),
+        "heldout_test_tokens_per_byte": len(test_tokens) / test_source_bytes,
         "heldout_test_sha256": sha256_file(test_path),
         "output_dir": str(output),
         "data_manifest_sha256": manifest_sha,
