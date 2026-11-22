@@ -387,11 +387,19 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert first["steps"] == 2
     assert first["heldout_test_token_loss"] > 0
 
-    second = train_from_scratch(steps=2, resume=checkpoint, **common)
+    resumed_run_dir = tmp_path / "resumed-run"
+    resumed_common = {**common, "output_dir": resumed_run_dir}
+    second = train_from_scratch(steps=2, resume=checkpoint, **resumed_common)
     assert second["steps"] == 2
     final_pretrain_checkpoint = output_dir / "checkpoint-step-000000002.pt"
+    resumed_pretrain_checkpoint = resumed_run_dir / "checkpoint-step-000000002.pt"
     assert final_pretrain_checkpoint.is_file()
+    assert resumed_pretrain_checkpoint.is_file()
     assert second["heldout_test_sha256"] == streams["test"]["sha256"]
+    full_state = torch.load(final_pretrain_checkpoint, map_location="cpu", weights_only=True)
+    resumed_state = torch.load(resumed_pretrain_checkpoint, map_location="cpu", weights_only=True)
+    for name, tensor in full_state["model"].items():
+        assert torch.equal(tensor, resumed_state["model"][name]), name
 
     def write_conversation(path):
         record = {
@@ -460,7 +468,13 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     )
     assert resumed_sft["steps"] == 2
     assert resumed_sft["final_validation_response_loss"] > 0
-    assert (tmp_path / "sft-resumed" / "sft-checkpoint-step-000000002.pt").is_file()
+    resumed_sft_checkpoint = tmp_path / "sft-resumed" / "sft-checkpoint-step-000000002.pt"
+    full_sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000002.pt"
+    assert resumed_sft_checkpoint.is_file()
+    full_sft_state = torch.load(full_sft_checkpoint, map_location="cpu", weights_only=True)
+    resumed_sft_state = torch.load(resumed_sft_checkpoint, map_location="cpu", weights_only=True)
+    for name, tensor in full_sft_state["model"].items():
+        assert torch.equal(tensor, resumed_sft_state["model"][name]), name
 
 
 def test_default_addsub_model_parameter_count_is_stable():
