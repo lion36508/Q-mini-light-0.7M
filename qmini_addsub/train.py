@@ -34,9 +34,8 @@ def encode_text_file(
     text_path: str | Path,
     tokenizer_path: str | Path,
     output_path: str | Path,
-) -> tuple[int, str]:
+ ) -> tuple[int, str, int]:
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    tokenizer_sha = sha256_file(tokenizer_path)
     eos_id = tokenizer.token_to_id("<eos>")
     if eos_id is None:
         raise ValueError("Tokenizer must contain the <eos> token.")
@@ -46,6 +45,7 @@ def encode_text_file(
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     count = 0
+    source_byte_count = 0
     try:
         with Path(text_path).open("r", encoding="utf-8") as source, temporary.open("wb") as target:
             for line in source:
@@ -53,6 +53,7 @@ def encode_text_file(
                 if not text:
                     continue
                 safe_text = escape_special_token_literals(text)
+                source_byte_count += len(safe_text.encode('utf-8'))
                 ids = tokenizer.encode(safe_text, add_special_tokens=False).ids
                 if not ids:
                     continue
@@ -67,7 +68,7 @@ def encode_text_file(
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-    return count, sha256_file(output)
+    return count, sha256_file(output), source_byte_count
 
 
 def _sample_batch(
@@ -192,10 +193,16 @@ def train_from_scratch(
     train_sha, valid_sha = sha256_file(train_path), sha256_file(valid_path)
     test_sha = sha256_file(test_path)
     manifest_sha = sha256_file(manifest_path)
-    validation_source_bytes = (train_path.parent / "pretrain_validation.txt").stat().st_size
-    test_source_bytes = (train_path.parent / "pretrain_test.txt").stat().st_size
+    validation_stream_bytes = int(
+        token_streams.get("validation", {}).get("source_bytes", 0)
+    )
+    test_stream_bytes = int(test_stream.get("source_bytes", 0))
+    validation_source_bytes = validation_stream_bytes
+    test_source_bytes = test_stream_bytes
     if validation_source_bytes < 1 or test_source_bytes < 1:
-        raise ValueError("Validation and held-out test source text must contain bytes.")
+        raise ValueError(
+            "Token-stream manifest must include positive source_bytes for validation and test."
+        )
 
     def bits_per_byte_estimate(token_loss: float, token_count: int, byte_count: int) -> float:
         """Convert sampled token NLL to an approximate, tokenizer-comparable BPB."""
