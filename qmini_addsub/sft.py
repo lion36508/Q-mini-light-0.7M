@@ -306,7 +306,7 @@ def fine_tune_from_addsub_checkpoint(
         start_step = int(checkpoint["step"])
         if "torch_rng" not in checkpoint or "python_rng" not in checkpoint:
             raise ValueError(
-                "This SFT checkpoint predates exact RNG resume; start a new v3 SFT run."
+                "This SFT checkpoint predates exact RNG resume; start a new v4 SFT run."
             )
         torch.set_rng_state(checkpoint["torch_rng"].cpu())
         if device.type == "cuda":
