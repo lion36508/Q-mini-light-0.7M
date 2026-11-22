@@ -641,6 +641,7 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
         pretrain_source="user-selected-English-corpus",
         pretrain_license="user-reviewed-license",
         confirm_rights_and_human_data=True,
+        confirm_english_data=True,
         sft_train=sft_train,
         sft_validation=sft_validation,
         sft_source="user-selected-assistant-corpus",
@@ -690,4 +691,25 @@ def test_user_dataset_importer_requires_explicit_rights_and_non_synthetic_confir
             output_dir=tmp_path / "out",
             pretrain_source="test-corpus",
             pretrain_license="test-license",
+        )
+
+
+
+def test_user_dataset_importer_requires_explicit_english_confirmation(tmp_path):
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    paths = []
+    for name in ("train", "validation", "test"):
+        path = tmp_path / f"{name}.txt"
+        path.write_text("English text.\n", encoding="utf-8")
+        paths.append(path)
+    with pytest.raises(ValueError, match="English"):
+        import_user_dataset(
+            pretrain_train=paths[0],
+            pretrain_validation=paths[1],
+            pretrain_test=paths[2],
+            output_dir=tmp_path / "out",
+            pretrain_source="test-corpus",
+            pretrain_license="test-license",
+            confirm_rights_and_human_data=True,
         )
