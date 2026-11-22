@@ -42,12 +42,13 @@ def main() -> None:
         )
         if expected_source_sha != sha256_file(source):
             raise ValueError(f"{split} source text does not match the dataset manifest.")
-        count, digest = encode_text_file(source, tokenizer, target)
+        count, digest, source_bytes = encode_text_file(source, tokenizer, target)
         outputs[split] = {
             "tokens": count,
             "sha256": digest,
             "path": target.name,
             "source_sha256": expected_source_sha,
+            "source_bytes": source_bytes,
         }
 
     manifest["token_streams"] = outputs
