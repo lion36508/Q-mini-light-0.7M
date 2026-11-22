@@ -109,10 +109,22 @@ def train_from_scratch(
     """Train only from a new random initialization or this package's own checkpoint."""
     config = config or AddSubConfig()
     config.validate()
+    for name, value in (
+        ("steps", steps),
+        ("batch_size", batch_size),
+        ("sequence_length", sequence_length),
+        ("save_every", save_every),
+        ("validate_every", validate_every),
+        ("seed", seed),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an integer.")
     if steps < 1 or batch_size < 1 or sequence_length < 2:
         raise ValueError("steps, batch_size and sequence_length must be positive.")
     if save_every < 1 or validate_every < 1:
         raise ValueError("save_every and validate_every must be positive.")
+    if seed < 0:
+        raise ValueError("seed must be non-negative.")
     if learning_rate <= 0:
         raise ValueError("learning_rate must be positive.")
     if sequence_length > config.max_context:
