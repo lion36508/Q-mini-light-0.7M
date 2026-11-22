@@ -665,7 +665,7 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
 
     pretrain_paths = {}
     for split, content in (
-        ("train", "  English train text.  \r\n"),
+        ("train", "  English train text.  \r\nContact phone: 555 12345678\r\nSecond safe line.\r\n"),
         ("validation", "English validation text.\n"),
         ("test", "English held-out test text.\n"),
     ):
@@ -710,6 +710,7 @@ def test_user_dataset_importer_accepts_selected_local_splits_without_download(tm
     assert manifest["pretraining"]["splits"]["train"]["source_sha256"]
     assert manifest["pretraining"]["splits"]["train"]["rejected_line_counts"]["phone_contact"] == 1
     assert "555 12345678" not in (output / "pretrain_train.txt").read_text(encoding="utf-8")
+    assert "Second safe line." in (output / "pretrain_train.txt").read_text(encoding="utf-8")
     assert manifest["approved_instruction_sources"] == ["user-selected-assistant-corpus"]
     imported_record = json.loads((output / "sft_train.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert imported_record["source"] == "user-selected-assistant-corpus"
