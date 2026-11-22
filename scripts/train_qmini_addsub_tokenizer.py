@@ -89,7 +89,7 @@ def main() -> None:
     model_config = AddSubConfig(vocab_size=actual_vocab_size)
     config_path = output.with_name("model_config.json")
     config_path.write_text(
-        json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\\n",
+        json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     trained_on = ["pretrain_train.txt"]
