@@ -920,3 +920,61 @@ def test_finite_training_state_guard_reports_corrupted_parameters_and_moments():
         optimizer.state[model.weight]["exp_avg"][0, 0] = float("inf")
     with pytest.raises(FloatingPointError, match="optimizer state"):
         assert_finite_training_state(model, optimizer, step=3)
+
+
+
+def test_sft_context_trims_old_user_prompt_but_preserves_complete_assistant_answer():
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+        "complete": 8,
+        "answer": 9,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    dataset = ConversationDataset(
+        [{"messages": [
+            {"role": "user", "content": "question " * 80},
+            {"role": "assistant", "content": "complete answer"},
+        ]}],
+        tokenizer,
+        max_context=64,
+    )
+    token_ids, labels = dataset[0]
+    assert len(token_ids) <= 64
+    assistant_position = token_ids.index(vocab["<|assistant|>"])
+    assert labels[assistant_position + 1:assistant_position + 4] == [
+        vocab["complete"],
+        vocab["answer"],
+        vocab["<|end|>"],
+    ]
+
+
+def test_sft_drops_conversations_when_a_complete_answer_cannot_fit():
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    with pytest.raises(ValueError, match="No conversations fit"):
+        ConversationDataset(
+            [{"messages": [
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "answer " * 100},
+            ]}],
+            tokenizer,
+            max_context=32,
+        )
