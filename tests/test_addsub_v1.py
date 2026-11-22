@@ -398,6 +398,25 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert final_pretrain_checkpoint.is_file()
     assert resumed_pretrain_checkpoint.is_file()
     assert second["heldout_test_sha256"] == streams["test"]["sha256"]
+    from qmini_addsub.generate import load_addsub_model
+
+    loaded_model = load_addsub_model(
+        final_pretrain_checkpoint,
+        device_name="cpu",
+        tokenizer_path=tokenizer_path,
+    )
+    assert loaded_model.config == config
+    mismatched_tokenizer = tmp_path / "mismatched-tokenizer.json"
+    mismatched_tokenizer.write_text(
+        tokenizer_path.read_text(encoding="utf-8") + " ",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Tokenizer fingerprint"):
+        load_addsub_model(
+            final_pretrain_checkpoint,
+            device_name="cpu",
+            tokenizer_path=mismatched_tokenizer,
+        )
     full_state = torch.load(final_pretrain_checkpoint, map_location="cpu", weights_only=True)
     resumed_state = torch.load(resumed_pretrain_checkpoint, map_location="cpu", weights_only=True)
     for name, tensor in full_state["model"].items():
