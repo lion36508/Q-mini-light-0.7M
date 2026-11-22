@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
+import tempfile
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,154 +138,201 @@ def import_user_dataset(
     sft_license: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Import already-selected local English splits. This function never downloads data."""
+    """Import local English splits transactionally. No downloads are performed."""
     if not confirm_rights_and_human_data:
         raise ValueError(
             "Explicit confirmation of dataset rights and non-synthetic data is required."
         )
     if not confirm_english_data:
         raise ValueError("Explicit confirmation that all selected data is English is required.")
-    if not pretrain_source.strip() or not pretrain_license.strip():
-        raise ValueError("Pretraining source name and license must be supplied.")
-    if len({
-        Path(pretrain_train).resolve(),
-        Path(pretrain_validation).resolve(),
-        Path(pretrain_test).resolve(),
-    }) != 3:
+    if not isinstance(pretrain_source, str) or not pretrain_source.strip():
+        raise ValueError("Pretraining source name must be a non-empty string.")
+    if not isinstance(pretrain_license, str) or not pretrain_license.strip():
+        raise ValueError("Pretraining license must be a non-empty string.")
+
+    pretrain_paths = tuple(
+        Path(value).expanduser().resolve()
+        for value in (pretrain_train, pretrain_validation, pretrain_test)
+    )
+    if len(set(pretrain_paths)) != 3:
         raise ValueError("Pretraining train/validation/test inputs must be separate files.")
-    sft_paths = (sft_train, sft_validation, sft_test)
-    if any(value is None for value in sft_paths) and not all(value is None for value in sft_paths):
+
+    sft_values = (sft_train, sft_validation, sft_test)
+    if any(value is None for value in sft_values) and not all(value is None for value in sft_values):
         raise ValueError("Provide SFT train, validation and test files together, or none.")
     has_sft = sft_train is not None
-    if has_sft and (not (sft_source or "").strip() or not (sft_license or "").strip()):
-        raise ValueError("SFT source name and license are required when SFT files are supplied.")
-    if has_sft and len({Path(value).resolve() for value in sft_paths}) != 3:
-        raise ValueError("SFT train, validation and test inputs must be separate files.")
+    if has_sft:
+        sft_paths = tuple(Path(value).expanduser().resolve() for value in sft_values)
+        if len(set(sft_paths)) != 3:
+            raise ValueError("SFT train, validation and test inputs must be separate files.")
+        if not isinstance(sft_source, str) or not sft_source.strip():
+            raise ValueError("SFT source name must be a non-empty string.")
+        if not isinstance(sft_license, str) or not sft_license.strip():
+            raise ValueError("SFT license must be a non-empty string.")
+    else:
+        sft_paths = ()
 
-    output = Path(output_dir)
+    output = Path(output_dir).expanduser().resolve()
+    source_paths = set(pretrain_paths) | set(sft_paths)
+    if any(path == output or output in path.parents for path in source_paths):
+        raise ValueError(
+            "Dataset output folder cannot contain the input source files; "
+            "use a separate output folder to protect the originals."
+        )
+
     manifest_path = output / "dataset_manifest.json"
-    existing_outputs = [
-        manifest_path,
-        output / "pretrain_train.txt",
-        output / "pretrain_validation.txt",
-        output / "pretrain_test.txt",
-        output / "sft_train.jsonl",
-        output / "sft_validation.jsonl",
-        output / "sft_test.jsonl",
-    ]
-    if not overwrite and any(path.exists() for path in existing_outputs):
+    managed_names = {
+        "dataset_manifest.json",
+        "pretrain_train.txt",
+        "pretrain_validation.txt",
+        "pretrain_test.txt",
+        "sft_train.jsonl",
+        "sft_validation.jsonl",
+        "sft_test.jsonl",
+    }
+    if output.exists() and not output.is_dir():
+        raise NotADirectoryError(output)
+    if not overwrite and output.exists() and any((output / name).exists() for name in managed_names):
         raise FileExistsError(
             f"Dataset output folder {output} already contains prepared files. "
             "Choose a new folder or pass --overwrite after backing up the data."
         )
-    output.mkdir(parents=True, exist_ok=True)
 
-    pretraining_splits = {}
-    for split, source in (
-        ("train", Path(pretrain_train)),
-        ("validation", Path(pretrain_validation)),
-        ("test", Path(pretrain_test)),
-    ):
-        pretraining_splits[split] = _normalize_pretraining_file(
-            source, output / f"pretrain_{split}.txt"
-        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent))
+    try:
+        pretraining_splits = {}
+        for split, source in zip(
+            ("train", "validation", "test"),
+            pretrain_paths,
+        ):
+            pretraining_splits[split] = _normalize_pretraining_file(
+                source, staging / f"pretrain_{split}.txt"
+            )
 
-    instruction_splits = {}
-    instruction_sources = {}
-    approved_sources = []
-    if has_sft:
-        train_meta = _curate_sft_file(
-            Path(sft_train), output / "sft_train.jsonl", str(sft_source), str(sft_license)
-        )
-        valid_meta = _curate_sft_file(
-            Path(sft_validation), output / "sft_validation.jsonl", str(sft_source), str(sft_license)
-        )
-        test_meta = _curate_sft_file(
-            Path(sft_test), output / "sft_test.jsonl", str(sft_source), str(sft_license)
-        )
+        instruction_splits: dict[str, Any] = {}
+        instruction_sources: dict[str, Any] = {}
+        approved_sources: list[str] = []
+        if has_sft:
+            train_meta = _curate_sft_file(
+                sft_paths[0], staging / "sft_train.jsonl",
+                str(sft_source), str(sft_license),
+            )
+            valid_meta = _curate_sft_file(
+                sft_paths[1], staging / "sft_validation.jsonl",
+                str(sft_source), str(sft_license),
+            )
+            test_meta = _curate_sft_file(
+                sft_paths[2], staging / "sft_test.jsonl",
+                str(sft_source), str(sft_license),
+            )
 
-        def conversation_fingerprints(path: Path) -> set[str]:
-            return {
-                hashlib.sha256(
-                    json.dumps(
-                        record["messages"], ensure_ascii=False, sort_keys=True
-                    ).encode("utf-8")
-                ).hexdigest()
-                for record in (
-                    json.loads(line)
-                    for line in path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                )
-            }
-
-        split_paths = {
-            "train": output / "sft_train.jsonl",
-            "validation": output / "sft_validation.jsonl",
-            "test": output / "sft_test.jsonl",
-        }
-        fingerprints = {
-            name: conversation_fingerprints(path)
-            for name, path in split_paths.items()
-        }
-        split_names = tuple(fingerprints)
-        for left_index, left_name in enumerate(split_names):
-            for right_name in split_names[left_index + 1:]:
-                overlap = fingerprints[left_name] & fingerprints[right_name]
-                if overlap:
-                    raise ValueError(
-                        f"SFT {left_name}/{right_name} leakage: "
-                        f"{len(overlap)} duplicate conversations."
+            def conversation_fingerprints(path: Path) -> set[str]:
+                return {
+                    hashlib.sha256(
+                        json.dumps(
+                            record["messages"], ensure_ascii=False, sort_keys=True
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    for record in (
+                        json.loads(line)
+                        for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
                     )
-        instruction_splits = {
-            "train": train_meta,
-            "validation": valid_meta,
-            "test": test_meta,
-        }
-        instruction_sources = {
-            str(sft_source): {
-                "license": str(sft_license),
-                "user_declared_human_authored": True,
-                "synthetic_records_included": 0,
-            }
-        }
-        approved_sources = [str(sft_source)]
+                }
 
-    manifest = {
-        "format": "qmini-addsub-data-v1",
-        "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "language": "English",
-        "synthetic_training_records_included": 0,
-        "source_attestation": {
-            "rights_and_non_synthetic_confirmation": True,
-            "english_language_confirmation": True,
-            "pretraining_source": pretrain_source,
-            "pretraining_license": pretrain_license,
-            "split_integrity": "User supplied distinct train/validation/test files; document-level leakage cannot be inferred from plain text files.",
-        },
-        "cleaning_policy": {
-            "version": "qmini-addsub-user-import-v1",
-            "pretraining": "Unicode NFC, normalized line endings, control-character removal and trailing-space cleanup.",
-            "instruction": "Existing Add/Sub text cleaner; explicit human_authored=true and synthetic=false required.",
-        },
-        "pretraining": {
-            "repository": pretrain_source,
-            "subset": "user-selected local English text files",
-            "license": pretrain_license,
-            "source_attested_by_user": True,
-            "synthetic_records_included": 0,
-            "splits": pretraining_splits,
-        },
-        "instruction_sources": instruction_sources,
-        "approved_instruction_sources": approved_sources,
-        "instruction_splits": instruction_splits,
-    }
-    temporary_manifest = manifest_path.with_suffix(".json.tmp")
-    temporary_manifest.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary_manifest.replace(manifest_path)
-    return manifest
+            split_paths = {
+                "train": staging / "sft_train.jsonl",
+                "validation": staging / "sft_validation.jsonl",
+                "test": staging / "sft_test.jsonl",
+            }
+            fingerprints = {
+                name: conversation_fingerprints(path)
+                for name, path in split_paths.items()
+            }
+            split_names = tuple(fingerprints)
+            for left_index, left_name in enumerate(split_names):
+                for right_name in split_names[left_index + 1:]:
+                    overlap = fingerprints[left_name] & fingerprints[right_name]
+                    if overlap:
+                        raise ValueError(
+                            f"SFT {left_name}/{right_name} leakage: "
+                            f"{len(overlap)} duplicate conversations."
+                        )
+            instruction_splits = {
+                "train": train_meta,
+                "validation": valid_meta,
+                "test": test_meta,
+            }
+            instruction_sources = {
+                str(sft_source): {
+                    "license": str(sft_license),
+                    "user_declared_human_authored": True,
+                    "synthetic_records_included": 0,
+                }
+            }
+            approved_sources = [str(sft_source)]
+
+        manifest = {
+            "format": "qmini-addsub-data-v1",
+            "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "language": "English",
+            "synthetic_training_records_included": 0,
+            "source_attestation": {
+                "rights_and_non_synthetic_confirmation": True,
+                "english_language_confirmation": True,
+                "pretraining_source": pretrain_source,
+                "pretraining_license": pretrain_license,
+                "split_integrity": (
+                    "User supplied distinct train/validation/test files; document-level "
+                    "leakage cannot be inferred from plain text files."
+                ),
+            },
+            "cleaning_policy": {
+                "version": "qmini-addsub-user-import-v1",
+                "pretraining": (
+                    "Unicode NFC, normalized line endings, per-line quality/sensitive "
+                    "text rejection and trailing-space cleanup."
+                ),
+                "instruction": (
+                    "Existing Add/Sub text cleaner; explicit human_authored=true and "
+                    "synthetic=false required."
+                ),
+            },
+            "pretraining": {
+                "repository": pretrain_source,
+                "subset": "user-selected local English text files",
+                "license": pretrain_license,
+                "source_attested_by_user": True,
+                "synthetic_records_included": 0,
+                "splits": pretraining_splits,
+            },
+            "instruction_sources": instruction_sources,
+            "approved_instruction_sources": approved_sources,
+            "instruction_splits": instruction_splits,
+        }
+        staged_manifest = staging / "dataset_manifest.json"
+        temporary_manifest = staging / "dataset_manifest.json.tmp"
+        temporary_manifest.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+            encoding="utf-8",
+        )
+        temporary_manifest.replace(staged_manifest)
+
+        # The manifest is the final commit marker. Consumers reject a folder
+        # without it, so a failed replacement cannot be mistaken for a valid dataset.
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "dataset_manifest.json").unlink(missing_ok=True)
+        staged_names = {path.name for path in staging.iterdir() if path.is_file()}
+        for name in sorted(staged_names - {"dataset_manifest.json"}):
+            (staging / name).replace(output / name)
+        if overwrite and not has_sft:
+            for name in ("sft_train.jsonl", "sft_validation.jsonl", "sft_test.jsonl"):
+                (output / name).unlink(missing_ok=True)
+        staged_manifest.replace(output / "dataset_manifest.json")
+        return manifest
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def main() -> None:
