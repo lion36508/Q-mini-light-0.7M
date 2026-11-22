@@ -1017,7 +1017,7 @@ def test_custom_dataset_import_is_transactional_on_sft_leakage(tmp_path):
     pretrain = []
     for split in ("train", "validation", "test"):
         path = tmp_path / f"pretrain_{split}.txt"
-        path.write_text(f"English {split} material.\\n", encoding="utf-8")
+        path.write_text(f"English {split} material.\n", encoding="utf-8")
         pretrain.append(path)
 
     sft_paths = [tmp_path / f"sft_{split}.jsonl" for split in ("train", "validation", "test")]
@@ -1037,9 +1037,9 @@ def test_custom_dataset_import_is_transactional_on_sft_leakage(tmp_path):
             {"role": "assistant", "content": "A tokenizer maps text to token IDs."},
         ],
     }
-    sft_paths[0].write_text(json.dumps(duplicate) + "\\n", encoding="utf-8")
-    sft_paths[1].write_text(json.dumps(duplicate) + "\\n", encoding="utf-8")
-    sft_paths[2].write_text(json.dumps(distinct) + "\\n", encoding="utf-8")
+    sft_paths[0].write_text(json.dumps(duplicate) + "\n", encoding="utf-8")
+    sft_paths[1].write_text(json.dumps(duplicate) + "\n", encoding="utf-8")
+    sft_paths[2].write_text(json.dumps(distinct) + "\n", encoding="utf-8")
 
     output = tmp_path / "transactional-output"
     with pytest.raises(ValueError, match="leakage"):
@@ -1070,7 +1070,7 @@ def test_custom_dataset_import_refuses_overwrite_without_explicit_flag(tmp_path)
     pretrain = []
     for split in ("train", "validation", "test"):
         path = tmp_path / f"{split}.txt"
-        path.write_text(f"English {split} material.\\n", encoding="utf-8")
+        path.write_text(f"English {split} material.\n", encoding="utf-8")
         pretrain.append(path)
 
     output = tmp_path / "import-once"
