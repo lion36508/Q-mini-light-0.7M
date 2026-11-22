@@ -34,7 +34,7 @@ def encode_text_file(
     text_path: str | Path,
     tokenizer_path: str | Path,
     output_path: str | Path,
- ) -> tuple[int, str, int]:
+) -> tuple[int, str, int]:
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     eos_id = tokenizer.token_to_id("<eos>")
     if eos_id is None:
@@ -165,14 +165,23 @@ def train_from_scratch(
         if not source_path.is_file() or not expected_sha or sha256_file(source_path) != expected_sha:
             raise ValueError(f"{split} pretraining source does not match the manifest.")
     token_streams = manifest.get("token_streams", {})
-    if token_streams.get("train", {}).get("sha256") != sha256_file(train_path):
-        raise ValueError("Training token stream does not match the dataset manifest.")
-    if token_streams.get("validation", {}).get("sha256") != sha256_file(valid_path):
-        raise ValueError("Validation token stream does not match the dataset manifest.")
     test_stream = token_streams.get("test", {})
     test_path = train_path.parent / str(test_stream.get("path", ""))
-    if not test_path.is_file() or test_stream.get("sha256") != sha256_file(test_path):
-        raise ValueError("A separate, verified held-out test token stream is required.")
+    declared_streams = (
+        ("train", train_path, token_streams.get("train", {})),
+        ("validation", valid_path, token_streams.get("validation", {})),
+        ("test", test_path, test_stream),
+    )
+    for split, stream_path, entry in declared_streams:
+        expected_source_sha = pretraining.get(split, {}).get("sha256")
+        if entry.get("path") != stream_path.name:
+            raise ValueError(f"{split} token stream path does not match the dataset manifest.")
+        if not stream_path.is_file() or entry.get("sha256") != sha256_file(stream_path):
+            raise ValueError(f"{split} token stream does not match the dataset manifest.")
+        if entry.get("source_sha256") != expected_source_sha:
+            raise ValueError(f"{split} token stream was not encoded from the manifested source text.")
+        if not isinstance(entry.get("source_bytes"), int) or entry["source_bytes"] < 1:
+            raise ValueError(f"{split} token stream is missing its exact encoded source byte count.")
     if len({train_path.resolve(), valid_path.resolve(), test_path.resolve()}) != 3:
         raise ValueError("Train, validation and test token streams must be separate files.")
     tokenizer_meta = manifest.get("tokenizer", {})
