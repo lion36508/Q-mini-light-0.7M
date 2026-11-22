@@ -1112,7 +1112,12 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
         dropout=0.0,
         seed=1234,
     )
+    import hashlib
+
     original = AddSubLanguageModel(config).eval()
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer_path.write_text('{"test": "tokenizer"}', encoding="utf-8")
+    tokenizer_sha = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     checkpoint_path = tmp_path / "trained-addsub.pt"
     torch.save(
         {
@@ -1120,7 +1125,7 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
             "step": 1,
             "config": config.to_dict(),
             "model": original.state_dict(),
-            "tokenizer_sha256": "a" * 64,
+            "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": "b" * 64,
             "run_contract": {"planned_steps": 2, "seed": config.seed},
         },
@@ -1129,7 +1134,13 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
 
     export_path = tmp_path / "model.qma"
     export_result = export_addsub_checkpoint(checkpoint_path, export_path)
-    restored, manifest = load_addsub_export(export_path)
+    restored, manifest = load_addsub_export(
+        export_path, tokenizer_path=tokenizer_path
+    )
+    wrong_tokenizer = tmp_path / "wrong-tokenizer.json"
+    wrong_tokenizer.write_text('{"test": "different"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="Tokenizer fingerprint"):
+        load_addsub_export(export_path, tokenizer_path=wrong_tokenizer)
     assert manifest["format"] == "qmini-addsub-packed-weights-v1"
     assert export_result["parameter_count"] == original.parameter_count()
     assert export_result["quantized_tensors"] > 0
