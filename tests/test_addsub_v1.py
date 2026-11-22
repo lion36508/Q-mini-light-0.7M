@@ -369,10 +369,10 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         "device_name": "cpu",
         "seed": 42,
     }
-    first = train_from_scratch(steps=1, **common)
+    first = train_from_scratch(steps=2, **common)
     checkpoint = output_dir / "checkpoint-step-000000001.pt"
     assert checkpoint.is_file()
-    assert first["steps"] == 1
+    assert first["steps"] == 2
     assert first["heldout_test_token_loss"] > 0
 
     second = train_from_scratch(steps=2, resume=checkpoint, **common)
