@@ -68,3 +68,25 @@ def cosine_warmup_lr(
     return peak_learning_rate * (
         minimum_ratio + (1.0 - minimum_ratio) * cosine
     )
+
+
+
+def assert_finite_training_state(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    step: int,
+) -> None:
+    """Fail immediately if an optimizer update corrupts model or moment state."""
+    for name, parameter in model.named_parameters():
+        if not bool(torch.isfinite(parameter).all()):
+            raise FloatingPointError(
+                f"Non-finite model parameter {name!r} after optimizer step {step}."
+            )
+        state = optimizer.state.get(parameter, {})
+        for state_name, value in state.items():
+            if isinstance(value, torch.Tensor) and value.is_floating_point():
+                if not bool(torch.isfinite(value).all()):
+                    raise FloatingPointError(
+                        f"Non-finite optimizer state {state_name!r} for {name!r} "
+                        f"after optimizer step {step}."
+                    )
