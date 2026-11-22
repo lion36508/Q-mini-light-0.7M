@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import torch
 
@@ -108,10 +110,22 @@ def pack_3bit_codes(codes: np.ndarray) -> bytes:
 def unpack_3bit_codes(payload: bytes, shape: tuple[int, ...]) -> np.ndarray:
     if not isinstance(payload, (bytes, bytearray, memoryview)):
         raise TypeError("Packed weights must be bytes-like.")
-    count = int(np.prod(shape, dtype=np.int64))
+    if not isinstance(shape, (tuple, list)) or not shape:
+        raise ValueError("Packed weight shape must be a non-empty tuple of dimensions.")
+    if any(
+        isinstance(dimension, bool)
+        or not isinstance(dimension, (int, np.integer))
+        or dimension < 0
+        for dimension in shape
+    ):
+        raise ValueError("Packed weight dimensions must be non-negative integers.")
+    count = math.prod(int(dimension) for dimension in shape)
     expected = (count * 3 + 7) // 8
     if len(payload) != expected:
         raise ValueError(f"Packed size mismatch: expected {expected}, got {len(payload)}.")
+    remainder_bits = (count * 3) % 8
+    if remainder_bits and payload and (int(payload[-1]) >> remainder_bits):
+        raise ValueError("Packed payload has non-zero unused padding bits.")
     output = np.empty(count, dtype=np.uint8)
     for index in range(count):
         bit_offset = index + index + index
