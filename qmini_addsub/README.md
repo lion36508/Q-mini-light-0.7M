@@ -16,7 +16,7 @@ Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated 
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
-- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint.
+- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v3 checkpoints.
 - Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
@@ -37,6 +37,29 @@ Do not use the PyTorch training graph as a production inference runtime. The tra
 | Existing code is preserved | Random initialization only |
 
 Never load a legacy Q2-v2 checkpoint into this package. Do not overwrite or migrate old model files.
+
+## Bring your own selected dataset (no download)
+
+The model does not require the repository's optional pinned corpus. After reviewing a dataset yourself, put three already-separated UTF-8 English text files in a folder:
+
+- `train.txt`
+- `validation.txt`
+- `test.txt`
+
+The files must be distinct and should already be split by document/source group to avoid leakage. The importer records the user-declared source, license, file hashes and split paths; it cannot independently prove that a source is human-authored or that plain-text splits have no document-level overlap. The required confirmation flag is your attestation, not an automatic license or authorship verification.
+
+Import only the local files (no network download is performed):
+
+    python scripts/import_qmini_addsub_dataset.py --pretrain-train /path/train.txt --pretrain-validation /path/validation.txt --pretrain-test /path/test.txt --pretrain-source "dataset name and revision" --pretrain-license "exact source license" --confirm-rights-and-human-data --output data/qmini_addsub_v1
+
+For supervised assistant training, add both `--sft-train` and `--sft-validation`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes the messages, rejects exact train/validation duplicates and records the declared source in `approved_instruction_sources`. Do not mark generated or unknown-provenance text as human-authored.
+
+Then build the tokenizer and streams. SFT data is optional at this stage; the tokenizer is trained on pretraining train text alone when no SFT train file exists:
+
+    python scripts/train_qmini_addsub_tokenizer.py
+    python scripts/encode_qmini_addsub_streams.py
+
+The existing pinned WikiText/OASST1/Dolly preparation command remains optional. No dataset is downloaded by importing the model package or by running CI. The Add/Sub Colab notebook has data import, tokenizer build, pretraining and SFT switches OFF by default.
 
 ## English training-data mix
 
@@ -67,7 +90,7 @@ Train the tokenizer using only training splits, then encode pretraining text:
 
 Start a new model from random initialization:
 
-    python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --output runs/qmini_addsub_v1_pretrain --device cuda --steps 2000
+    python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --output runs/qmini_addsub_v1_pretrain --device cpu --steps 2000
 
 After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
 
