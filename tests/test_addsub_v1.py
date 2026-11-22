@@ -13,7 +13,7 @@ from qmini_addsub.data import (
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel, AddSubLinear
-from qmini_addsub.optim import build_adamw, cosine_warmup_lr
+from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr
 from qmini_addsub.quantization import (
     codes_to_values,
     pack_3bit_codes,
@@ -894,3 +894,24 @@ def test_model_seed_is_deterministic_and_does_not_advance_global_rng():
         not torch.equal(tensor, other.state_dict()[name])
         for name, tensor in first.state_dict().items()
     )
+
+
+
+def test_finite_training_state_guard_reports_corrupted_parameters_and_moments():
+    model = torch.nn.Linear(4, 3)
+    optimizer = build_adamw(model, learning_rate=1e-3)
+    loss = model(torch.ones(2, 4)).square().mean()
+    loss.backward()
+    optimizer.step()
+    assert_finite_training_state(model, optimizer, step=1)
+
+    with torch.no_grad():
+        model.weight[0, 0] = float("nan")
+    with pytest.raises(FloatingPointError, match="model parameter"):
+        assert_finite_training_state(model, optimizer, step=2)
+
+    with torch.no_grad():
+        model.weight[0, 0] = 0.0
+        optimizer.state[model.weight]["exp_avg"][0, 0] = float("inf")
+    with pytest.raises(FloatingPointError, match="optimizer state"):
+        assert_finite_training_state(model, optimizer, step=3)
