@@ -70,7 +70,8 @@ The legacy profile and artifact format remain available for backward compatibili
 - `configs/` — legacy model profiles.
 - `scripts/` — data preparation, benchmark and development utilities.
 - `tests/` — unit and regression tests, including synthetic test fixtures.
-- `colab/` — three active entry points for the two model lines; historical experiments are preserved under `colab/archive/legacy-experiments/`.
+- `colab/` — the three supported notebooks only: Add/Sub from-scratch, legacy English CPU resume and existing-Drive CPU chat.
+- `tests/fixtures/legacy_colab/` — six read-only historical notebook fixtures used by CI regression tests; they are not supported training entry points.
 - `docs/` — architecture, training, evaluation, data provenance and project audit.
 
 ## Development checks
