@@ -1464,3 +1464,97 @@ def test_custom_dataset_import_rejects_identical_normalized_pretraining_splits(t
             confirm_english_data=True,
         )
     assert not (tmp_path / "dedupe-output").exists()
+
+
+
+def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(tmp_path):
+    import hashlib
+    import json
+
+    from tokenizers import AddedToken, Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+
+    from qmini_addsub.evaluate import evaluate_heldout_conversations
+    from qmini_addsub.train import CHECKPOINT_FORMAT
+
+    special = [
+        "<unk>", "<bos>", "<eos>", "<pad>",
+        "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    ]
+    vocab = {token: index for index, token in enumerate(special)}
+    vocab.update({"Hello": 8, "there": 9, "friend": 10})
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.add_special_tokens([AddedToken(token, special=True) for token in special[1:]])
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer.save(str(tokenizer_path))
+
+    config = AddSubConfig(
+        vocab_size=tokenizer.get_vocab_size(),
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=64,
+        dropout=0.0,
+        seed=775,
+    )
+    model = AddSubLanguageModel(config).eval()
+    checkpoint_path = tmp_path / "trained.pt"
+    torch.save(
+        {
+            "format": CHECKPOINT_FORMAT,
+            "step": 1,
+            "config": config.to_dict(),
+            "model": model.state_dict(),
+            "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+        },
+        checkpoint_path,
+    )
+
+    test_path = tmp_path / "sft_test.jsonl"
+    record = {
+        "source": "approved-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hello there friend"},
+        ],
+    }
+    test_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    manifest_path = tmp_path / "dataset_manifest.json"
+    manifest_path.write_text(
+        json.dumps({
+            "format": "qmini-addsub-data-v1",
+            "instruction_splits": {
+                "test": {
+                    "path": test_path.name,
+                    "sha256": hashlib.sha256(test_path.read_bytes()).hexdigest(),
+                },
+            },
+            "tokenizer": {
+                "sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+            },
+            "approved_instruction_sources": ["approved-source"],
+        }),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "evaluation"
+    summary = evaluate_heldout_conversations(
+        checkpoint_path=checkpoint_path,
+        tokenizer_path=tokenizer_path,
+        test_jsonl=test_path,
+        dataset_manifest_path=manifest_path,
+        output_dir=output_dir,
+        device_name="cpu",
+        max_new_tokens=3,
+    )
+    assert summary["test_records"] == 1
+    assert summary["checkpoint_sha256"] == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+    assert (output_dir / "heldout_responses.jsonl").is_file()
+    assert (output_dir / "heldout_summary.json").is_file()
