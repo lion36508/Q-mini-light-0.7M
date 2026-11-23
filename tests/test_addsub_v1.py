@@ -1448,9 +1448,9 @@ def test_custom_dataset_import_rejects_identical_normalized_pretraining_splits(t
     train = tmp_path / "train.txt"
     validation = tmp_path / "validation.txt"
     test = tmp_path / "test.txt"
-    train.write_text("Same English source document.\\n", encoding="utf-8")
-    validation.write_text("  Same English source document.  \\n", encoding="utf-8")
-    test.write_text("Different held-out English document.\\n", encoding="utf-8")
+    train.write_text("Same English source document.\n", encoding="utf-8")
+    validation.write_text("  Same English source document.  \n", encoding="utf-8")
+    test.write_text("Different held-out English document.\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="identical normalized split files"):
         import_user_dataset(
