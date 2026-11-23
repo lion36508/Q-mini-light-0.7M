@@ -93,7 +93,7 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     }
     counts = {name: {"articles": 0, "bytes": 0} for name in split_paths}
     dropped = {"source_error": 0, "empty_or_rejected": 0}
-    handles = {name: path.open("w", encoding="utf-8", newline="\\n")
+    handles = {name: path.open("w", encoding="utf-8", newline="\n")
                for name, path in split_paths.items()}
     try:
         for row in table.to_pylist():
@@ -107,7 +107,7 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
             if title_reason != "accepted" or content_reason != "accepted":
                 dropped["empty_or_rejected"] += 1
                 continue
-            article = f"{title}\\n{content}\\n"
+            article = f"{title}\n{content}\n"
             split = stable_split(
                 str(row["page_id"]), seed="qmini-simplewiki-20260301"
             )
