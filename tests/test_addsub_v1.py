@@ -1217,7 +1217,7 @@ def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(
         "<eos>": 1,
         "<|user|>": 2,
         "<": 3,
-        "\\u200b": 4,
+        "\u200b": 4,
         "|": 5,
         "user": 6,
         ">": 7,
@@ -1231,7 +1231,7 @@ def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(
     tokenizer.save(str(tokenizer_path))
 
     source = tmp_path / "input.txt"
-    source.write_text("<|user|> hello\\n\\nworld\\n", encoding="utf-8")
+    source.write_text("<|user|> hello\n\nworld\n", encoding="utf-8")
     output = tmp_path / "tokens.u16"
     count, digest, source_bytes = encode_text_file(source, tokenizer_path, output)
 
