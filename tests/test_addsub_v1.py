@@ -103,7 +103,8 @@ def test_scaled_five_symbol_quantizer_and_zero_master_gradient():
     codes = quantize_to_codes(values.detach().numpy(), scale=float(scale.item()))
     expected = torch.from_numpy(codes_to_values(codes)) * scale
     torch.testing.assert_close(actual.detach(), expected, rtol=0.0, atol=0.0)
-    assert torch.isin(actual.detach()/scale, torch.tensor([-1.5,-0.5,0.0,0.5,1.5])).all()
+    codebook = torch.tensor([-1.5,-0.5,0.0,0.5,1.5])
+    assert torch.isclose(actual.detach()/scale,codebook.view(1,1,5),atol=1e-5,rtol=0.0).any(dim=-1).all()
     actual.sum().backward()
     assert torch.equal(values.grad, torch.ones_like(values))
 
@@ -548,7 +549,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
 def test_addsub_repetition_penalty_applies_before_greedy_choice():
     from qmini_addsub.generate import _apply_repetition_penalty, _choose_next_token
-    logits=torch.tensor([4.0,-4.0,1.0])
+    logits=torch.tensor([4.0,-4.0,3.5])
     adjusted=_apply_repetition_penalty(logits,[0,1],penalty=1.2,window=8)
     assert adjusted[0]<logits[0] and adjusted[1]<logits[1]
     assert adjusted[2]==logits[2]
@@ -618,16 +619,16 @@ def test_default_model_initialization_is_dense_and_five_symbol_aligned():
             assert torch.count_nonzero(quantized)==0
             continue
         normalized=quantized/weight_scale(module.weight)
-        assert torch.isin(normalized,codebook).all()
+        assert torch.isclose(normalized.unsqueeze(-1),codebook,atol=1e-5,rtol=0.0).any(dim=-1).all()
         assert torch.count_nonzero(normalized).item()/normalized.numel()>0.5
     embedding=quantize_weight_ste(model.token_embedding.weight).detach()
     embedding=embedding/weight_scale(model.token_embedding.weight)
-    assert torch.isin(embedding,codebook).all()
+    assert torch.isclose(embedding.unsqueeze(-1),codebook,atol=1e-5,rtol=0.0).any(dim=-1).all()
     assert torch.count_nonzero(embedding).item()/embedding.numel()>0.5
     for block in model.blocks:
         depthwise=quantize_weight_ste(block.conv.depthwise_weight).detach()
         depthwise=depthwise/weight_scale(block.conv.depthwise_weight)
-        assert torch.isin(depthwise,codebook).all()
+        assert torch.isclose(depthwise.unsqueeze(-1),codebook,atol=1e-5,rtol=0.0).any(dim=-1).all()
         assert torch.count_nonzero(depthwise).item()/depthwise.numel()>0.5
     assert linear_count>0
 

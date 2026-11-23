@@ -105,6 +105,7 @@ def export_addsub_checkpoint(
             else:
                 scale = 1.0
                 codes = quantize_to_codes(values)
+            packed = pack_3bit_codes(codes)
             entry = {
                 "name": name, "shape": list(values.shape),
                 "count": int(values.size), "offset": len(packed_weights),

@@ -71,7 +71,7 @@ def pack_3bit_codes(codes:np.ndarray)->bytes:
 def unpack_3bit_codes(payload:bytes,shape:tuple[int,...])->np.ndarray:
     if not isinstance(payload,(bytes,bytearray,memoryview)): raise TypeError("Packed weights must be bytes-like.")
     if not isinstance(shape,(tuple,list)) or not shape: raise ValueError("Shape must be non-empty.")
-    if any(isinstance(d,bool) or not isinstance(d,(int,np.integer)) or d<0 for d in shape): raise ValueError("Dimensions must be non-negative integers.")
+    if any(isinstance(d,bool) or not isinstance(d,(int,np.integer)) or d<0 for d in shape): raise ValueError("Packed weight dimensions must be non-negative integers.")
     count=math.prod(int(d) for d in shape); expected=(count*3+7)//8
     if len(payload)!=expected: raise ValueError(f"Packed size mismatch: expected {expected}, got {len(payload)}.")
     rem=(count*3)%8
