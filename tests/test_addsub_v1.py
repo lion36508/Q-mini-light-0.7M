@@ -393,14 +393,31 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert first["steps"] == 2
     assert first["heldout_test_token_loss"] > 0
 
+    import shutil
+
+    # Simulate a crash after the step-2 metrics row was appended but before
+    # checkpoint step 2 was committed. The recovery folder contains only the
+    # step-1 checkpoint and the too-new metrics file, just like a real run.
     resumed_run_dir = tmp_path / "resumed-run"
+    resumed_run_dir.mkdir()
+    recovery_checkpoint = resumed_run_dir / checkpoint.name
+    shutil.copy2(checkpoint, recovery_checkpoint)
+    shutil.copy2(output_dir / "metrics.jsonl", resumed_run_dir / "metrics.jsonl")
     resumed_common = {**common, "output_dir": resumed_run_dir}
-    second = train_from_scratch(steps=2, resume=checkpoint, **resumed_common)
+    second = train_from_scratch(
+        steps=2, resume=recovery_checkpoint, **resumed_common
+    )
     assert second["steps"] == 2
     final_pretrain_checkpoint = output_dir / "checkpoint-step-000000002.pt"
     resumed_pretrain_checkpoint = resumed_run_dir / "checkpoint-step-000000002.pt"
     assert final_pretrain_checkpoint.is_file()
     assert resumed_pretrain_checkpoint.is_file()
+    recovered_metric_steps = [
+        json.loads(line)["step"]
+        for line in (resumed_run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert recovered_metric_steps == [1, 2]
     assert second["heldout_test_sha256"] == streams["test"]["sha256"]
     from qmini_addsub.generate import load_addsub_model
 
@@ -477,25 +494,38 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert sft_state["format"] == "qmini-addsub-sft-v4"
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
+    resumed_sft_dir = tmp_path / "sft-resumed"
+    resumed_sft_dir.mkdir()
+    recovery_sft_checkpoint = resumed_sft_dir / sft_checkpoint.name
+    shutil.copy2(sft_checkpoint, recovery_sft_checkpoint)
+    # SFT validates at the end of this two-step smoke run. Reusing its step-2
+    # metrics with a step-1 checkpoint exercises the write-before-checkpoint crash.
+    shutil.copy2(tmp_path / "sft" / "sft_metrics.jsonl", resumed_sft_dir / "sft_metrics.jsonl")
     resumed_sft = fine_tune_from_addsub_checkpoint(
         base_checkpoint=final_pretrain_checkpoint,
         tokenizer_path=tokenizer_path,
         train_jsonl=sft_train,
         valid_jsonl=sft_valid,
         test_jsonl=sft_test,
-        output_dir=tmp_path / "sft-resumed",
+        output_dir=resumed_sft_dir,
         steps=2,
         batch_size=1,
         save_every=1,
         device_name="cpu",
         seed=43,
-        resume=sft_checkpoint,
+        resume=recovery_sft_checkpoint,
     )
     assert resumed_sft["steps"] == 2
     assert resumed_sft["final_validation_response_loss"] > 0
-    resumed_sft_checkpoint = tmp_path / "sft-resumed" / "sft-checkpoint-step-000000002.pt"
+    resumed_sft_checkpoint = resumed_sft_dir / "sft-checkpoint-step-000000002.pt"
     full_sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000002.pt"
     assert resumed_sft_checkpoint.is_file()
+    recovered_sft_metric_steps = [
+        json.loads(line)["step"]
+        for line in (resumed_sft_dir / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert recovered_sft_metric_steps == [2]
     full_sft_state = torch.load(full_sft_checkpoint, map_location="cpu", weights_only=True)
     resumed_sft_state = torch.load(resumed_sft_checkpoint, map_location="cpu", weights_only=True)
     for name, tensor in full_sft_state["model"].items():
