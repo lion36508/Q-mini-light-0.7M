@@ -15,13 +15,13 @@ Package: `qmini/`. Legacy artifacts and checkpoints stay in their existing forma
 
 Package: `qmini_addsub/`. It must never load legacy `qmini/` weights or artifacts. The current implementation has the training/data pipeline and an additive projection reference primitive; the complete full-graph multiply-free inference runtime and export are still under development. It is not yet a trained or deployable assistant.
 
-## Archive policy
+## Legacy regression fixtures
 
-Older notebook variants were moved, without changing their contents, to [the legacy experiment archive](archive/README.md). They include historical Hindi/TinyStories runs, repeated English V-series notebooks, initial build/runner notebooks and teacher-distillation experiments. They are retained for historical links and checkpoint provenance only; do not start new training from them.
+Historical notebook snapshots used by CI are stored under
+`tests/fixtures/legacy_colab/`, outside the active Colab folder. They are kept
+only to protect legacy compatibility tests. Do not use them as current training
+instructions.
 
-## Data hygiene
-
-- The old model keeps its separate document cleaner, deduplication and source-manifest path.
-- Add/Sub v1 uses pinned sources, strict OASST1 review/deletion/synthetic/rank filters, Dolly record hygiene checks, exact-content deduplication and whole-conversation group splitting.
-- The Add/Sub text cleaner normalizes Unicode and whitespace, rejects email addresses, credential-like secrets and clearly labelled phone-contact strings, and records rejection reasons. Source metadata—not a text heuristic—is the English-language authority.
-- Synthetic/random fixtures under `tests/`, `scripts/learning_proof.py` and benchmark utilities are development-only. They are never production training data.
+Only the three notebooks linked above are supported entry points. The legacy
+and Add/Sub model packages, tokenizers, datasets and checkpoints must remain
+separate.
