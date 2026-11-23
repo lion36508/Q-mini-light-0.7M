@@ -491,7 +491,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v4"
+    assert sft_state["format"] == "qmini-addsub-sft-v5"
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
     resumed_sft_dir = tmp_path / "sft-resumed"
@@ -541,9 +541,12 @@ def test_swglu_experts_and_bounded_residual_gates_are_active():
     config = AddSubConfig()
     model = AddSubLanguageModel(config)
     block = model.blocks[0]
-    assert block.conv_residual_logit.item() == 0.0
-    assert block.state_residual_logit.item() == 0.0
-    assert block.expert_residual_logit.item() == 0.0
+    for gate in (
+        block.conv_residual_logit,
+        block.state_residual_logit,
+        block.expert_residual_logit,
+    ):
+        assert torch.sigmoid(gate).item() == pytest.approx(0.1, abs=1e-6)
     for expert in block.experts.experts:
         assert expert.up_gate.out_features == config.d_hidden * 2
         assert expert.down.in_features == config.d_hidden
