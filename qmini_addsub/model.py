@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -181,6 +183,7 @@ class SparseTop1Experts(nn.Module):
     def __init__(self, config: AddSubConfig) -> None:
         super().__init__()
         self.n_experts = config.n_experts
+        self.router_z_loss_coef = config.router_z_loss_coef
         self.router = AddSubLinear(config.d_model, config.n_experts)
         self.experts = nn.ModuleList(
             [SwiGLUExpert(config) for _ in range(config.n_experts)]
@@ -190,28 +193,39 @@ class SparseTop1Experts(nn.Module):
         self,
         inputs: torch.Tensor,
         token_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        logits = self.router(inputs)
-        probabilities = torch.softmax(logits.float(), dim=-1)
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits = self.router(inputs).float()
+        probabilities = torch.softmax(logits, dim=-1)
         selected = torch.argmax(logits, dim=-1)
         selected_probability = probabilities.gather(-1, selected.unsqueeze(-1))
 
+        flat_logits = logits.reshape(-1, self.n_experts)
+        flat_probabilities = probabilities.reshape(-1, self.n_experts)
+        flat_selected_valid = selected.reshape(-1)
         if token_mask is None:
-            valid_probabilities = probabilities.reshape(-1, self.n_experts)
-            valid_selected = selected.reshape(-1)
+            valid_logits = flat_logits
+            valid_probabilities = flat_probabilities
         else:
             if token_mask.shape != inputs.shape[:2]:
                 raise ValueError("MoE token_mask must match [batch, sequence] inputs.")
             valid = token_mask.to(device=inputs.device, dtype=torch.bool).reshape(-1)
             if not bool(valid.any()):
                 raise ValueError("MoE token_mask must include at least one valid token.")
-            valid_probabilities = probabilities.reshape(-1, self.n_experts)[valid]
-            valid_selected = selected.reshape(-1)[valid]
+            valid_logits = flat_logits[valid]
+            valid_probabilities = flat_probabilities[valid]
+            flat_selected_valid = flat_selected_valid[valid]
 
-        assignments = F.one_hot(valid_selected, num_classes=self.n_experts).float()
+        assignments = F.one_hot(
+            flat_selected_valid, num_classes=self.n_experts
+        ).to(dtype=torch.float32)
         load = assignments.mean(dim=0)
         importance = valid_probabilities.mean(dim=0)
-        auxiliary_loss = self.n_experts * torch.sum(load * importance)
+        balance_loss = self.n_experts * torch.sum(load * importance)
+
+        # The Switch-style z-loss prevents router logits from growing without
+        # bound. It is computed only over real (non-padding) tokens.
+        log_partition = torch.logsumexp(valid_logits, dim=-1)
+        router_z_loss = log_partition.square().mean()
 
         flat_inputs = inputs.reshape(-1, inputs.shape[-1])
         flat_selected = selected.reshape(-1)
@@ -227,7 +241,12 @@ class SparseTop1Experts(nn.Module):
             expert_probability = flat_probability.index_select(0, token_indices)
             expert_output = expert(expert_inputs) * expert_probability
             output = output.index_copy(0, token_indices, expert_output)
-        return output.reshape_as(inputs), auxiliary_loss
+        return (
+            output.reshape_as(inputs),
+            balance_loss,
+            router_z_loss,
+            load.detach(),
+        )
 
 
 class AddSubBlock(nn.Module):
@@ -245,26 +264,27 @@ class AddSubBlock(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         # Bounded, learnable branch strengths stabilize the residual stream
         # without hard clipping activations or zeroing gradients at a threshold.
-        self.conv_residual_logit = nn.Parameter(torch.zeros(()))
-        self.state_residual_logit = nn.Parameter(torch.zeros(()))
-        self.expert_residual_logit = nn.Parameter(torch.zeros(()))
+        initial_logit = math.log(config.residual_init / (1.0 - config.residual_init))
+        self.conv_residual_logit = nn.Parameter(torch.tensor(initial_logit))
+        self.state_residual_logit = nn.Parameter(torch.tensor(initial_logit))
+        self.expert_residual_logit = nn.Parameter(torch.tensor(initial_logit))
 
     def forward(
         self,
         inputs: torch.Tensor,
         token_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         conv_update = self.dropout(self.conv(self.conv_norm(inputs)))
         outputs = inputs + torch.sigmoid(self.conv_residual_logit) * conv_update
 
         state_update = self.dropout(self.state_space(self.state_norm(outputs)))
         outputs = outputs + torch.sigmoid(self.state_residual_logit) * state_update
 
-        expert_output, auxiliary_loss = self.experts(
+        expert_output, balance_loss, router_z_loss, router_load = self.experts(
             self.expert_norm(outputs), token_mask=token_mask
         )
         outputs = outputs + torch.sigmoid(self.expert_residual_logit) * self.dropout(expert_output)
-        return outputs, auxiliary_loss
+        return outputs, balance_loss, router_z_loss, router_load
 
     def step(
         self,
@@ -283,7 +303,7 @@ class AddSubBlock(nn.Module):
         )
         outputs = outputs + torch.sigmoid(self.state_residual_logit) * state_update
 
-        expert_output, _ = self.experts(self.expert_norm(outputs))
+        expert_output, _, _, _ = self.experts(self.expert_norm(outputs))
         outputs = outputs + torch.sigmoid(self.expert_residual_logit) * expert_output
         return outputs, (conv_history, state)
 
@@ -350,15 +370,26 @@ class AddSubLanguageModel(nn.Module):
 
         embedding_weight = quantize_weight_ste(self.token_embedding.weight)
         hidden = F.embedding(input_ids, embedding_weight)
-        auxiliary_losses = []
+        balance_losses = []
+        router_z_losses = []
+        router_loads = []
         for block in self.blocks:
-            hidden, aux_loss = block(hidden, token_mask=attention_mask)
-            auxiliary_losses.append(aux_loss)
+            hidden, balance_loss, router_z_loss, router_load = block(
+                hidden, token_mask=attention_mask
+            )
+            balance_losses.append(balance_loss)
+            router_z_losses.append(router_z_loss)
+            router_loads.append(router_load)
 
         tied_output_weight = quantize_weight_ste(self.token_embedding.weight)
         logits = F.linear(self.final_norm(hidden), tied_output_weight, self.final_bias)
-        auxiliary_loss = torch.stack(auxiliary_losses).mean()
-        return {"logits": logits, "aux_loss": auxiliary_loss}
+        return {
+            "logits": logits,
+            "aux_loss": torch.stack(balance_losses).mean(),
+            "router_z_loss": torch.stack(router_z_losses).mean(),
+            # [layer, expert], with each row summing to one. Diagnostic only.
+            "router_load": torch.stack(router_loads),
+        }
 
     def init_cache(
         self,
