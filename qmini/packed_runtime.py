@@ -42,53 +42,10 @@ def _unpack_rows(
         codebook = (-2.0, -1.0, 1.0, 2.0)
     elif format_version == 2:
         codebook = (-1.0, -0.5, 0.5, 1.0)
-    elif format_version == 3:
-        codebook = (-1.0, 0.0, 0.5, 1.0)
     else:
         raise ValueError(f"Unsupported Q2 format version: {format_version!r}.")
     values = np.asarray(codebook, dtype=np.float32)[codes]
     return values * selected_scales
-
-
-def _resolve_q2_archive_version(metadata: dict[str, Any]) -> int:
-    """Validate archive format and immutable Q2 codebook metadata."""
-    archive_format = metadata.get("format")
-    if archive_format not in {
-        "qmini-packed-v1", "qmini-packed-v2", "qmini-packed-v3"
-    }:
-        raise ValueError("Unsupported Q-Mini packed export format.")
-    version = int(archive_format.rsplit("v", 1)[1])
-    if version == 1:
-        return version
-
-    if version == 2:
-        codebook = {"00": -1.0, "01": -0.5, "10": 0.5, "11": 1.0}
-        contract = {
-            "version": 2,
-            "codebook": codebook,
-            "row_scale": "2 * mean(abs(original_output_row))",
-            "all_zero_row_scale": 0.0,
-        }
-    else:
-        codebook = {"00": -1.0, "01": 0.0, "10": 0.5, "11": 1.0}
-        contract = {
-            "version": 3,
-            "codebook": codebook,
-            "row_scale": "max(abs(original_output_row))",
-            "all_zero_row_scale": 0.0,
-            "thresholds": {
-                "negative_one": "w_norm < -0.5",
-                "zero": "-0.5 <= w_norm < 0.25",
-                "positive_half": "0.25 <= w_norm < 0.75",
-                "positive_one": "w_norm >= 0.75",
-            },
-            "zero_symbol": "01",
-        }
-    if metadata.get("q2_contract") != contract or metadata.get("quaternary_codes") != codebook:
-        raise ValueError(
-            f"Q2-v{version} archive contract/codebook metadata is missing or invalid."
-        )
-    return version
 
 
 def packed_embedding_lookup(module: nn.Module, token_ids: torch.Tensor) -> torch.Tensor:
@@ -199,14 +156,23 @@ def load_packed_model(
         if "metadata_json" not in archive:
             raise ValueError("Packed Q-Mini archive is missing metadata_json.")
         metadata = json.loads(str(archive["metadata_json"].item()))
-        q2_version = _resolve_q2_archive_version(metadata)
+        archive_format = metadata.get("format")
+        if archive_format not in {"qmini-packed-v1", "qmini-packed-v2"}:
+            raise ValueError("Unsupported Q-Mini packed export format.")
+        q2_version = 1 if archive_format == "qmini-packed-v1" else 2
+        if q2_version == 2:
+            expected_contract = {
+                "version": 2,
+                "codebook": {"00": -1.0, "01": -0.5, "10": 0.5, "11": 1.0},
+                "row_scale": "2 * mean(abs(original_output_row))",
+                "all_zero_row_scale": 0.0,
+            }
+            if (
+                metadata.get("q2_contract") != expected_contract
+                or metadata.get("quaternary_codes") != expected_contract["codebook"]
+            ):
+                raise ValueError("Q2-v2 archive contract/codebook metadata is missing or invalid.")
         config = QMiniConfig.from_dict(metadata["config"])
-        expected_quantization = "q2-v2" if q2_version in {1, 2} else "q2-v3"
-        if q2_version in {2, 3} and config.quantization_version != expected_quantization:
-            raise ValueError(
-                f"Q2-v{q2_version} archive config must declare "
-                f"quantization_version={expected_quantization!r}."
-            )
         if expected_config is not None and config.to_dict() != expected_config.to_dict():
             raise ValueError("Packed model config does not match config.json.")
 
@@ -252,8 +218,6 @@ def load_packed_model(
                     raise ValueError(f"Non-finite or invalid Q2 scale in {name}.")
                 if not isinstance(parent, (QLinear, QEmbedding, CausalGatedDepthwiseConv)):
                     raise ValueError(f"Unsupported Q2 parameter owner for {name}.")
-                if isinstance(parent, QEmbedding) and not config.quantize_embeddings:
-                    raise ValueError("Q2 embedding payload conflicts with quantize_embeddings=false.")
                 if isinstance(parent, CausalGatedDepthwiseConv) and leaf != "depthwise_weight":
                     raise ValueError(f"Unexpected convolution Q2 parameter: {name}.")
                 if isinstance(parent, CausalGatedDepthwiseConv) and in_features != parent.kernel_size:
@@ -281,25 +245,6 @@ def load_packed_model(
                 parent._parameters[leaf] = nn.Parameter(
                     torch.from_numpy(value), requires_grad=False
                 )
-            elif kind == "fp16_matrix":
-                if (
-                    q2_version != 3
-                    or config.quantize_embeddings
-                    or not isinstance(parent, QEmbedding)
-                    or leaf != "weight"
-                    or parameter.ndim < 2
-                ):
-                    raise ValueError(
-                        "FP16 matrix payload is permitted only for the unquantized Q2-v3 embedding."
-                    )
-                value = np.asarray(archive[spec["value_key"]])
-                if value.dtype != np.float16 or value.shape != shape:
-                    raise ValueError(f"Invalid FP16 embedding matrix for {name}.")
-                if not np.isfinite(value).all():
-                    raise ValueError(f"Non-finite FP16 embedding matrix for {name}.")
-                parent._parameters[leaf] = nn.Parameter(
-                    torch.from_numpy(value), requires_grad=False
-                )
             else:
                 raise ValueError(f"Unknown packed tensor encoding for {name}: {kind!r}")
 
@@ -314,17 +259,7 @@ def load_packed_model(
     model._qmini_original_parameter_count = config.estimated_parameter_count()
     if any(parameter.device.type == "meta" for parameter in model.parameters()):
         raise RuntimeError("Packed loader left an unmaterialized meta parameter.")
-    dense_matrices = [
-        (name, parameter)
-        for name, parameter in model.named_parameters()
-        if parameter.ndim >= 2
-        and not (
-            name == "embedding.weight"
-            and not config.quantize_embeddings
-            and parameter.dtype == torch.float16
-        )
-    ]
-    if dense_matrices:
+    if any(parameter.ndim >= 2 for parameter in model.parameters()):
         raise RuntimeError("Packed loader unexpectedly materialized a dense matrix parameter.")
     return model
 
@@ -337,14 +272,23 @@ def load_packed_state_into_trainable_model(
     archive_path = Path(path)
     with np.load(archive_path, allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata_json"].item()))
-        q2_version = _resolve_q2_archive_version(metadata)
+        archive_format = metadata.get("format")
+        if archive_format not in {"qmini-packed-v1", "qmini-packed-v2"}:
+            raise ValueError("Unsupported Q-Mini packed export format.")
+        q2_version = 1 if archive_format == "qmini-packed-v1" else 2
+        if q2_version == 2:
+            expected_contract = {
+                "version": 2,
+                "codebook": {"00": -1.0, "01": -0.5, "10": 0.5, "11": 1.0},
+                "row_scale": "2 * mean(abs(original_output_row))",
+                "all_zero_row_scale": 0.0,
+            }
+            if (
+                metadata.get("q2_contract") != expected_contract
+                or metadata.get("quaternary_codes") != expected_contract["codebook"]
+            ):
+                raise ValueError("Q2-v2 archive contract/codebook metadata is missing or invalid.")
         config = QMiniConfig.from_dict(metadata["config"])
-        expected_quantization = "q2-v2" if q2_version in {1, 2} else "q2-v3"
-        if q2_version in {2, 3} and config.quantization_version != expected_quantization:
-            raise ValueError(
-                f"Q2-v{q2_version} packed initialization config must declare "
-                f"quantization_version={expected_quantization!r}."
-            )
         if config.to_dict() != model.config.to_dict():
             raise ValueError("Packed initialization config differs from the trainable model.")
         parameters = dict(model.named_parameters())
@@ -363,8 +307,6 @@ def load_packed_state_into_trainable_model(
                 if shape != tuple(parameter.shape):
                     raise ValueError(f"Packed initialization shape mismatch for {name}.")
                 if spec["kind"] == "q2":
-                    if name == "embedding.weight" and not config.quantize_embeddings:
-                        raise ValueError("Q2 embedding payload conflicts with quantize_embeddings=false.")
                     packed = np.asarray(archive[spec["packed_key"]], dtype=np.uint8)
                     scales = np.asarray(archive[spec["scale_key"]], dtype=np.float32)
                     if not np.isfinite(scales).all() or (
@@ -375,21 +317,8 @@ def load_packed_state_into_trainable_model(
                         packed, scales, math.prod(shape[1:]),
                         format_version=q2_version,
                     ).reshape(shape)
-                elif spec["kind"] in {"fp16", "fp16_matrix"}:
-                    if spec["kind"] == "fp16_matrix" and (
-                        q2_version != 3
-                        or config.quantize_embeddings
-                        or name != "embedding.weight"
-                        or len(shape) < 2
-                    ):
-                        raise ValueError(
-                            "Invalid FP16 embedding matrix in packed initialization."
-                        )
-                    if spec["kind"] == "fp16" and len(shape) >= 2:
-                        raise ValueError(f"Invalid FP16 vector matrix shape for {name}.")
-                    value = np.asarray(
-                        archive[spec["value_key"]], dtype=np.float32
-                    )
+                elif spec["kind"] == "fp16":
+                    value = np.asarray(archive[spec["value_key"]], dtype=np.float32)
                 else:
                     raise ValueError(f"Unknown packed initialization encoding: {spec['kind']!r}")
                 if value.shape != shape or not np.isfinite(value).all():
