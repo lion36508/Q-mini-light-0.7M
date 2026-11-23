@@ -1,8 +1,10 @@
-# Q-Mini Colab model build and training lifecycle
+# Q-Mini legacy Colab build and training lifecycle (historical)
+
+> **Status:** This document describes the legacy Q2-v2 workflow. It is retained for history and regression context, not as the current Add/Sub training guide. Its notebook snapshots are read-only fixtures under `../tests/fixtures/legacy_colab/`. Use `../colab/README.md` for the supported entry points.
 
 ## Stage A — build the model package (training stays off)
 
-Open [QMini Training-Ready Model Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Ready_Build.ipynb).
+Open [QMini Training-Ready Model Builder](../tests/fixtures/legacy_colab/QMini_Training_Ready_Build.ipynb).
 
 Place reviewed corpus files in `MyDrive/QMini-Light-0.7M/datasets/`. The notebook prepares the byte-level BPE tokenizer, train/validation token streams and loss masks, then builds the random-initialized Q2-v2 model. It bundles the current `qmini/` source tree—including the training loop and checkpoint manager—under `training_runtime/`.
 
@@ -20,7 +22,7 @@ The package is stored at `MyDrive/QMini-Light-0.7M/training_ready/QMini-Light-0.
 
 ## Stage B — start/resume training separately
 
-Open [QMini Training Runner](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Training_Runner.ipynb). It imports the exact training code bundled with the selected package and checks the source-file hashes, model manifest, tokenizer, dataset, Q2 archive and GPU memory.
+Open [QMini Training Runner](../tests/fixtures/legacy_colab/QMini_Training_Runner.ipynb). It imports the exact training code bundled with the selected package and checks the source-file hashes, model manifest, tokenizer, dataset, Q2 archive and GPU memory.
 
 Training is off by default. Set `START_TRAINING = True` only when ready. The runner creates its working checkpoint on Colab's local disk and uses the Drive folder `training_state/` as the durable checkpoint mirror.
 

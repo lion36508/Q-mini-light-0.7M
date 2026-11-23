@@ -175,3 +175,15 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 - कोई model weight, user checkpoint, dataset cache या existing Drive artifact delete नहीं किया गया.
 
 यह cleanup code/data hygiene को बेहतर बनाता है; Add/Sub v1 का full multiply-free inference graph, export/loader और वास्तविक trained checkpoint अभी अलग acceptance gates हैं.
+
+
+## 12. 23 नवम्बर 2026 — repository cleanup और notebook/image audit
+
+- पूरी Git tree (recursive, untruncated) में कोई standalone image asset नहीं मिला: `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`, bitmap या icon फ़ाइलें tracked नहीं थीं। जाँचे गए notebooks में embedded image outputs/attachments भी नहीं मिले। इसलिए इस cleanup में कोई उपयोगी image asset delete नहीं किया गया; एक हटाए गए पुराने notebook में केवल बाहरी Google Colab badge URL था।
+- 15 पुराने, duplicate या project direction से बाहर notebooks हटाए गए: चार Hindi variants, पुराने duplicate English trainers, T4/GPU V6–V8 experiments, पुराने optimized trainers, distillation और obsolete personal-assistant experiment। इससे लगभग 1,018,970 bytes (0.97 MiB) tracked notebook content हटता है।
+- छह पुराने notebooks जिन्हें अभी regression tests और notebook-validation workflow पढ़ते हैं, उन्हें `colab/archive/` से `tests/fixtures/legacy_colab/` में स्थानांतरित किया गया। उनके content/blob IDs सुरक्षित हैं; वे अब active Colab entry points नहीं हैं।
+- `colab/` में केवल तीन supported notebooks रखे गए: Add/Sub from-scratch, English CPU resume और existing-Drive CPU chat।
+- `qmini/` और `qmini_addsub/` के model implementation files, model tests, data-preparation scripts और configuration profiles को इस cleanup में नहीं बदला गया। 5B profile सहित सभी configs सुरक्षित रखे गए।
+- Regression tests और GitHub Actions notebook validator को नए fixture path पर अपडेट किया गया ताकि सफ़ाई के बाद CI coverage बनी रहे।
+
+यह notebook/structure cleanup है; model architecture, training data या model weights में कोई बदलाव नहीं किया गया।
