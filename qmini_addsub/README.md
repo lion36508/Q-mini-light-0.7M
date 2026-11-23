@@ -6,6 +6,18 @@ An independent next-generation model line inside the same repository. It borrows
 
 Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
 
+## Add/Sub v2 algorithm-stability update
+
+The training algorithm now includes three explicit stability controls while preserving the 710,676-parameter default architecture and the five-symbol codebook:
+
+- Residual branch gates initialize at **0.1**, not 0.5. The convolution, state-space and expert branches begin as small residual corrections and can learn stronger contributions from data.
+- Sparse Top-1 routing keeps the existing load-balancing objective and adds a separately weighted **router z-loss** on the log-partition. This discourages uncontrolled router-logit growth without hiding the coefficient inside the load-balancing term.
+- Every training/SFT metric row records **per-layer expert assignment fractions** plus the two router losses. Padding tokens are excluded from the balance and z-loss statistics.
+
+The pretraining and SFT checkpoint format identifiers are bumped so a run made with the older loss contract cannot be resumed accidentally. The offline exporter can still read prior shape-compatible checkpoint formats for conversion; this does not make their training trajectories interchangeable.
+
+These changes are algorithmic stability measures, not a claim of improved language quality. That requires a real, reviewed English corpus and held-out validation after training.
+ 
 ## Implementation status
 
 **Implemented in this branch**
