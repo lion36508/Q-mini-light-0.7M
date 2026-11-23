@@ -125,3 +125,8 @@ The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown a
 - WikiText `@-@` and spaces before punctuation are normalized. System prompt is `You are Q-Mini.`; reference decoding uses configurable repetition penalty, default 1.18 over recent 64 tokens.
 - Packed archive v2 records one scale per tensor and keeps v1 read compatibility. It is not a complete integer-only Android runtime.
 - New model has 760,340 parameters; old 710,676-parameter checkpoints remain preserved but require fresh training under the new tokenizer and optimizer contract.
+
+
+## 11. 23 November 2026 — Simple English pretraining source
+
+The default pinned pretraining source is the human-authored Simple English Wikipedia snapshot from 2026-03-01. It has 276,302 articles in the published card; the 439,202,943-byte parquet file is pinned by revision and SHA-256. Only `title` and `content_no_link` are used. Generated importance labels are not training targets or text. Stable page-ID hashing makes 90/5/5 train/validation/test splits. The source is CC-BY-SA-3.0 and requires attribution/share-alike review. The old WikiText helper remains available in source for historical compatibility but is no longer the default pinned pretraining corpus.

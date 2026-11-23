@@ -100,3 +100,6 @@ For the history, confirmed defects, data-quality policy and cleanup decisions, r
 ### Add/Sub scaled trainability revision
 
 The Add/Sub development branch now includes scaled five-symbol QAT, dense initialization, 0.01 matrix decay, a 1,024-token chat-aware ByteLevel tokenizer and repetition penalty. It is a new 760,340-parameter identity; the prior 710,676-parameter model and Drive artifacts are preserved. Response quality still requires fresh training and held-out English evaluation.
+
+
+The Add/Sub default corpus preparation now uses a hash-pinned Simple English Wikipedia snapshot (human-authored text only; model-generated importance labels are ignored) with leakage-safe page-ID splits. Its CC-BY-SA-3.0 obligations are documented and must be reviewed before enabling corpus preparation.

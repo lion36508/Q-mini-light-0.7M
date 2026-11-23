@@ -151,3 +151,8 @@ Synthetic tests and benchmarks remain outside the production corpus. A cleaning 
 Dense Kaiming-normal master weights now use per-tensor scaled five-symbol STE (scale = 1.4 × mean absolute weight). Zero is exact and STE gradients remain live through zero master weights. Matrix weight decay is 0.01. The 1,024-token ByteLevel tokenizer samples up to 64 MiB from pretraining training text and includes all SFT training messages so conversational terms influence BPE merges. Validation and test are never used for tokenizer training.
 
 WikiText `@-@` and spaces before punctuation are normalized. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.
+
+
+### Pretraining corpus selection
+
+The default pinned pretraining source is Simple English Wikipedia, dump 2026-03-01, from `juno-labs/simple_wikipedia` at revision `e95aee4ada4de4ec556d93505e577b29f9ff9a08`. The 439,202,943-byte Parquet file is SHA-256 checked before use. Only the human-authored `content_no_link` article text and titles are used; the dataset's model-generated `importance` labels are ignored. Article page IDs are split deterministically 90/5/5 for train/validation/test. The dataset is CC-BY-SA-3.0 and requires attribution/share-alike review.

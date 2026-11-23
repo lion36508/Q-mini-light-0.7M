@@ -37,6 +37,12 @@ DOLLY_REPOSITORY = "databricks/databricks-dolly-15k"
 DOLLY_REVISION = "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a"
 DOLLY_FILE = "databricks-dolly-15k.jsonl"
 
+SIMPLE_WIKI_REPOSITORY = "juno-labs/simple_wikipedia"
+SIMPLE_WIKI_REVISION = "e95aee4ada4de4ec556d93505e577b29f9ff9a08"
+SIMPLE_WIKI_FILE = "data/train-00000-of-00001.parquet"
+SIMPLE_WIKI_SHA256 = "112b847312d4315c1c4cc75c02d2d153f17bce7ee4a3a1d57dc09385da72a02a"
+SIMPLE_WIKI_SIZE = 439_202_943
+
 
 def download_verified(url: str, destination: Path, sha256: str, size: int) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +64,80 @@ def download_verified(url: str, destination: Path, sha256: str, size: int) -> Pa
         )
     temporary.replace(destination)
     return destination
+
+
+def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
+    """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
+    parquet_path = Path(hf_hub_download(
+        repo_id=SIMPLE_WIKI_REPOSITORY,
+        filename=SIMPLE_WIKI_FILE,
+        repo_type="dataset",
+        revision=SIMPLE_WIKI_REVISION,
+        cache_dir=str(cache / "huggingface"),
+    ))
+    actual_size = parquet_path.stat().st_size
+    actual_sha = sha256_file(parquet_path)
+    if actual_size != SIMPLE_WIKI_SIZE or actual_sha != SIMPLE_WIKI_SHA256:
+        raise ValueError(
+            "Simple English Wikipedia file failed pinned size/SHA-256 verification."
+        )
+
+    table = pq.read_table(
+        parquet_path,
+        columns=["page_id", "title", "content_no_link", "error"],
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    split_paths = {
+        name: output / f"pretrain_{name}.txt"
+        for name in ("train", "validation", "test")
+    }
+    counts = {name: {"articles": 0, "bytes": 0} for name in split_paths}
+    dropped = {"source_error": 0, "empty_or_rejected": 0}
+    handles = {name: path.open("w", encoding="utf-8", newline="\\n")
+               for name, path in split_paths.items()}
+    try:
+        for row in table.to_pylist():
+            if row.get("error") is True:
+                dropped["source_error"] += 1
+                continue
+            title, title_reason = normalize_training_text(row.get("title"), min_chars=1)
+            content, content_reason = normalize_training_text(
+                row.get("content_no_link"), min_chars=20
+            )
+            if title_reason != "accepted" or content_reason != "accepted":
+                dropped["empty_or_rejected"] += 1
+                continue
+            article = f"{title}\\n{content}\\n"
+            split = stable_split(
+                str(row["page_id"]), seed="qmini-simplewiki-20260301"
+            )
+            handles[split].write(article)
+            counts[split]["articles"] += 1
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    for split, path in split_paths.items():
+        counts[split]["bytes"] = path.stat().st_size
+        counts[split]["sha256"] = sha256_file(path)
+        if counts[split]["articles"] == 0:
+            raise ValueError(f"SimpleWiki {split} split is empty.")
+
+    return {
+        "repository": SIMPLE_WIKI_REPOSITORY,
+        "revision": SIMPLE_WIKI_REVISION,
+        "file": SIMPLE_WIKI_FILE,
+        "dump_date": "2026-03-01",
+        "sha256": actual_sha,
+        "size_bytes": actual_size,
+        "license": "CC-BY-SA-3.0",
+        "text_field": "content_no_link",
+        "human_authored_source": True,
+        "generated_importance_labels_used": False,
+        "split_rule": "stable SHA-256 page_id split: 90% train, 5% validation, 5% test",
+        "splits": counts,
+        "dropped": dropped,
+    }
 
 
 def prepare_wikitext(cache: Path, output: Path) -> dict:
@@ -343,14 +423,14 @@ def main() -> None:
     args = parser.parse_args()
     if not args.accept_source_licenses:
         parser.error(
-            "Pass --accept-source-licenses only after reviewing WikiText CC-BY-SA/GFDL, "
+            "Pass --accept-source-licenses only after reviewing SimpleWiki CC-BY-SA-3.0, "
             "OASST1 Apache-2.0 and Dolly CC-BY-SA-3.0 terms."
         )
 
     output, cache = Path(args.output), Path(args.cache)
     output.mkdir(parents=True, exist_ok=True)
-    print("Preparing WikiText-103 language data (hash-pinned)...")
-    wikitext_info = prepare_wikitext(cache, output)
+    print("Preparing hash-pinned Simple English Wikipedia training data...")
+    simplewiki_info = prepare_simple_wikipedia(cache, output)
     print("Preparing strictly filtered human OASST1 conversations...")
     oasst_records, oasst_info = load_oasst_conversations(cache)
     print("Preparing human-authored Databricks Dolly instructions...")
@@ -370,7 +450,7 @@ def main() -> None:
             "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
             "maximum_text_characters": 32768
         },
-        "pretraining": wikitext_info,
+        "pretraining": simplewiki_info,
         "instruction_sources": {
             "oasst1": oasst_info,
             "dolly": dolly_info,
@@ -382,7 +462,7 @@ def main() -> None:
         "instruction_splits": sft_splits,
         "excluded_sources": {
             "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
-            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data.",
+            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; Simple English Wikipedia is the human-authored pretraining source.",
             "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
         },
         "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
@@ -394,7 +474,7 @@ def main() -> None:
     )
     print(json.dumps({
         "manifest": str(manifest_path),
-        "wikitext": wikitext_info["splits"],
+        "simple_wikipedia": simplewiki_info["splits"],
         "oasst1_conversations": len(oasst_records),
         "dolly_conversations": len(dolly_records),
         "sft_splits": sft_splits,
