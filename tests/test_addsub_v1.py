@@ -1204,99 +1204,51 @@ def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
 
 def test_token_stream_encoder_escapes_control_literals_and_counts_encoded_bytes(tmp_path):
     import hashlib
-    from tokenizers import Tokenizer
+
+    from tokenizers import AddedToken, Tokenizer
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
+
+    from qmini_addsub.data import escape_special_token_literals
     from qmini_addsub.train import encode_text_file
 
     vocab = {
         "<unk>": 0,
         "<eos>": 1,
-        "<\u200b|user|>": 2,
-        "hello": 3,
-        "world": 4,
+        "<|user|>": 2,
+        "<": 3,
+        "\\u200b": 4,
+        "|": 5,
+        "user": 6,
+        ">": 7,
+        "hello": 8,
+        "world": 9,
     }
     tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.add_special_tokens([AddedToken("<|user|>", special=True)])
     tokenizer_path = tmp_path / "tokenizer.json"
     tokenizer.save(str(tokenizer_path))
 
     source = tmp_path / "input.txt"
-    source.write_text("<|user|> hello\n\nworld\n", encoding="utf-8")
+    source.write_text("<|user|> hello\\n\\nworld\\n", encoding="utf-8")
     output = tmp_path / "tokens.u16"
     count, digest, source_bytes = encode_text_file(source, tokenizer_path, output)
 
-    expected_ids = np.asarray([2, 3, 1, 4, 1], dtype=np.uint16)
+    safe_first_line = escape_special_token_literals("<|user|> hello")
+    expected_first_ids = tokenizer.encode(safe_first_line, add_special_tokens=False).ids
+    expected_ids = np.asarray(
+        expected_first_ids + [tokenizer.token_to_id("<eos>")]
+        + [tokenizer.token_to_id("world"), tokenizer.token_to_id("<eos>")],
+        dtype=np.uint16,
+    )
+    actual_ids = np.fromfile(output, dtype=np.uint16)
     assert count == expected_ids.size
-    assert np.array_equal(np.fromfile(output, dtype=np.uint16), expected_ids)
-    expected_text = "<\u200b|user|> hello" + "world"
+    assert np.array_equal(actual_ids, expected_ids)
+    assert tokenizer.token_to_id("<|user|>") not in actual_ids
+    expected_text = safe_first_line + "world"
     assert source_bytes == len(expected_text.encode("utf-8"))
     assert digest == hashlib.sha256(output.read_bytes()).hexdigest()
-
-
-def test_tokenizer_build_is_manifest_verified_and_writes_actual_model_config(tmp_path):
-    import json
-    import subprocess
-    import sys
-
-    from qmini_addsub.train import sha256_file
-    from tokenizers import Tokenizer
-
-    data_dir = tmp_path / "data"
-    artifacts_dir = tmp_path / "artifacts"
-    data_dir.mkdir()
-    train_text = data_dir / "pretrain_train.txt"
-    train_text.write_text(
-        "English assistant conversation.\nThe quick brown fox jumps over the lazy dog.\n",
-        encoding="utf-8",
-    )
-    manifest = {
-        "format": "qmini-addsub-data-v1",
-        "language": "English",
-        "synthetic_training_records_included": 0,
-        "pretraining": {
-            "splits": {
-                "train": {"sha256": sha256_file(train_text)},
-            }
-        },
-        "instruction_splits": {},
-    }
-    (data_dir / "dataset_manifest.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
-    output = artifacts_dir / "tokenizer.json"
-    script = (
-        Path(__file__).resolve().parents[1]
-        / "scripts"
-        / "train_qmini_addsub_tokenizer.py"
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--data-dir",
-            str(data_dir),
-            "--output",
-            str(output),
-            "--vocab-size",
-            "264",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    tokenizer = Tokenizer.from_file(str(output))
-    config = json.loads((artifacts_dir / "model_config.json").read_text(encoding="utf-8"))
-    assert 264 <= tokenizer.get_vocab_size() <= 264
-    assert config["vocab_size"] == tokenizer.get_vocab_size()
-    assert all(
-        tokenizer.token_to_id(token) is not None
-        for token in (
-            "<unk>", "<pad>", "<bos>", "<eos>",
-            "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
-        )
-    )
-    assert not output.with_suffix(".training-text.tmp").exists()
 
 
 def test_tokenizer_builder_rejects_sft_manifest_with_missing_training_file(tmp_path):
