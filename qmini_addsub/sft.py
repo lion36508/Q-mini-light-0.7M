@@ -134,8 +134,6 @@ class ConversationDataset(Dataset):
                     encoded[0] = (system_role, system_token, system_ids[-2:])
 
                 room_for_answer = max_context - (required_length(encoded[:-1]) + 2)
-                if room_for_answer < 1:
-                    continue
                 overflow = max(0, len(assistant_ids) - room_for_answer)
                 if overflow:
                     available_user_tokens = len(user_ids) - overflow
