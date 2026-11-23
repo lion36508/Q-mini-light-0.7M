@@ -355,13 +355,16 @@ def load_addsub_export(
     if set(restored) != set(expected_state):
         raise ValueError("Export does not reconstruct the complete model state.")
     model.load_state_dict(restored, strict=True)
-    if scaled_archive:
-        # Freeze manifest scales so reloaded reference inference is identical.
-        for entry in entries:
-            model.get_parameter(entry["name"])._qmini_fixed_scale = float(entry["scale"])
     if model.parameter_count() != manifest.get("parameter_count"):
         raise ValueError("Export parameter count does not match the reconstructed model.")
     model.to(torch.device(device_name))
+    # Freeze the exact forward scale after device placement. Legacy v1 archives
+    # intentionally use scale 1.0; v2 archives carry one scale per tensor.
+    for entry in entries:
+        fixed_scale = float(entry.get("scale", 1.0))
+        if not np.isfinite(fixed_scale) or fixed_scale <= 0.0:
+            raise ValueError(f"Packed tensor {entry['name']!r} has an invalid scale.")
+        model.get_parameter(entry["name"])._qmini_fixed_scale = fixed_scale
     model.eval()
     return model, manifest
 
