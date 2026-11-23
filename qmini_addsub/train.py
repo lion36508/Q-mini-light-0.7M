@@ -228,6 +228,8 @@ def train_from_scratch(
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "learning_rate": learning_rate,
+        "save_every": save_every,
+        "validate_every": validate_every,
         "seed": seed,
     }
     model = AddSubLanguageModel(config, seed=seed).to(device)
