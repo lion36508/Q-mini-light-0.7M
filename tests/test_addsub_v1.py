@@ -12,7 +12,7 @@ from qmini_addsub.data import (
     normalize_training_text,
     stable_split,
 )
-from qmini_addsub.model import AddSubLanguageModel, AddSubLinear
+from qmini_addsub.model import AddSubLanguageModel, AddSubLinear, SparseTop1Experts
 from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
@@ -1622,3 +1622,93 @@ def test_metrics_reconciliation_rejects_non_monotonic_or_invalid_steps(tmp_path)
     with pytest.raises(ValueError, match="not valid JSONL"):
         reconcile_metrics_file(str(metrics), identity, 20, "Pretraining")
     assert metrics.read_bytes() == before
+
+
+def test_addsub_v2_residual_gates_start_small_without_changing_parameter_budget():
+    model = AddSubLanguageModel().eval()
+    assert model.parameter_count() == 710676
+    for block in model.blocks:
+        for name in (
+            "conv_residual_logit",
+            "state_residual_logit",
+            "expert_residual_logit",
+        ):
+            strength = torch.sigmoid(getattr(block, name)).item()
+            assert strength == pytest.approx(0.1, abs=1e-6)
+
+
+def test_addsub_v2_router_z_loss_is_finite_differentiable_and_reports_load():
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=32,
+        d_hidden=48,
+        n_layers=2,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+    )
+    model = AddSubLanguageModel(config).train()
+    tokens = torch.randint(0, config.vocab_size, (2, 8))
+    mask = torch.tensor(
+        [[True, True, True, True, True, True, False, False],
+         [True, True, True, True, True, False, False, False]]
+    )
+    result = model(tokens, attention_mask=mask)
+
+    assert result["router_load"].shape == (config.n_layers, config.n_experts)
+    assert not result["router_load"].requires_grad
+    torch.testing.assert_close(
+        result["router_load"].sum(dim=-1),
+        torch.ones(config.n_layers),
+    )
+    assert torch.isfinite(result["router_z_loss"])
+    loss = (
+        result["logits"].float().square().mean()
+        + config.moe_balance_coef * result["aux_loss"]
+        + config.router_z_loss_coef * result["router_z_loss"]
+    )
+    loss.backward()
+    for block in model.blocks:
+        gradient = block.experts.router.weight.grad
+        assert gradient is not None
+        assert torch.isfinite(gradient).all()
+
+
+def test_addsub_v2_router_losses_ignore_right_padding_tokens():
+    torch.manual_seed(2026)
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+    )
+    experts = SparseTop1Experts(config).eval()
+    valid = torch.randn(2, 3, config.d_model)
+    padded = torch.cat(
+        [valid, torch.randn(2, 4, config.d_model) * 100.0],
+        dim=1,
+    )
+    mask = torch.tensor(
+        [[True, True, True, False, False, False, False],
+         [True, True, True, False, False, False, False]]
+    )
+    with torch.inference_mode():
+        _, base_balance, base_z, base_load = experts(valid)
+        _, pad_balance, pad_z, pad_load = experts(padded, token_mask=mask)
+    torch.testing.assert_close(base_balance, pad_balance, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(base_z, pad_z, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(base_load, pad_load, rtol=0.0, atol=0.0)
+
+
+def test_addsub_v2_router_and_residual_coefficients_are_validated():
+    with pytest.raises(ValueError, match="residual_init"):
+        AddSubConfig(residual_init=0.0).validate()
+    with pytest.raises(ValueError, match="moe_balance_coef"):
+        AddSubConfig(moe_balance_coef=-0.1).validate()
+    with pytest.raises(ValueError, match="router_z_loss_coef"):
+        AddSubConfig(router_z_loss_coef=float("inf")).validate()
