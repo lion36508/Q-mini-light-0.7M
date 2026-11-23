@@ -139,19 +139,32 @@ def reconcile_metrics_file(
 
     kept = []
     discarded = 0
+    previous_step = 0
+    run_contract = expected_identity.get("run_contract")
+    planned_steps = (
+        run_contract.get("planned_steps")
+        if isinstance(run_contract, dict)
+        else None
+    )
     for row in rows:
         for key, expected_value in expected_identity.items():
-            if row.get(key) != expected_value:
+            if key not in row or row[key] != expected_value:
                 raise ValueError(
                     f"{run_name} metrics belong to a different dataset, tokenizer "
                     f"or run contract ({key})."
                 )
-        try:
-            step = int(row["step"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"{run_name} metrics contain an invalid step.") from exc
-        if step < 1:
-            raise ValueError(f"{run_name} metrics contain a non-positive step.")
+        step = row.get("step")
+        if isinstance(step, bool) or not isinstance(step, int) or step < 1:
+            raise ValueError(f"{run_name} metrics contain an invalid step.")
+        if step <= previous_step:
+            raise ValueError(
+                f"{run_name} metrics steps must be strictly increasing."
+            )
+        if planned_steps is not None and step > planned_steps:
+            raise ValueError(
+                f"{run_name} metrics contain a step beyond the planned run horizon."
+            )
+        previous_step = step
         if step > maximum_committed_step:
             discarded += 1
         else:
