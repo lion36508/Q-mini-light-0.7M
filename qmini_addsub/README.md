@@ -2,13 +2,13 @@
 
 An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
 
-**Default experimental profile:** 512-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **710,676 parameters**. This size is a design baseline, not evidence of better model quality.
+**Default experimental profile:** 1,024-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **760,340 parameters**. This size is a design baseline, not evidence of better model quality.
 
 Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
 
 ## Add/Sub v2 algorithm-stability update
 
-The training algorithm now includes three explicit stability controls while preserving the 710,676-parameter default architecture and the five-symbol codebook:
+The training algorithm now includes three explicit stability controls while preserving the 760,340-parameter default architecture and the five-symbol codebook:
 
 - Residual branch gates initialize at **0.1**, not 0.5. The convolution, state-space and expert branches begin as small residual corrections and can learn stronger contributions from data.
 - Sparse Top-1 routing keeps the existing load-balancing objective and adds a separately weighted **router z-loss** on the log-partition. This discourages uncontrolled router-logit growth without hiding the coefficient inside the load-balancing term.
@@ -144,3 +144,10 @@ Pinned English sources pass through a fail-closed, versioned cleaner before the 
 OASST1 still requires `lang == "en"`, `ready_for_export`, positive review, `deleted is False`, `synthetic is False`, and rank-zero assistant responses. Dolly is pinned to a fixed dataset revision and is treated as an English source. This cleaner does not claim to infer language from arbitrary text: language provenance comes from those source contracts. Exact duplicate conversations are removed before stable whole-conversation train/validation/test splitting. Raw pinned downloads remain in the cache and are not overwritten.
 
 Synthetic tests and benchmarks remain outside the production corpus. A cleaning pass never converts a synthetic sample into a human-authored one.
+
+
+## Scaled QAT and balanced tokenizer update
+
+Dense Kaiming-normal master weights now use per-tensor scaled five-symbol STE (scale = 1.4 × mean absolute weight). Zero is exact and STE gradients remain live through zero master weights. Matrix weight decay is 0.01. The 1,024-token ByteLevel tokenizer samples up to 64 MiB from pretraining training text and includes all SFT training messages so conversational terms influence BPE merges. Validation and test are never used for tokenizer training.
+
+WikiText `@-@` and spaces before punctuation are normalized. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.

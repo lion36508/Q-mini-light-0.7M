@@ -20,6 +20,7 @@ from qmini_addsub.quantization import (
     quantize_to_codes,
     unpack_3bit_codes,
     quantize_weight_ste,
+    weight_scale,
 )
 from qmini_addsub.runtime import additive_projection, saturating_add
 from tokenizers import Tokenizer
@@ -45,7 +46,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     for index, source in enumerate(code):
         ast.parse(source, filename=f"{notebook_path}:cell-{index}")
     all_code = "\n".join(code)
-    assert "QMini-Light-AddSub-v1" in all_code
+    assert "Q mini 2 light" in all_code
     assert "PREPARE_PINNED_CORPUS = False" in all_code
     assert "IMPORT_USER_DATA = False" in all_code
     assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
@@ -67,7 +68,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
 def test_addsub_config_is_independent_and_validates():
     config = AddSubConfig()
     config.validate()
-    assert config.vocab_size == 512
+    assert config.vocab_size == 1024
     assert config.max_context == 512
     with pytest.raises(ValueError, match="positive"):
         AddSubConfig(n_layers=0).validate()
@@ -90,19 +91,32 @@ def test_five_symbol_quantizer_preserves_exact_zero_and_three_bit_round_trip():
         unpack_3bit_codes(packed, (True, 6))
 
 
-def test_training_ste_quantizer_matches_exact_five_symbol_export_codebook():
+def test_scaled_five_symbol_quantizer_and_zero_master_gradient():
     values = torch.tensor(
-        [-2.0, -1.5, -1.25, -1.0, -0.75, -0.5, -0.25,
-         0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
-        dtype=torch.float32,
-        requires_grad=True,
+        [[-2.0, -1.5, -1.25, -1.0, -0.75],
+         [-0.5, -0.25, 0.0, 0.25, 0.5],
+         [0.75, 1.0, 1.25, 1.5, 2.0]],
+        dtype=torch.float32, requires_grad=True,
     )
+    scale = weight_scale(values)
     actual = quantize_weight_ste(values)
-    expected_codes = quantize_to_codes(values.detach().cpu().numpy())
-    expected = torch.from_numpy(codes_to_values(expected_codes))
-    assert torch.equal(actual.detach(), expected)
+    codes = quantize_to_codes(values.detach().numpy(), scale=float(scale.item()))
+    expected = torch.from_numpy(codes_to_values(codes)) * scale
+    torch.testing.assert_close(actual.detach(), expected, rtol=0.0, atol=0.0)
+    assert torch.isin(actual.detach()/scale, torch.tensor([-1.5,-0.5,0.0,0.5,1.5])).all()
     actual.sum().backward()
     assert torch.equal(values.grad, torch.ones_like(values))
+
+    layer = torch.nn.Linear(4,4,bias=False)
+    with torch.no_grad():
+        layer.weight.zero_()
+    output = torch.nn.functional.linear(torch.ones(2,4),quantize_weight_ste(layer.weight))
+    output.sum().backward()
+    assert torch.count_nonzero(layer.weight.grad)==layer.weight.numel()
+    optimizer = build_adamw(layer,learning_rate=1e-2,weight_decay=0.0)
+    optimizer.step()
+    assert torch.count_nonzero(layer.weight)==layer.weight.numel()
+    assert torch.count_nonzero(quantize_weight_ste(layer.weight).detach())>0
 
 
 def test_five_symbol_packer_rejects_reserved_codes():
@@ -491,7 +505,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v5"
+    assert sft_state["format"] == "qmini-addsub-sft-v6"
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
     resumed_sft_dir = tmp_path / "sft-resumed"
@@ -532,9 +546,24 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         assert torch.equal(tensor, resumed_sft_state["model"][name]), name
 
 
+def test_addsub_repetition_penalty_applies_before_greedy_choice():
+    from qmini_addsub.generate import _apply_repetition_penalty, _choose_next_token
+    logits=torch.tensor([4.0,-4.0,1.0])
+    adjusted=_apply_repetition_penalty(logits,[0,1],penalty=1.2,window=8)
+    assert adjusted[0]<logits[0] and adjusted[1]<logits[1]
+    assert adjusted[2]==logits[2]
+    assert _choose_next_token(logits,0.7,0,1.0,True,generated=[0],repetition_penalty=1.2)==2
+
+
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
-    assert model.parameter_count() == 710676
+    assert model.parameter_count() == 760340
+
+
+def test_default_matrix_weight_decay_is_small():
+    model = torch.nn.Linear(8, 8)
+    optimizer = build_adamw(model, learning_rate=1e-3)
+    assert optimizer.param_groups[0]["weight_decay"] == pytest.approx(0.01)
 
 
 def test_swglu_experts_and_bounded_residual_gates_are_active():
@@ -575,41 +604,32 @@ def test_optimizer_uses_no_decay_for_vectors_and_cosine_warmup_is_bounded():
     assert cosine_warmup_lr(100, 100, 1e-3) == 1e-4
 
 
-def test_default_model_initialization_is_live_and_five_symbol_aligned():
+def test_default_model_initialization_is_dense_and_five_symbol_aligned():
     torch.manual_seed(29)
     model = AddSubLanguageModel(AddSubConfig())
-    zero_decay_projections = {
-        id(block.state_space.decay_projection) for block in model.blocks
-    }
+    zero_decay = {id(block.state_space.decay_projection) for block in model.blocks}
+    codebook = torch.tensor([-1.5,-0.5,0.0,0.5,1.5])
     linear_count = 0
     for module in model.modules():
-        if not isinstance(module, AddSubLinear):
-            continue
+        if not isinstance(module,AddSubLinear): continue
         linear_count += 1
         quantized = quantize_weight_ste(module.weight).detach()
-        if id(module) in zero_decay_projections:
-            assert torch.count_nonzero(quantized) == 0
+        if id(module) in zero_decay:
+            assert torch.count_nonzero(quantized)==0
             continue
-        assert torch.isin(
-            quantized,
-            torch.tensor([-1.5, -0.5, 0.0, 0.5, 1.5]),
-        ).all()
-        assert torch.all(torch.count_nonzero(quantized, dim=1) == 4)
-
-    embedding = quantize_weight_ste(model.token_embedding.weight).detach()
-    assert torch.isin(
-        embedding, torch.tensor([-1.5, -0.5, 0.0, 0.5, 1.5])
-    ).all()
-    assert torch.all(torch.count_nonzero(embedding, dim=1) == 4)
-
+        normalized=quantized/weight_scale(module.weight)
+        assert torch.isin(normalized,codebook).all()
+        assert torch.count_nonzero(normalized).item()/normalized.numel()>0.5
+    embedding=quantize_weight_ste(model.token_embedding.weight).detach()
+    embedding=embedding/weight_scale(model.token_embedding.weight)
+    assert torch.isin(embedding,codebook).all()
+    assert torch.count_nonzero(embedding).item()/embedding.numel()>0.5
     for block in model.blocks:
-        depthwise = quantize_weight_ste(block.conv.depthwise_weight).detach()
-        assert torch.all(
-            torch.count_nonzero(
-                depthwise.reshape(depthwise.shape[0], -1), dim=1
-            ) == 4
-        )
-    assert linear_count > 0
+        depthwise=quantize_weight_ste(block.conv.depthwise_weight).detach()
+        depthwise=depthwise/weight_scale(block.conv.depthwise_weight)
+        assert torch.isin(depthwise,codebook).all()
+        assert torch.count_nonzero(depthwise).item()/depthwise.numel()>0.5
+    assert linear_count>0
 
 
 def test_new_model_rejects_legacy_context_overflow():
@@ -624,6 +644,12 @@ def test_new_model_rejects_legacy_context_overflow():
     model = AddSubLanguageModel(config)
     with pytest.raises(ValueError, match="maximum context"):
         model(torch.ones((1, 9), dtype=torch.long))
+
+
+def test_training_text_cleaner_normalizes_wikitext_artifacts():
+    cleaned, reason = normalize_training_text("A test , with @-@ marks .")
+    assert reason == "accepted"
+    assert cleaned == "A test, with - marks."
 
 
 def test_training_text_cleaner_normalizes_unicode_controls_and_whitespace():
@@ -1174,7 +1200,7 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
     wrong_tokenizer.write_text('{"test": "different"}', encoding="utf-8")
     with pytest.raises(ValueError, match="Tokenizer fingerprint"):
         load_addsub_export(export_path, tokenizer_path=wrong_tokenizer)
-    assert manifest["format"] == "qmini-addsub-packed-weights-v1"
+    assert manifest["format"] == "qmini-addsub-packed-weights-v2"
     assert export_result["parameter_count"] == original.parameter_count()
     assert export_result["quantized_tensors"] > 0
     assert export_result["auxiliary_tensors"] > 0
@@ -1629,7 +1655,7 @@ def test_metrics_reconciliation_rejects_non_monotonic_or_invalid_steps(tmp_path)
 
 def test_addsub_v2_residual_gates_start_small_without_changing_parameter_budget():
     model = AddSubLanguageModel().eval()
-    assert model.parameter_count() == 710676
+    assert model.parameter_count() == 760340
     for block in model.blocks:
         for name in (
             "conv_residual_logit",

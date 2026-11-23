@@ -95,3 +95,8 @@ The CI suite also compiles the native C++ projection primitive and cross-compile
 - No model training is started by CI or by this README.
 
 For the history, confirmed defects, data-quality policy and cleanup decisions, read [Project history and cleanup audit (Hindi)](docs/PROJECT_HISTORY_AND_CLEANUP_AUDIT_HI.md).
+
+
+### Add/Sub scaled trainability revision
+
+The Add/Sub development branch now includes scaled five-symbol QAT, dense initialization, 0.01 matrix decay, a 1,024-token chat-aware ByteLevel tokenizer and repetition penalty. It is a new 760,340-parameter identity; the prior 710,676-parameter model and Drive artifacts are preserved. Response quality still requires fresh training and held-out English evaluation.
