@@ -13,7 +13,7 @@ from .sft import SFT_FORMAT, SYSTEM_TEXT
 from .train import CHECKPOINT_FORMAT, sha256_file
 
 
-RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v3", "qmini-addsub-sft-v2"}
+RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-sft-v4", "qmini-addsub-sft-v3", "qmini-addsub-sft-v2"}
 
 
 def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
