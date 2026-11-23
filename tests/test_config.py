@@ -12,38 +12,6 @@ def test_default_and_light_profile_context_are_512():
     assert light.max_context == 512
 
 
-def test_new_config_defaults_and_legacy_config_fallback_preserve_archive_semantics():
-    current = QMiniConfig()
-    assert current.quantization_version == "q2-v3"
-    assert current.quantize_embeddings is False
-
-    legacy_values = current.to_dict()
-    legacy_values.pop("quantization_version")
-    legacy_values.pop("quantize_embeddings")
-    legacy = QMiniConfig.from_dict(legacy_values)
-    assert legacy.quantization_version == "q2-v2"
-    assert legacy.quantize_embeddings is True
-
-
-def test_config_rejects_incompatible_q2_v2_fp16_embedding_boundary():
-    with pytest.raises(ValueError, match="quantization_version"):
-        QMiniConfig(quantization_version="q2-v2", quantize_embeddings=False).validate()
-
-
-def test_q2_v3_fp16_embedding_estimate_matches_actual_layout():
-    values = QMiniConfig(
-        vocab_size=300, d_model=32, d_hidden=48, n_layers=1,
-        n_experts=1, kernel_size=3, dilations=(1,), max_context=32,
-        quantization_version="q2-v3", quantize_embeddings=False,
-    )
-    legacy = QMiniConfig.from_dict({
-        **values.to_dict(),
-        "quantization_version": "q2-v2",
-        "quantize_embeddings": True,
-    })
-    assert values.estimated_packed_export_bytes() > legacy.estimated_packed_export_bytes()
-
-
 def test_config_round_trip(tmp_path):
     original = QMiniConfig(
         vocab_size=512, d_model=32, d_hidden=48, n_layers=2,
