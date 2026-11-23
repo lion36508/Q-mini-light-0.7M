@@ -4,19 +4,19 @@ on:
   push:
     branches: [main]
     paths:
-      - "colab/QMini_Initial_Brain_Build.ipynb"
-      - "colab/QMini_Training_Ready_Build.ipynb"
-      - "colab/QMini_Training_Runner.ipynb"
-      - "colab/QMini_One_Click_Training.ipynb"
-      - "colab/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Initial_Brain_Build.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Training_Ready_Build.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Training_Runner.ipynb"
+      - "colab/archive/legacy-experiments/QMini_One_Click_Training.ipynb"
+      - "colab/archive/legacy-experiments/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
       - ".github/workflows/colab-initial-build.yml"
   pull_request:
     branches: [main]
     paths:
-      - "colab/QMini_Initial_Brain_Build.ipynb"
-      - "colab/QMini_Training_Ready_Build.ipynb"
-      - "colab/QMini_Training_Runner.ipynb"
-      - "colab/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Initial_Brain_Build.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Training_Ready_Build.ipynb"
+      - "colab/archive/legacy-experiments/QMini_Training_Runner.ipynb"
+      - "colab/archive/legacy-experiments/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"
       - ".github/workflows/colab-initial-build.yml"
   workflow_dispatch:
 
@@ -42,10 +42,10 @@ jobs:
           from pathlib import Path
 
           paths = [
-              Path("colab/QMini_Initial_Brain_Build.ipynb"),
-              Path("colab/QMini_Training_Ready_Build.ipynb"),
-              Path("colab/QMini_Training_Runner.ipynb"),
-              Path("colab/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"),
+              Path("colab/archive/legacy-experiments/QMini_Initial_Brain_Build.ipynb"),
+              Path("colab/archive/legacy-experiments/QMini_Training_Ready_Build.ipynb"),
+              Path("colab/archive/legacy-experiments/QMini_Training_Runner.ipynb"),
+              Path("colab/archive/legacy-experiments/QMini_English_One_Click_CPU_Only_Resume_V9.ipynb"),
           ]
           total_code_cells = 0
           for path in paths:

@@ -89,8 +89,12 @@ OASST1_REQUIRED_COLUMNS = (
     "text",
     "role",
     "lang",
+    "review_result",
     "deleted",
+    "rank",
+    "synthetic",
     "message_tree_id",
+    "tree_state",
 )
 
 
@@ -195,44 +199,65 @@ def read_dailydialog_split_text(zip_path, split):
 
 
 def flatten_oasst1_rows(rows):
-    """Flatten OASST1 message trees into linear dialogues.
+    """Flatten only reviewed, non-synthetic English OASST1 messages.
 
-    ``rows`` is an iterable of dicts with ``message_id``, ``parent_id``,
-    ``text``, ``role``, ``lang``, ``deleted`` and ``message_tree_id``. Rows
-    are expected in depth-first order (the order the parquet file stores
-    them); children keep that order.
-
-    Only English (``lang == "en``), non-deleted messages with non-empty
-    text are kept; ``prompter`` maps to the ``user`` role and ``assistant``
-    to ``assistant``. Each message tree becomes exactly one document: the
-    linear dialogue follows the first-child chain from the root, so a tree
-    can never be split across the pipeline's train/validation split. Two
-    consecutive kept messages with the same role are merged into one turn.
-    A tree that has no root among the kept messages, does not start with a
-    user turn, or has no assistant turn, is dropped.
-
-    Returns ``(records, stats)``.
+    The input schema must include review_result, deleted, synthetic, rank and
+    tree_state. Only ready-for-export, positively reviewed, non-deleted,
+    explicitly non-synthetic English messages are kept. For assistant replies,
+    only rank 0 is retained. Unknown/missing safety flags fail closed.
+    Conversation trees remain intact for downstream document-level splitting.
     """
     kept = []
-    dropped = {"non_english": 0, "deleted": 0, "empty": 0, "other_role": 0}
+    dropped = {
+        "non_english": 0,
+        "not_ready": 0,
+        "unreviewed": 0,
+        "deleted": 0,
+        "synthetic": 0,
+        "missing_rank": 0,
+        "non_top_rank": 0,
+        "empty": 0,
+        "other_role": 0,
+    }
     for row in rows:
         if row.get("lang") != "en":
             dropped["non_english"] += 1
             continue
-        if row.get("deleted"):
+        if row.get("tree_state") != "ready_for_export":
+            dropped["not_ready"] += 1
+            continue
+        if row.get("review_result") is not True:
+            dropped["unreviewed"] += 1
+            continue
+        if row.get("deleted") is not False:
             dropped["deleted"] += 1
             continue
-        text = (row.get("text") or "").strip()
-        if not text:
-            dropped["empty"] += 1
+        if row.get("synthetic") is not False:
+            dropped["synthetic"] += 1
             continue
         role = row.get("role")
         if role == "prompter":
             mapped = "user"
         elif role == "assistant":
+            rank = row.get("rank")
+            if rank is None:
+                dropped["missing_rank"] += 1
+                continue
+            try:
+                rank = int(rank)
+            except (TypeError, ValueError):
+                dropped["non_top_rank"] += 1
+                continue
+            if rank != 0:
+                dropped["non_top_rank"] += 1
+                continue
             mapped = "assistant"
         else:
             dropped["other_role"] += 1
+            continue
+        text = (row.get("text") or "").strip()
+        if not text:
+            dropped["empty"] += 1
             continue
         kept.append(
             {
