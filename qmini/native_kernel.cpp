@@ -23,15 +23,23 @@ static inline int32_t qmini_decode_weight(
     const uint8_t code = static_cast<uint8_t>(
         (packed >> ((feature % 4) * 2)) & 0x03
     );
-    // Immutable 2-bit lookup tables, all returned in doubled half-units.
-    // v1 {-2,-1,+1,+2}; v2 {-1,-0.5,+0.5,+1};
-    // v3 {-1,0,+0.5,+1}, where code 01 is an exact zero.
-    static constexpr int32_t q2_v1_lut[4] = {-4, -2, 2, 4};
-    static constexpr int32_t q2_v2_lut[4] = {-2, -1, 1, 2};
-    static constexpr int32_t q2_v3_lut[4] = {-2, 0, 1, 2};
-    if (q2_version == 1) return q2_v1_lut[code];
-    if (q2_version == 2) return q2_v2_lut[code];
-    return q2_v3_lut[code];
+    if (q2_version == 1) {
+        // Q2-v1 compatibility: doubled effective values {-4,-2,+2,+4}.
+        switch (code) {
+            case 0: return -4;
+            case 1: return -2;
+            case 2: return 2;
+            default: return 4;
+        }
+    }
+    // Q2-v2 normalized codebook, represented in half-units:
+    // {-1,-0.5,+0.5,+1} -> {-2,-1,+1,+2}.
+    switch (code) {
+        case 0: return -2;
+        case 1: return -1;
+        case 2: return 1;
+        default: return 2;
+    }
 }
 
 static int64_t qmini_accumulate_i8_q2(
@@ -99,9 +107,8 @@ static int64_t qmini_accumulate_i8_q2(
 #endif
 }
 
-// Q2-v1 legacy symbols are {-2,-1,+1,+2}; Q2-v2 uses
-// {-1,-0.5,+0.5,+1}; Q2-v3 uses {-1,0,+0.5,+1}. The decoder returns
-// doubled half-units and applies the 0.5 factor exactly once.
+// Q2-v1 legacy symbols are {-2,-1,+1,+2}; Q2-v2 production symbols are
+// {-1,-0.5,+0.5,+1}. Both use four symbols per byte and row scales.
 // Integer accumulation uses doubled half-units and applies the 0.5 factor
 // exactly once. ARM builds use NEON when the target supports it.
 QMINI_EXPORT int qmini_linear_i8_v2(
@@ -121,7 +128,7 @@ QMINI_EXPORT int qmini_linear_i8_v2(
     }
     if (rows <= 0 || in_features <= 0 || out_features <= 0 ||
         in_features > std::numeric_limits<int>::max() - 3 ||
-        (q2_version != 1 && q2_version != 2 && q2_version != 3)) {
+        (q2_version != 1 && q2_version != 2)) {
         return 2;
     }
 
