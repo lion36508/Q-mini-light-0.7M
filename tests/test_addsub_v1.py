@@ -1439,3 +1439,28 @@ def test_metrics_reconciliation_rejects_a_different_dataset_or_schedule(tmp_path
             run_name="SFT",
         )
     assert json.loads(metrics.read_text(encoding="utf-8").splitlines()[0])["step"] == 50
+
+
+
+def test_custom_dataset_import_rejects_identical_normalized_pretraining_splits(tmp_path):
+    from scripts.import_qmini_addsub_dataset import import_user_dataset
+
+    train = tmp_path / "train.txt"
+    validation = tmp_path / "validation.txt"
+    test = tmp_path / "test.txt"
+    train.write_text("Same English source document.\\n", encoding="utf-8")
+    validation.write_text("  Same English source document.  \\n", encoding="utf-8")
+    test.write_text("Different held-out English document.\\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="identical normalized split files"):
+        import_user_dataset(
+            pretrain_train=train,
+            pretrain_validation=validation,
+            pretrain_test=test,
+            output_dir=tmp_path / "dedupe-output",
+            pretrain_source="selected-corpus",
+            pretrain_license="reviewed-license",
+            confirm_rights_and_human_data=True,
+            confirm_english_data=True,
+        )
+    assert not (tmp_path / "dedupe-output").exists()
