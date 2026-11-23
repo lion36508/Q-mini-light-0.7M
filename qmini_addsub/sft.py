@@ -109,7 +109,8 @@ class ConversationDataset(Dataset):
                     continue
                 encoded.append((role, special[role_token], content_ids))
 
-            # Retain the most recent complete exchange; never cut into the final answer.
+            # Retain complete assistant targets. Drop older exchanges, shorten the
+            # system prompt to its compact suffix, then trim only the current user input.
             def required_length(items):
                 return 1 + sum(1 + len(ids) + 1 for _, _, ids in items)
 
@@ -117,20 +118,26 @@ class ConversationDataset(Dataset):
                 encoded.pop(1)
                 if len(encoded) > 2:
                     encoded.pop(1)
+
             if required_length(encoded) > max_context:
                 if len(encoded) < 3 or encoded[-1][0] != "assistant":
                     continue
-                assistant_role, assistant_token, assistant_ids = encoded[-1]
+                system_role, system_token, system_ids = encoded[0]
                 user_role, user_token, user_ids = encoded[-2]
+                assistant_role, assistant_token, assistant_ids = encoded[-1]
                 if user_role != "user":
                     continue
+
+                # Training and generation share the same policy: retain only the
+                # newest two system tokens when the complete prompt cannot fit.
+                if len(system_ids) > 2:
+                    encoded[0] = (system_role, system_token, system_ids[-2:])
 
                 room_for_answer = max_context - (required_length(encoded[:-1]) + 2)
                 if room_for_answer < 1:
                     continue
                 overflow = max(0, len(assistant_ids) - room_for_answer)
                 if overflow:
-                    # Keep the newest part of the user prompt, never cut the answer.
                     available_user_tokens = len(user_ids) - overflow
                     if available_user_tokens < 1:
                         continue
@@ -142,7 +149,6 @@ class ConversationDataset(Dataset):
 
                 room_for_answer = max_context - (required_length(encoded[:-1]) + 2)
                 if len(assistant_ids) > room_for_answer:
-                    # The complete target cannot fit, even after trimming user context.
                     continue
 
             token_ids = [special["<bos>"]]
