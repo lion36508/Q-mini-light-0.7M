@@ -21,20 +21,21 @@ from .quantization import (
     pack_3bit_codes,
     quantize_to_codes,
     unpack_3bit_codes,
+    weight_scale,
+    LEGACY_FORMAT_NAME,
 )
 from .sft import SFT_FORMAT
 from .train import CHECKPOINT_FORMAT, sha256_file
 
 
-EXPORT_FORMAT = "qmini-addsub-packed-weights-v1"
+EXPORT_FORMAT_V1 = "qmini-addsub-packed-weights-v1"
+EXPORT_FORMAT = "qmini-addsub-packed-weights-v2"
+SCALED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT, SFT_FORMAT}
 ACCEPTED_CHECKPOINT_FORMATS = {
-    CHECKPOINT_FORMAT,
-    SFT_FORMAT,
-    # Read-only export compatibility for the shape-compatible pre-v2 graph.
-    "qmini-addsub-training-v3",
-    "qmini-addsub-sft-v4",
-    "qmini-addsub-sft-v3",
-    "qmini-addsub-sft-v2",
+    CHECKPOINT_FORMAT, SFT_FORMAT,
+    "qmini-addsub-training-v4", "qmini-addsub-sft-v5",
+    "qmini-addsub-training-v3", "qmini-addsub-sft-v4",
+    "qmini-addsub-sft-v3", "qmini-addsub-sft-v2",
 }
 ARCHIVE_MEMBERS = {"manifest.json", "weights.bin", "auxiliary.npz"}
 
@@ -83,6 +84,10 @@ def export_addsub_checkpoint(
     if missing:
         raise ValueError(f"Model quantized parameters are missing from state_dict: {missing}")
 
+    use_scaled_format = checkpoint_format in SCALED_CHECKPOINT_FORMATS
+    archive_format = EXPORT_FORMAT if use_scaled_format else EXPORT_FORMAT_V1
+    weight_format = FORMAT_NAME if use_scaled_format else LEGACY_FORMAT_NAME
+
     packed_weights = bytearray()
     quantized_entries = []
     auxiliary_arrays: dict[str, np.ndarray] = {}
@@ -94,16 +99,20 @@ def export_addsub_checkpoint(
             raise ValueError(f"Model tensor {name!r} is not finite floating-point data.")
         values = tensor.numpy().astype(np.float32, copy=False)
         if name in quantized_names:
-            codes = quantize_to_codes(values)
-            packed = pack_3bit_codes(codes)
-            quantized_entries.append({
-                "name": name,
-                "shape": list(values.shape),
-                "count": int(values.size),
-                "offset": len(packed_weights),
-                "nbytes": len(packed),
-                "sha256": _sha256_bytes(packed),
-            })
+            if use_scaled_format:
+                scale = float(weight_scale(tensor).item())
+                codes = quantize_to_codes(values, scale=scale)
+            else:
+                scale = 1.0
+                codes = quantize_to_codes(values)
+            entry = {
+                "name": name, "shape": list(values.shape),
+                "count": int(values.size), "offset": len(packed_weights),
+                "nbytes": len(packed), "sha256": _sha256_bytes(packed),
+            }
+            if use_scaled_format:
+                entry["scale"] = scale
+            quantized_entries.append(entry)
             packed_weights.extend(packed)
         else:
             auxiliary_arrays[name] = values.copy()
@@ -135,8 +144,8 @@ def export_addsub_checkpoint(
         raise ValueError("Checkpoint training run contract is invalid.")
 
     manifest = {
-        "format": EXPORT_FORMAT,
-        "weight_format": FORMAT_NAME,
+        "format": archive_format,
+        "weight_format": weight_format,
         "checkpoint_format": checkpoint_format,
         "checkpoint_step": int(checkpoint["step"]),
         "training_run_contract": run_contract,
@@ -154,6 +163,8 @@ def export_addsub_checkpoint(
         ],
         "reserved_codewords": [5, 6, 7],
         "bits_per_weight": BITS_PER_WEIGHT,
+        "per_tensor_scale": use_scaled_format,
+        "scale_multiplier": 1.4 if use_scaled_format else 1.0,
         "packing": "little-endian continuous 3-bit codes; 0..4 valid, 5..7 reserved",
         "zero_symbol_code": 2,
         "source_checkpoint_sha256": sha256_file(source),
@@ -183,7 +194,7 @@ def export_addsub_checkpoint(
         temporary.unlink(missing_ok=True)
 
     return {
-        "format": EXPORT_FORMAT,
+        "format": archive_format,
         "output": str(destination),
         "parameter_count": model.parameter_count(),
         "quantized_tensors": len(quantized_entries),
@@ -215,10 +226,17 @@ def load_addsub_export(
         weights_payload = archive.read("weights.bin")
         auxiliary_payload = archive.read("auxiliary.npz")
 
-    if manifest.get("format") != EXPORT_FORMAT:
+    archive_format = manifest.get("format")
+    if archive_format not in {EXPORT_FORMAT_V1, EXPORT_FORMAT}:
         raise ValueError("Unsupported Add/Sub export format.")
-    if manifest.get("weight_format") != FORMAT_NAME:
+    scaled_archive = archive_format == EXPORT_FORMAT
+    expected_weight_format = FORMAT_NAME if scaled_archive else LEGACY_FORMAT_NAME
+    if manifest.get("weight_format") != expected_weight_format:
         raise ValueError("Export weight quantization format is not supported.")
+    if scaled_archive and manifest.get("per_tensor_scale") is not True:
+        raise ValueError("Scaled export is missing its scale declaration.")
+    if not scaled_archive and manifest.get("per_tensor_scale") not in (None, False):
+        raise ValueError("Legacy export scale declaration is invalid.")
     if manifest.get("weight_symbols") != list(WEIGHT_SYMBOLS):
         raise ValueError("Export weight alphabet does not match the five-symbol codebook.")
     expected_code_map = [
@@ -306,6 +324,12 @@ def load_addsub_export(
             raise ValueError(f"Packed tensor {name!r} failed SHA-256 verification.")
         codes = unpack_3bit_codes(packed, shape)
         values = codes_to_values(codes)
+        if scaled_archive:
+            scale = entry.get("scale")
+            if (isinstance(scale, bool) or not isinstance(scale, (int, float))
+                    or not np.isfinite(scale) or scale <= 0.0):
+                raise ValueError(f"Packed tensor {name!r} has an invalid scale.")
+            values = values * np.float32(scale)
         restored[name] = torch.from_numpy(values.copy())
         expected_offset += nbytes
 
@@ -330,6 +354,10 @@ def load_addsub_export(
     if set(restored) != set(expected_state):
         raise ValueError("Export does not reconstruct the complete model state.")
     model.load_state_dict(restored, strict=True)
+    if scaled_archive:
+        # Freeze manifest scales so reloaded reference inference is identical.
+        for entry in entries:
+            model.get_parameter(entry["name"])._qmini_fixed_scale = float(entry["scale"])
     if model.parameter_count() != manifest.get("parameter_count"):
         raise ValueError("Export parameter count does not match the reconstructed model.")
     model.to(torch.device(device_name))

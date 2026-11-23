@@ -46,6 +46,8 @@ def normalize_training_text(
     if not isinstance(value, str):
         return "", "not_text"
     text = unicodedata.normalize("NFC", value)
+    text = text.replace("@-@", "-")
+    text = re.sub(r"[ \t]+([,.;:!?])", r"\1", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = "".join(
         char for char in text
