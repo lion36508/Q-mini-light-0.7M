@@ -15,6 +15,12 @@ def weight_scale(weight:torch.Tensor)->torch.Tensor:
     if not isinstance(weight,torch.Tensor) or not weight.is_floating_point(): raise TypeError("Weight scale requires floating-point weights.")
     if weight.numel()==0: raise ValueError("Cannot scale an empty weight tensor.")
     if not bool(torch.isfinite(weight).all()): raise ValueError("Non-finite weights cannot be quantized.")
+    fixed_scale = getattr(weight, "_qmini_fixed_scale", None)
+    if fixed_scale is not None:
+        value = torch.as_tensor(fixed_scale, device=weight.device, dtype=weight.dtype)
+        if value.numel() != 1 or not bool(torch.isfinite(value)) or float(value.item()) <= 0:
+            raise ValueError("Frozen quantization scale is invalid.")
+        return value
     return (weight.detach().abs().mean()*WEIGHT_SCALE_MULTIPLIER).clamp_min(MIN_WEIGHT_SCALE)
 
 def _quantize_normalized(weight:torch.Tensor)->torch.Tensor:
