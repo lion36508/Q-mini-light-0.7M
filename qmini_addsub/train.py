@@ -19,7 +19,7 @@ from .data import escape_special_token_literals
 from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 
 
-CHECKPOINT_FORMAT = "qmini-addsub-training-v3"
+CHECKPOINT_FORMAT = "qmini-addsub-training-v4"
 
 
 def sha256_file(path: str | Path) -> str:
@@ -382,7 +382,11 @@ def train_from_scratch(
             result["logits"].float().reshape(-1, config.vocab_size),
             targets.reshape(-1),
         )
-        loss = token_loss + 0.01 * result["aux_loss"]
+        loss = (
+            token_loss
+            + config.moe_balance_coef * result["aux_loss"]
+            + config.router_z_loss_coef * result["router_z_loss"]
+        )
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite training loss at step {step}.")
         loss.backward()
@@ -400,6 +404,9 @@ def train_from_scratch(
                 "learning_rate": current_lr,
                 "train_token_loss": last_loss,
                 "valid_token_loss": valid_loss,
+                "router_balance_loss": float(result["aux_loss"].detach()),
+                "router_z_loss": float(result["router_z_loss"].detach()),
+                "router_load_by_layer": result["router_load"].detach().cpu().tolist(),
                 "valid_bits_per_byte_estimate": bits_per_byte_estimate(
                     valid_loss, len(valid_tokens), validation_source_bytes
                 ),
