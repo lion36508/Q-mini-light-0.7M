@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -20,6 +22,11 @@ class AddSubConfig:
     kernel_size: int = 7
     max_context: int = 512
     dropout: float = 0.05
+    # Residual branches start small and grow only when the task supports them.
+    residual_init: float = 0.1
+    # Explicit coefficients keep the router objectives visible in the run config.
+    moe_balance_coef: float = 0.01
+    router_z_loss_coef: float = 0.001
     seed: int = 20261119
 
     def validate(self) -> None:
@@ -49,6 +56,14 @@ class AddSubConfig:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
+        if not math.isfinite(self.residual_init) or not 0.0 < self.residual_init < 1.0:
+            raise ValueError("residual_init must be finite and strictly between 0 and 1.")
+        for name, value in (
+            ("moe_balance_coef", self.moe_balance_coef),
+            ("router_z_loss_coef", self.router_z_loss_coef),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative.")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
             raise ValueError("seed must be a non-negative integer.")
         if self.n_experts < 2:
