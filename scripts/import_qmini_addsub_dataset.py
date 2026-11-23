@@ -209,6 +209,14 @@ def import_user_dataset(
             pretraining_splits[split] = _normalize_pretraining_file(
                 source, staging / f"pretrain_{split}.txt"
             )
+        normalized_split_hashes = {
+            name: entry["sha256"]
+            for name, entry in pretraining_splits.items()
+        }
+        if len(set(normalized_split_hashes.values())) != 3:
+            raise ValueError(
+                "Pretraining train/validation/test contain identical normalized split files."
+            )
 
         instruction_splits: dict[str, Any] = {}
         instruction_sources: dict[str, Any] = {}
