@@ -286,6 +286,7 @@ def fine_tune_from_addsub_checkpoint(
         "planned_steps": steps,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "save_every": save_every,
         "seed": seed,
     }
 
