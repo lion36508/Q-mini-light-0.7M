@@ -36,7 +36,7 @@ class NativeKernel:
             self.neon_function = self.library.qmini_kernel_has_neon
         except AttributeError as exc:
             raise RuntimeError(
-                "Native library is outdated (Q2-v3-capable ABI required). Rebuild it with: python -m qmini.native --build"
+                "Native library is outdated (Q2-v2 ABI required). Rebuild it with: python -m qmini.native --build"
             ) from exc
         i8 = np.ctypeslib.ndpointer(dtype=np.int8, flags="C_CONTIGUOUS")
         u8 = np.ctypeslib.ndpointer(dtype=np.uint8, flags="C_CONTIGUOUS")
@@ -76,15 +76,15 @@ class NativeKernel:
         if (
             isinstance(q2_version, bool)
             or not isinstance(q2_version, int)
-            or q2_version not in (1, 2, 3)
+            or q2_version not in (1, 2)
         ):
-            raise ValueError("q2_version must be the integer 1, 2 or 3.")
+            raise ValueError("q2_version must be the integer 1 or 2.")
         if not np.isfinite(ws).all() or (
             np.any(ws <= 0) if q2_version == 1 else np.any(ws < 0)
         ):
             raise ValueError(
                 "weight_scales must be finite and positive for Q2-v1, "
-                "or finite and non-negative for Q2-v2/v3."
+                "or finite and non-negative for Q2-v2."
             )
         if not np.isfinite(xs).all() or np.any(xs <= 0):
             raise ValueError("activation_scales must be finite and positive.")
