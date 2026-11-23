@@ -19,7 +19,7 @@ from .data import escape_special_token_literals
 from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 
 
-CHECKPOINT_FORMAT = "qmini-addsub-training-v4"
+CHECKPOINT_FORMAT = "qmini-addsub-training-v5"
 
 
 def sha256_file(path: str | Path) -> str:
@@ -228,12 +228,14 @@ def train_from_scratch(
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "learning_rate": learning_rate,
+        "matrix_weight_decay": 0.01,
+        "quantization": "scaled-five-symbol-v2",
         "save_every": save_every,
         "validate_every": validate_every,
         "seed": seed,
     }
     model = AddSubLanguageModel(config, seed=seed).to(device)
-    optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
+    optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     start_step = 0
     rng = random.Random(seed)
 

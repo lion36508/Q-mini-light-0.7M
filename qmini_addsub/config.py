@@ -14,7 +14,7 @@ class AddSubConfig:
     the legacy Q2-v2 configuration and can be changed only for a new run.
     """
 
-    vocab_size: int = 512
+    vocab_size: int = 1024
     d_model: int = 96
     d_hidden: int = 170
     n_layers: int = 4

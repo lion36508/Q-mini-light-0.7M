@@ -21,11 +21,8 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v5"
-SYSTEM_TEXT = (
-    "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
-    "clearly and accurately. Do not invent facts; state uncertainty when needed."
-)
+SFT_FORMAT = "qmini-addsub-sft-v6"
+SYSTEM_TEXT = "You are Q-Mini."
 
 
 def _load_conversations(
@@ -286,13 +283,16 @@ def fine_tune_from_addsub_checkpoint(
         "planned_steps": steps,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "matrix_weight_decay": 0.01,
+        "quantization": "scaled-five-symbol-v2",
+        "system_prompt": SYSTEM_TEXT,
         "save_every": save_every,
         "seed": seed,
     }
 
     model = AddSubLanguageModel(config, seed=seed).to(device)
     model.load_state_dict(base["model"], strict=True)
-    optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
+    optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     hashes = {
         "base_sha256": sha256_file(base_path),
         "tokenizer_sha256": sha256_file(tokenizer_path),
