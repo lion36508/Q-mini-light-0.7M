@@ -1484,6 +1484,7 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     ]
     vocab = {token: index for index, token in enumerate(special)}
     vocab.update({"Hello": 8, "there": 9, "friend": 10})
+    vocab.update({f"unused_{index}": index for index in range(11, 264)})
     tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.add_special_tokens([AddedToken(token, special=True) for token in special[1:]])
@@ -1524,7 +1525,7 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
             {"role": "assistant", "content": "Hello there friend"},
         ],
     }
-    test_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    test_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     manifest_path = tmp_path / "dataset_manifest.json"
     manifest_path.write_text(
         json.dumps({
