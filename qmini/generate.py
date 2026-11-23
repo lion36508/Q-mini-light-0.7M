@@ -52,21 +52,11 @@ def load_model(model_dir: str | Path, device: str | None = None):
             raise ValueError("Final-model manifest config does not match config.json.")
         if manifest.get("parameters") != config.estimated_parameter_count():
             raise ValueError("Final-model manifest parameter count does not match config.")
-        expected_q2_version = 3 if config.quantization_version == "q2-v3" else 2
-        expected_q2_format = f"qmini-packed-v{expected_q2_version}"
         if (
-            manifest.get("matrix_weight_format") != expected_q2_format
+            manifest.get("matrix_weight_format") != "qmini-packed-v2"
             or manifest.get("matrix_weight_bits") != 2
-            or manifest.get("q2_version", expected_q2_version) != expected_q2_version
         ):
-            raise ValueError(
-                f"Final-model manifest does not declare the {expected_q2_format} two-bit contract."
-            )
-        if (
-            "quantize_embeddings" in manifest
-            and manifest["quantize_embeddings"] is not config.quantize_embeddings
-        ):
-            raise ValueError("Final-model manifest embedding storage policy does not match config.")
+            raise ValueError("Final-model manifest does not declare the Q2-v2 two-bit contract.")
 
         packed_name = manifest.get("packed_export")
         if (
@@ -77,13 +67,13 @@ def load_model(model_dir: str | Path, device: str | None = None):
         ):
             raise ValueError("Final-model manifest has an invalid packed-export filename.")
         if not packed_path.is_file():
-            raise FileNotFoundError("Final-model manifest references a missing packed Q2 export.")
+            raise FileNotFoundError("Final-model manifest references a missing packed Q2-v2 export.")
         packed_fingerprint = _sha256_file(packed_path)
         if (
             manifest.get("packed_export_bytes") != packed_path.stat().st_size
             or manifest.get("packed_export_sha256") != packed_fingerprint
         ):
-            raise ValueError("Packed Q2 export size/SHA-256 does not match the final-model manifest.")
+            raise ValueError("Packed Q2-v2 export size/SHA-256 does not match the final-model manifest.")
 
         dense_included = manifest.get("dense_training_snapshot_included")
         if not isinstance(dense_included, bool):
@@ -124,7 +114,7 @@ def load_model(model_dir: str | Path, device: str | None = None):
         and not dense_snapshot_available
     ):
         raise RuntimeError(
-            "The packed Q2 inference runtime is CPU-only. Refusing to expand "
+            "The packed Q2-v2 inference runtime is CPU-only. Refusing to expand "
             "2-bit matrix weights into dense FP32 tensors for an explicit "
             f"{requested_device.type} request. Use device='cpu' or provide a "
             "separately verified legacy dense snapshot."
@@ -154,7 +144,7 @@ def load_model(model_dir: str | Path, device: str | None = None):
                     "qmini-final-model-v2 bundle or standalone legacy model.pt without a manifest."
                 )
             raise FileNotFoundError(
-                f"No verified compatible weights found. Expected the packed Q2 "
+                f"No verified compatible weights found. Expected the packed Q2-v2 "
                 f"artifact {packed_path} for CPU inference or a fingerprinted "
                 f"legacy dense snapshot at {dense_path}."
             )
