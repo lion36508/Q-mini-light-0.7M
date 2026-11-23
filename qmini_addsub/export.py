@@ -30,6 +30,9 @@ EXPORT_FORMAT = "qmini-addsub-packed-weights-v1"
 ACCEPTED_CHECKPOINT_FORMATS = {
     CHECKPOINT_FORMAT,
     SFT_FORMAT,
+    # Read-only export compatibility for the shape-compatible pre-v2 graph.
+    "qmini-addsub-training-v3",
+    "qmini-addsub-sft-v4",
     "qmini-addsub-sft-v3",
     "qmini-addsub-sft-v2",
 }
