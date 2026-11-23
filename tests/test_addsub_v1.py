@@ -1589,3 +1589,36 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     assert (output_dir / "heldout_responses.jsonl").is_file()
     assert (output_dir / "heldout_summary.json").is_file()
+
+
+
+def test_metrics_reconciliation_rejects_non_monotonic_or_invalid_steps(tmp_path):
+    import json
+
+    identity = {
+        "train_sha256": "a" * 64,
+        "run_contract": {"planned_steps": 100, "seed": 17},
+    }
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text(
+        "".join(
+            json.dumps({"step": step, **identity}) + "\n"
+            for step in (20, 10)
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="strictly increasing"):
+        reconcile_metrics_file(str(metrics), identity, 20, "Pretraining")
+
+    metrics.write_text(
+        json.dumps({"step": True, **identity}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="invalid step"):
+        reconcile_metrics_file(str(metrics), identity, 20, "SFT")
+
+    metrics.write_text("{partial json\n", encoding="utf-8")
+    before = metrics.read_bytes()
+    with pytest.raises(ValueError, match="not valid JSONL"):
+        reconcile_metrics_file(str(metrics), identity, 20, "Pretraining")
+    assert metrics.read_bytes() == before
