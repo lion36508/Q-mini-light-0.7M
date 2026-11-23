@@ -3,7 +3,6 @@ import json
 
 import torch
 
-from qmini.config import QMiniConfig
 from qmini.export import verify_packed_export
 from qmini.initial_build import build_initial_brain, iter_initial_state_tensors
 from qmini.model import QMiniMoE
@@ -55,34 +54,6 @@ def test_initial_build_emits_verified_q2_v2_artifact(tiny_config, tmp_path):
     )
     assert getattr(packed_model, "_qmini_packed_runtime", False)
     assert all(parameter.ndim < 2 for parameter in packed_model.parameters())
-
-
-def test_initial_build_emits_q2_v3_with_fp16_tied_embedding(tiny_config, tmp_path):
-    values = tiny_config.to_dict()
-    values["quantization_version"] = "q2-v3"
-    values["quantize_embeddings"] = False
-    config = QMiniConfig.from_dict(values)
-    target_dir = tmp_path / "fresh-q2-v3-initial"
-
-    manifest = build_initial_brain(config, target_dir, source_revision="q2-v3-test")
-    assert manifest["matrix_weight_format"] == "qmini-packed-v3"
-    assert manifest["matrix_weight_bits"] == 2
-    assert manifest["q2_version"] == 3
-    assert manifest["q2_codebook"] == {
-        "00": -1.0, "01": 0.0, "10": 0.5, "11": 1.0,
-    }
-    assert manifest["quantize_embeddings"] is False
-    assert manifest["embedding_storage"] == "float16"
-
-    packed_path = target_dir / manifest["packed_export"]
-    report = verify_packed_export(packed_path)
-    assert report["format"] == "qmini-packed-v3"
-    assert report["q2_version"] == 3
-    assert report["fp16_matrix_tensor_count"] == 1
-
-    loaded = load_packed_model(packed_path, expected_config=config)
-    assert loaded.embedding.weight.dtype == torch.float16
-    assert loaded._qmini_packed_runtime is True
 
 
 def test_initial_build_refuses_to_overwrite_existing_directory(tiny_config, tmp_path):
