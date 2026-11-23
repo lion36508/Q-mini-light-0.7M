@@ -21,7 +21,7 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v4"
+SFT_FORMAT = "qmini-addsub-sft-v5"
 SYSTEM_TEXT = (
     "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
     "clearly and accurately. Do not invent facts; state uncertainty when needed."
@@ -415,7 +415,10 @@ def fine_tune_from_addsub_checkpoint(
             result["logits"].float().reshape(-1, config.vocab_size),
             labels.reshape(-1),
             ignore_index=-100,
-        ) + 0.01 * result["aux_loss"]
+        ) + (
+            config.moe_balance_coef * result["aux_loss"]
+            + config.router_z_loss_coef * result["router_z_loss"]
+        )
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite SFT loss at step {step}.")
         loss.backward()
@@ -433,6 +436,9 @@ def fine_tune_from_addsub_checkpoint(
                 "learning_rate": current_lr,
                 "train_loss": last_loss,
                 "valid_response_loss": valid_loss,
+                "router_balance_loss": float(result["aux_loss"].detach()),
+                "router_z_loss": float(result["router_z_loss"].detach()),
+                "router_load_by_layer": result["router_load"].detach().cpu().tolist(),
                 "train_sha256": hashes["train_sha256"],
                 "valid_sha256": hashes["valid_sha256"],
                 "test_sha256": hashes["test_sha256"],
