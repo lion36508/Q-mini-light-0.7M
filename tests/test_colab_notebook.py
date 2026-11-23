@@ -134,9 +134,9 @@ def test_colab_smoke_learning_proof_loads_training_checkpoint_not_dense_snapshot
 def test_training_ready_builder_bundles_dormant_training_runtime_and_never_starts_it():
     notebook_path = (
         Path(__file__).resolve().parents[1]
-        / "colab"
-        / "archive"
-        / "legacy-experiments"
+        / "tests"
+        / "fixtures"
+        / "legacy_colab"
         / "QMini_Training_Ready_Build.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -177,9 +177,9 @@ def test_training_ready_builder_bundles_dormant_training_runtime_and_never_start
 def test_training_ready_package_identity_includes_preparation_contract():
     notebook_path = (
         Path(__file__).resolve().parents[1]
-        / "colab"
-        / "archive"
-        / "legacy-experiments"
+        / "tests"
+        / "fixtures"
+        / "legacy_colab"
         / "QMini_Training_Ready_Build.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -292,9 +292,9 @@ def test_training_runner_defaults_match_the_bundled_package_contract():
 def test_one_click_colab_notebook_builds_only_and_bundles_training_runtime():
     notebook_path = (
         Path(__file__).resolve().parents[1]
-        / "colab"
-        / "archive"
-        / "legacy-experiments"
+        / "tests"
+        / "fixtures"
+        / "legacy_colab"
         / "QMini_One_Click_Training.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
