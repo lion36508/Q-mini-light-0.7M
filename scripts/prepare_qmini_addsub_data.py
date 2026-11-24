@@ -11,8 +11,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
-import pyarrow.parquet as pq
 
 from qmini_addsub.data import (
     accept_oasst1_message,
@@ -99,8 +97,98 @@ def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list
     return chunks
 
 
+def _write_finewiki_rows(rows, output: Path) -> dict:
+    """Clean and article-split an iterable of raw FineWiki rows."""
+    output.mkdir(parents=True, exist_ok=True)
+    split_paths = {
+        name: output / f"pretrain_{name}.txt"
+        for name in ("train", "validation", "test")
+    }
+    existing = [str(path) for path in split_paths.values() if path.exists()]
+    if existing:
+        raise FileExistsError(
+            "FineWiki output already exists; use a fresh versioned data folder: "
+            + ", ".join(existing)
+        )
+
+    counts = {
+        name: {"articles": 0, "chunks": 0, "bytes": 0}
+        for name in split_paths
+    }
+    dropped: dict[str, int] = defaultdict(int)
+    seen_ids: set[str] = set()
+    handles = {
+        name: path.open("w", encoding="utf-8", newline="\n")
+        for name, path in split_paths.items()
+    }
+    try:
+        for row_number, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                dropped["not_object"] += 1
+                continue
+            if row.get("in_language") != "en" or row.get("wikiname") != "enwiki":
+                dropped["not_english_enwiki"] += 1
+                continue
+
+            raw_id = row.get("page_id", row.get("id"))
+            title, title_reason = normalize_training_text(
+                row.get("title"), min_chars=1, max_chars=512
+            )
+            body = row.get("text")
+            if raw_id is None or not str(raw_id).strip():
+                dropped["missing_page_id"] += 1
+                continue
+            page_key = str(raw_id).strip()
+            if title_reason != "accepted" or not isinstance(body, str) or len(body.strip()) < 200:
+                dropped["empty_or_invalid_article"] += 1
+                continue
+            if page_key in seen_ids:
+                dropped["duplicate_page_id"] += 1
+                continue
+            seen_ids.add(page_key)
+
+            split = stable_split(
+                page_key, seed="qmini-finewiki-en-2025-08"
+            )
+            accepted_chunks = 0
+            for chunk in _article_text_chunks(title, body):
+                cleaned, reason = normalize_training_text(
+                    chunk, min_chars=200, max_chars=32768
+                )
+                if reason != "accepted":
+                    dropped[f"chunk_{reason}"] += 1
+                    continue
+                handles[split].write(cleaned + "\n\n")
+                counts[split]["chunks"] += 1
+                accepted_chunks += 1
+            if accepted_chunks:
+                counts[split]["articles"] += 1
+            else:
+                dropped["article_without_usable_chunks"] += 1
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    for split, path in split_paths.items():
+        counts[split]["bytes"] = path.stat().st_size
+        counts[split]["sha256"] = sha256_file(path)
+        if counts[split]["articles"] == 0 or counts[split]["chunks"] == 0:
+            raise ValueError(f"FineWiki {split} split is empty.")
+
+    return {
+        "splits": counts,
+        "dropped": dict(sorted(dropped.items())),
+        "split_rule": (
+            "stable SHA-256 page-ID split: 90% train, 5% validation, 5% test; "
+            "all chunks from one Wikipedia page remain in one split"
+        ),
+    }
+
+
 def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
     """Prepare a hash-pinned 1% random English FineWiki sample, split by whole page."""
+    from huggingface_hub import hf_hub_download
+
     compressed_path = Path(hf_hub_download(
         repo_id=FINEWIKI_REPOSITORY,
         filename=FINEWIKI_FILE,
@@ -123,22 +211,7 @@ def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
             "python -m pip install 'zstandard>=0.22'."
         ) from exc
 
-    output.mkdir(parents=True, exist_ok=True)
-    split_paths = {
-        name: output / f"pretrain_{name}.txt"
-        for name in ("train", "validation", "test")
-    }
-    counts = {
-        name: {"articles": 0, "chunks": 0, "bytes": 0}
-        for name in split_paths
-    }
-    dropped: dict[str, int] = defaultdict(int)
-    seen_ids: set[str] = set()
-    handles = {
-        name: path.open("w", encoding="utf-8", newline="\n")
-        for name, path in split_paths.items()
-    }
-    try:
+    def iter_rows():
         with compressed_path.open("rb") as source:
             reader = zstandard.ZstdDecompressor().stream_reader(source)
             with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
@@ -146,61 +219,13 @@ def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
                     if not line.strip():
                         continue
                     try:
-                        row = json.loads(line)
+                        yield json.loads(line)
                     except json.JSONDecodeError as exc:
                         raise ValueError(
                             f"FineWiki JSONL line {line_number} is invalid."
                         ) from exc
-                    if not isinstance(row, dict):
-                        dropped["not_object"] += 1
-                        continue
-                    if row.get("in_language") != "en" or row.get("wikiname") != "enwiki":
-                        dropped["not_english_enwiki"] += 1
-                        continue
-                    page_id = row.get("id") or row.get("page_id")
-                    title, title_reason = normalize_training_text(
-                        row.get("title"), min_chars=1, max_chars=512
-                    )
-                    body = row.get("text")
-                    if not isinstance(page_id, (str, int)) or not str(page_id).strip():
-                        dropped["missing_page_id"] += 1
-                        continue
-                    page_key = str(page_id).strip()
-                    if page_key in seen_ids:
-                        dropped["duplicate_page_id"] += 1
-                        continue
-                    seen_ids.add(page_key)
-                    if title_reason != "accepted" or not isinstance(body, str) or len(body.strip()) < 200:
-                        dropped["empty_or_invalid_article"] += 1
-                        continue
-                    split = stable_split(
-                        page_key, seed="qmini-finewiki-en-2025-08"
-                    )
-                    accepted_chunks = 0
-                    for chunk in _article_text_chunks(title, body):
-                        cleaned, reason = normalize_training_text(
-                            chunk, min_chars=200, max_chars=32768
-                        )
-                        if reason != "accepted":
-                            dropped[f"chunk_{reason}"] += 1
-                            continue
-                        handles[split].write(cleaned + "\n\n")
-                        counts[split]["chunks"] += 1
-                        accepted_chunks += 1
-                    if accepted_chunks:
-                        counts[split]["articles"] += 1
-                    else:
-                        dropped["article_without_usable_chunks"] += 1
-    finally:
-        for handle in handles.values():
-            handle.close()
 
-    for split, path in split_paths.items():
-        counts[split]["bytes"] = path.stat().st_size
-        counts[split]["sha256"] = sha256_file(path)
-        if counts[split]["articles"] == 0 or counts[split]["chunks"] == 0:
-            raise ValueError(f"FineWiki {split} split is empty.")
-
+    prepared = _write_finewiki_rows(iter_rows(), output)
     return {
         "repository": FINEWIKI_REPOSITORY,
         "revision": FINEWIKI_REVISION,
@@ -213,14 +238,15 @@ def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
         "human_authored_source": True,
         "synthetic_training_records_included": 0,
         "sample_method": "uniform random 1% sample of the English FineWiki page corpus; pinned source file",
-        "split_rule": "stable SHA-256 page-ID split: 90% train, 5% validation, 5% test; all chunks of one page stay in one split",
-        "splits": counts,
-        "dropped": dict(sorted(dropped.items())),
         "attribution": "Wikipedia contributors; FineWiki dataset (Guilherme Penedo); processed sample by agentlans",
+        **prepared,
     }
 
 
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
+    from huggingface_hub import hf_hub_download
+    import pyarrow.parquet as pq
+
     parquet_path = Path(
         hf_hub_download(
             repo_id=OASST_REPOSITORY,
@@ -337,6 +363,8 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
 
 
 def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
+    from huggingface_hub import hf_hub_download
+
     jsonl_path = Path(
         hf_hub_download(
             repo_id=DOLLY_REPOSITORY,
@@ -467,6 +495,21 @@ def main() -> None:
 
     output, cache = Path(args.output), Path(args.cache)
     output.mkdir(parents=True, exist_ok=True)
+    managed_outputs = [
+        output / "dataset_manifest.json",
+        output / "pretrain_train.txt",
+        output / "pretrain_validation.txt",
+        output / "pretrain_test.txt",
+        output / "sft_train.jsonl",
+        output / "sft_validation.jsonl",
+        output / "sft_test.jsonl",
+    ]
+    existing_outputs = [str(path) for path in managed_outputs if path.exists()]
+    if existing_outputs:
+        parser.error(
+            "Prepared output already exists; use a fresh versioned data folder to "
+            "avoid overwriting a prior dataset: " + ", ".join(existing_outputs)
+        )
     print("Preparing hash-pinned FineWiki English Wikipedia sample...")
     finewiki_info = prepare_finewiki_sample(cache, output)
     print("Preparing strictly filtered human OASST1 conversations...")
