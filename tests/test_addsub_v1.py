@@ -82,7 +82,8 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
-    assert "'--curriculum-uniform-fraction', '0.35'" in all_code
+    assert "SFT_CURRICULUM_UNIFORM_FRACTION = 0.35" in all_code
+    assert "'--curriculum-uniform-fraction', str(SFT_CURRICULUM_UNIFORM_FRACTION)" in all_code
     assert "Colab-only" in "".join(notebook["cells"][0]["source"])
 
 
