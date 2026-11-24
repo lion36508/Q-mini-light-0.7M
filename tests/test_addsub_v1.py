@@ -1812,3 +1812,67 @@ def test_addsub_v2_router_and_residual_coefficients_are_validated():
         AddSubConfig(moe_balance_coef=-0.1).validate()
     with pytest.raises(ValueError, match="router_z_loss_coef"):
         AddSubConfig(router_z_loss_coef=float("inf")).validate()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_new_tokens": True},
+        {"max_new_tokens": 1.5},
+        {"top_k": 1.5},
+        {"top_p": float("nan")},
+        {"temperature": float("inf")},
+        {"temperature": float("nan")},
+        {"repetition_penalty": float("nan")},
+        {"repetition_window": 1.5},
+        {"repetition_window": True},
+    ],
+)
+def test_addsub_generation_rejects_invalid_numeric_controls(kwargs):
+    from qmini_addsub.generate import generate_reply
+
+    with pytest.raises((TypeError, ValueError)):
+        generate_reply(None, None, [], **kwargs)
+
+
+def test_addsub_generation_stops_on_unknown_token_instead_of_emitting_it():
+    from types import SimpleNamespace
+
+    from qmini_addsub.generate import generate_reply
+
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+        "hello": 8,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+
+    class UnknownFirstModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+            self.config = SimpleNamespace(max_context=32)
+
+        def init_cache(self, batch_size=1, device=None):
+            return []
+
+        def forward_step(self, input_ids, caches):
+            logits = torch.full((input_ids.shape[0], len(vocab)), -5.0)
+            logits[:, vocab["<unk>"]] = 10.0
+            return logits, caches
+
+    answer = generate_reply(
+        UnknownFirstModel(),
+        tokenizer,
+        [{"role": "user", "content": "hello"}],
+        max_new_tokens=8,
+        greedy=True,
+    )
+    assert answer == "I'm not sure how to answer that yet."
