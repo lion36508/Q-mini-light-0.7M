@@ -1353,6 +1353,14 @@ def train_model(
             "step": completed,
             "tokens_seen": tokens_seen,
             "supervised_tokens_seen": supervised_tokens_seen,
+            # Keep the loss curve auditable when an explicit dataset switch
+            # creates a new optimization phase inside one resumed run.
+            "train_sha256": contract["train"]["sha256"],
+            "validation_sha256": contract["validation"]["sha256"],
+            "dataset_switch_step": (
+                contract.get("dataset_switch", {}).get("switch_step")
+            ),
+            "schedule_start_step": schedule_start_step,
             "train_loss": accum["loss"],
             "train_cross_entropy": accum["ce"],
             "router_aux_loss": accum["aux"],
