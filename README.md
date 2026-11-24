@@ -41,6 +41,7 @@ The Add/Sub SFT stage now uses an experimental **self-paced difficulty curriculu
 - A uniform warm-up first measures the model's current response loss on individual human-authored training examples.
 - The sampler then focuses progressively on moderately difficult examples based on their EMA response loss.
 - At least 35% uniform replay remains in the sampling distribution so easy/common language and previously learned facts continue to be practised.
+- The Colab notebook can run a separate pure-uniform control (`1.0`) and stores its SFT checkpoints/evaluation/export artifacts in a separate variant folder.
 - Sampling state, schedule, per-example difficulty history and random state are stored in the SFT checkpoint for exact resume.
 
 This design is inspired by self-paced curriculum research, including SPaCe (ACL 2026), but it is a Q-Mini-specific experiment—not proof of better intelligence. It must beat a uniform-sampling control under matched seeds, tokens and compute before being promoted as the default final recipe.
