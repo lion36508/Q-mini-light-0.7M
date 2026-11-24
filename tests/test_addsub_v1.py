@@ -2035,7 +2035,8 @@ def test_phone_native_prototype_is_parked_outside_active_addsub_and_ci():
     assert "qmini_addsub/native_projection.cpp" not in workflow
     assert "qmini/native_kernel.cpp" in workflow
 
-def test_legacy_sft_v6_remains_scaled_for_reference_inference_and_export(tmp_path):
+@pytest.mark.parametrize("checkpoint_format", ["qmini-addsub-sft-v6", "qmini-addsub-sft-v7"])
+def test_legacy_scaled_sft_checkpoints_remain_readable_for_inference_and_export(tmp_path, checkpoint_format):
     from qmini_addsub.export import ACCEPTED_CHECKPOINT_FORMATS, SCALED_CHECKPOINT_FORMATS
     from qmini_addsub.generate import load_addsub_model
 
@@ -2050,10 +2051,10 @@ def test_legacy_sft_v6_remains_scaled_for_reference_inference_and_export(tmp_pat
         dropout=0.0,
     )
     original = AddSubLanguageModel(config)
-    checkpoint_path = tmp_path / "legacy-sft-v6.pt"
+    checkpoint_path = tmp_path / f"legacy-{checkpoint_format}.pt"
     torch.save(
         {
-            "format": "qmini-addsub-sft-v6",
+            "format": checkpoint_format,
             "step": 10,
             "config": config.to_dict(),
             "model": original.state_dict(),
@@ -2063,8 +2064,8 @@ def test_legacy_sft_v6_remains_scaled_for_reference_inference_and_export(tmp_pat
     loaded = load_addsub_model(checkpoint_path, device_name="cpu")
     matrix_parameter = loaded.token_embedding.weight
     assert not hasattr(matrix_parameter, "_qmini_fixed_scale")
-    assert "qmini-addsub-sft-v6" in ACCEPTED_CHECKPOINT_FORMATS
-    assert "qmini-addsub-sft-v6" in SCALED_CHECKPOINT_FORMATS
+    assert checkpoint_format in ACCEPTED_CHECKPOINT_FORMATS
+    assert checkpoint_format in SCALED_CHECKPOINT_FORMATS
 
 def test_self_paced_curriculum_carries_uniform_replay_quota_for_batch_one():
     import random
