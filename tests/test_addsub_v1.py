@@ -82,6 +82,8 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
+    assert "'--curriculum-uniform-fraction', '0.35'" in all_code
+    assert "Google Colab only" in notebook["cells"][0]["source"][1] or "Google Colab only" in "".join(notebook["cells"][0]["source"])
 
 
 def test_addsub_config_is_independent_and_validates():
@@ -1993,4 +1995,14 @@ def test_self_paced_curriculum_supports_pure_uniform_control():
     assert second_info["mode"] == "uniform_control"
     assert len(set(second)) == 4
     assert second_info["uniform_fraction"] == 1.0
+
+def test_phone_native_prototype_is_parked_outside_active_addsub_and_ci():
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "qmini_addsub" / "native_projection.cpp").exists()
+    parked_kernel = root / "experiments" / "phone" / "realme_c17" / "native_projection.cpp"
+    assert parked_kernel.is_file()
+
+    workflow = (root / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert "qmini_addsub/native_projection.cpp" not in workflow
+    assert "qmini/native_kernel.cpp" in workflow
 
