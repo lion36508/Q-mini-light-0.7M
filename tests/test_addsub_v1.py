@@ -2081,3 +2081,26 @@ def test_self_paced_curriculum_carries_uniform_replay_quota_for_batch_one():
     state = sampler.state_dict()
     assert 0.0 <= state["uniform_remainder"] < 1.0
 
+def test_self_paced_curriculum_focuses_only_on_measured_records_and_handles_loss_ties():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=20,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(77)
+    seen, warmup_info = sampler.sample(5, rng)
+    assert warmup_info["mode"] == "uniform_warmup"
+    sampler.update(seen, [1.0, 1.0, 1.0, 1.0, 1.0])
+
+    selected, info = sampler.sample(4, rng)
+    assert info["mode"] == "self_paced"
+    assert info["focused_samples"] == 3
+    uniform_selected = set(selected[: info["uniform_samples"]])
+    focused_selected = set(selected[info["uniform_samples"] :])
+    assert len(uniform_selected & focused_selected) == 0
+    assert focused_selected.issubset(set(seen) - uniform_selected)
+    assert len(selected) == len(set(selected)) == 4
+
