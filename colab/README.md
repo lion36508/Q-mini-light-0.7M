@@ -1,30 +1,26 @@
-# Active Colab entry points — Add/Sub is the primary model
+# Colab training entry points — Add/Sub is primary
 
-There are exactly two model lines in this repository. The new Add/Sub model is the primary development/training target. The old Q-Mini Light Q2-v2 notebooks are retained only for compatibility, rollback and comparison. Never mix their datasets, tokenizers, checkpoints, configs or Drive folders.
+**Current scope: Google Colab only.** The new Q-Mini Add/Sub model is developed, trained, resumed and evaluated through its Colab notebook. Phone/Android deployment is explicitly out of scope in this phase.
 
-## 1. Primary model: Q-Mini Add/Sub
+## 1. Primary training notebook — Q-Mini Add/Sub
 
-- **Training:** [Q-Mini Add/Sub English training notebook](QMini_AddSub_V1_From_Scratch.ipynb).
-- Package: qmini_addsub/.
-- Independent random initialization, English-first data preparation, tokenizer, pretraining, response-masked SFT and held-out evaluation.
-- CPU-only by default. All data download/import, tokenizer construction, pretraining, SFT, evaluation and export switches are OFF until explicitly reviewed and enabled.
-- Uses a new isolated Drive folder at Q mini 2 light/trainability_finewiki_v1. Do not overwrite the older trainability_v2 data/checkpoints.
-- No old Q2-v2 checkpoint is loaded.
-- The training model is experimental and the full integer-only Android runtime is not complete.
+- Notebook: [Q-Mini Add/Sub Colab-only English training](QMini_AddSub_V1_From_Scratch.ipynb)
+- Package: `qmini_addsub/`
+- Independent random initialization, pinned English corpus preparation, tokenizer build, pretraining, response-masked assistant SFT and held-out evaluation.
+- CPU-only by default, conservative thread count, separate Drive folder `Q mini 2 light/trainability_finewiki_v1`.
+- SFT uses the experimental self-paced difficulty sampler with 35% uniform replay; metrics and checkpoint state preserve the sampler's state for exact resume.
+- All data preparation and training switches are OFF by default. Review source licenses and available storage before enabling each stage.
+- No legacy Q2-v2 checkpoint is loaded.
 
-## 2. Legacy model: Q-Mini Light Q2-v2 (compatibility only)
+## 2. Legacy Q-Mini Light Q2-v2 — compatibility only
 
-- **Existing-checkpoint chat:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb).
-- **Legacy resume/debug only:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb).
-- Package: qmini/.
-- Preserve its checkpoints/artifacts. Do not use it as the default route for new Add/Sub development.
+- Existing checkpoint chat: [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb).
+- Legacy resume/debug only: [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb).
+- Package: `qmini/`.
+- Preserve the old checkpoints, data and tokenizer. Do not use this route for new Add/Sub development.
 
-## Replacement rule
+## 3. Phone experiments are parked separately
 
-The new Add/Sub model becomes the sole default only after real-data English pretraining and SFT, independent held-out quality checks, a complete audited integer-only graph, ARM64 scalar/NEON parity, and end-to-end measurements on the target Realme C73 5G. Until that is proven, legacy remains available for rollback but is not the primary development model.
+Phone-specific prototypes are kept under `experiments/phone/realme_c17/`. They are not imported by the active model, not part of the training notebook, and not part of the Add/Sub CI path. The current phase does not build or benchmark Android/mobile inference.
 
-See docs/PHONE_RUNTIME_READINESS.md, docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md and qmini_addsub/README.md for status and requirements.
-
-## Legacy regression fixtures
-
-Historical notebook snapshots used by CI are stored under tests/fixtures/legacy_colab/. They protect backward compatibility only; they are not current training instructions.
+See `docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md` for the Colab research plan and `qmini_addsub/README.md` for the SFT learning recipe.
