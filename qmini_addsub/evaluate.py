@@ -48,7 +48,7 @@ def lexical_scores(reference: str, prediction: str) -> dict[str, float]:
 
 
 def _answer_diversity(predictions: list[str]) -> dict[str, Any]:
-    """Measure exact normalized repeats to expose constant-answer collapse."""
+    """Measure repeated whole answers and repeated four-word loops."""
     if not predictions:
         raise ValueError("Output-diversity analysis requires at least one prediction.")
     normalized = [" ".join(_words(value)) for value in predictions]
@@ -56,6 +56,21 @@ def _answer_diversity(predictions: list[str]) -> dict[str, Any]:
     unique_count = len(counts)
     largest_count = max(counts.values())
     total = len(normalized)
+    total_ngrams = 0
+    repeated_ngrams = 0
+    max_repeated_4gram_count = 0
+    for prediction in predictions:
+        tokens = _words(prediction)
+        ngrams = Counter(
+            tuple(tokens[index:index + 4])
+            for index in range(max(0, len(tokens) - 3))
+        )
+        total_ngrams += sum(ngrams.values())
+        repeated_ngrams += sum(count - 1 for count in ngrams.values() if count > 1)
+        if ngrams:
+            max_repeated_4gram_count = max(
+                max_repeated_4gram_count, max(ngrams.values())
+            )
     return {
         "examples": total,
         "unique_normalized_answers": unique_count,
@@ -64,12 +79,16 @@ def _answer_diversity(predictions: list[str]) -> dict[str, Any]:
         "largest_identical_answer_fraction": largest_count / total,
         "empty_answer_count": sum(not value for value in normalized),
         "all_outputs_identical": unique_count == 1,
+        "repeated_4gram_fraction": (
+            repeated_ngrams / total_ngrams if total_ngrams else 0.0
+        ),
+        "max_repeated_4gram_count": max_repeated_4gram_count,
         "metric_note": (
-            "Exact equality after Unicode word normalization. Paraphrased or "
-            "semantically repetitive answers require human review."
+            "Exact equality after Unicode word normalization plus within-answer "
+            "four-word phrase repetition. Paraphrased or semantically repetitive "
+            "answers still require human review."
         ),
     }
-
 
 @torch.inference_mode()
 def evaluate_heldout_conversations(
