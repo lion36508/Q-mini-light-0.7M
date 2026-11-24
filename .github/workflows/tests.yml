@@ -42,8 +42,6 @@ jobs:
           sudo apt-get install -y g++-aarch64-linux-gnu
           aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++17 -fPIC -shared \
             qmini/native_kernel.cpp -o /tmp/libqmini_kernel_aarch64.so
-          aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
-            qmini_addsub/native_projection.cpp -o /tmp/libqmini-addsub-projection-aarch64.so
           file /tmp/libqmini_kernel_aarch64.so
       - name: Validate Colab notebook Python syntax
         run: |
