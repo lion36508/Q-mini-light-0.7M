@@ -1,105 +1,83 @@
-# Q-Mini Light 0.7M — Add/Sub is the primary development model
+# Q-Mini — Colab-only Add/Sub learning model
 
-A from-scratch, English-first, text-only language-model research project. The new Q-Mini Add/Sub line is the primary model being developed for future assistant and phone use. The old Q-Mini Light/Q2-v2 line is retained only as a compatibility and comparison baseline until Add/Sub passes the full replacement gate.
+Q-Mini is an English-first, from-scratch language-model research project. **The active new-model work is designed and trained through Google Colab.** The goal of this phase is to improve learning efficiency, knowledge retention, assistant behavior and reasoning on the training/evaluation pipeline—not to deploy the model on a phone.
 
-**Important:** Add/Sub is not yet a validated general-purpose assistant or a complete Android runtime. No full real-data Add/Sub training run or Realme C73 on-device benchmark has been completed.
+## Exactly two model lines
 
-## Model lineup — exactly two lines
-
-| Line | Package | Role and status |
+| Model | Package | Current role |
 |---|---|---|
-| **Q-Mini Add/Sub (primary)** | qmini_addsub/ | New 760,340-parameter independent model, English training pipeline, SFT, evaluation, packed weight archive and reference chat. Primary development target; full integer-only phone runtime and trained-quality validation remain incomplete. |
-| Q-Mini Light legacy Q2-v2 | qmini/ | Preserved 705,742-parameter baseline and old artifacts. Compatibility/reference only; not the default route for new model development. |
+| **Q-Mini Add/Sub (primary)** | `qmini_addsub/` | The new independent model, trained from random initialization through the Colab notebook. Its current default reference profile has 760,340 parameters. |
+| Q-Mini Light Q2-v2 (legacy) | `qmini/` | Compatibility and comparison baseline only. Preserve old checkpoints and artifacts; do not use it as the active new-model training route. |
 
-The legacy package and checkpoints are preserved for rollback and comparison. Do not load Q2-v2 checkpoints into Add/Sub, overwrite old Drive folders, or delete the legacy artifacts before the new model passes its replacement gate. This is a change in which model is the primary target, not permission to destroy the only known rollback copy.
+Do not mix model weights, tokenizers, datasets, checkpoints or Drive folders. Do not delete the legacy model until the new Add/Sub model passes its quality and reproducibility gates.
 
-## New Q-Mini Add/Sub model
+## Active training entry point — Google Colab
 
-The Add/Sub reference architecture has:
+Use only `colab/QMini_AddSub_V1_From_Scratch.ipynb` for active Add/Sub training.
+
+- CPU-only by default, with a conservative thread cap. No GPU quota is required.
+- Uses a separate Drive directory: `Q mini 2 light/trainability_finewiki_v1`.
+- Dataset preparation, tokenizer build, pretraining, SFT and evaluation are OFF by default; each stage is explicitly enabled after checking the data and outputs.
+- The notebook downloads/uses pinned English data only after source-license acceptance.
+- Existing Colab checkpoints are resumed only when their model, data, tokenizer, schedule and training contracts match.
+
+The legacy notebooks remain only to inspect or test old checkpoints. They are not the active Add/Sub training path.
+
+## New model architecture
+
+The current Add/Sub research profile has 760,340 parameters and includes:
 - Causal depthwise convolution for local token mixing.
-- Gated diagonal state-space recurrence for bounded recurrent context.
-- Sparse Top-1 SwiGLU experts.
+- Gated diagonal state-space recurrence for recurrent context.
+- Sparse Top-1 SwiGLU experts with load-balancing and router z-loss.
 - RMSNorm and learned residual branch gates initialized conservatively.
-- Router load-balancing plus a separately weighted router z-loss.
-- Independent 1,024-token byte-level BPE tokenizer and 512-token context.
-- Five-symbol weight alphabet {-1.5, -0.5, 0, +0.5, +1.5}. Five values require 3-bit fixed-width packing; this is not a 2-bit or 1.58-bit model.
+- An independent 1,024-token English-first byte-level BPE tokenizer and 512-token context.
+- Five-symbol QAT weight alphabet `{-1.5, -0.5, 0, +0.5, +1.5}`. Five symbols require three fixed-width bits; this is neither 2-bit nor ternary 1.58-bit quantization.
 
-The architecture has **760,340 parameters** in its current default profile. The current training implementation uses floating-point PyTorch operations and STE/QAT; that is allowed for training. The complete deployed inference graph must ultimately use the specified integer lookup/comparison/add/subtract path.
+Training uses floating-point PyTorch operations and quantization-aware training. The model's real assistant capability is not established until it has completed real-data pretraining, assistant fine-tuning and independent held-out evaluation.
 
-## English knowledge and assistant-data plan
+## Improved learning recipe
 
-The pinned Add/Sub data-preparation path uses three complementary sources:
-1. **FineWiki English Wikipedia sample** for factual next-token pretraining. Pinned source revision e0bbfbb, file en.jsonl.zst, SHA-256 checked before parsing, approximately a 1% sample from an August 2025 Wikimedia Enterprise snapshot. License: CC-BY-SA-4.0.
-2. **OpenAssistant OASST1** for positively reviewed, explicitly non-synthetic English conversations, using strict ready-for-export, review, deletion and assistant-rank filters. License: Apache-2.0.
-3. **Databricks Dolly 15k** for human-authored English instruction/response pairs. License: CC-BY-SA-3.0.
+The Add/Sub SFT stage now uses an experimental **self-paced difficulty curriculum**:
+- A uniform warm-up first measures the model's current response loss on individual human-authored training examples.
+- The sampler then focuses progressively on moderately difficult examples based on their EMA response loss.
+- At least 35% uniform replay remains in the sampling distribution so easy/common language and previously learned facts continue to be practised.
+- Sampling state, schedule, per-example difficulty history and random state are stored in the SFT checkpoint for exact resume.
 
-The pipeline deduplicates and splits whole source documents/conversation groups before tokenization/training, records hashes and manifests, and stages output transactionally so a failed preparation cannot publish a partial final dataset. Review attribution/share-alike obligations before redistribution. The FineWiki sample is not the entire English Wikipedia dump or a complete knowledge base.
+This design is inspired by self-paced curriculum research, including SPaCe (ACL 2026), but it is a Q-Mini-specific experiment—not proof of better intelligence. It must beat a uniform-sampling control under matched seeds, tokens and compute before being promoted as the default final recipe.
 
-No model-generated conversations are labelled as human-authored training data. Synthetic examples are reserved for clearly marked engineering tests. All user-facing model training should remain English-first unless a separately versioned multilingual experiment is approved.
+## English data policy
 
-## Current training route
+The pinned data path provides three complementary sources:
+1. FineWiki English Wikipedia sample for factual next-token pretraining (source revision and compressed SHA-256 are pinned; license CC-BY-SA-4.0).
+2. Positively reviewed, explicitly non-synthetic English OpenAssistant OASST1 conversations (Apache-2.0).
+3. Human-authored Databricks Dolly instruction examples (CC-BY-SA-3.0).
 
-Use **Q-Mini Add/Sub — FineWiki English assistant training**:
-- Notebook: colab/QMini_AddSub_V1_From_Scratch.ipynb
-- Package: qmini_addsub/
-- New isolated Drive path: Q mini 2 light/trainability_finewiki_v1
-- CPU-only by default; conservative thread count.
-- Data preparation, tokenizer build, pretraining, SFT, held-out evaluation and export are OFF by default. Enable each only after reviewing source licenses, storage and run identity.
-- The current notebook suggests a configurable 15,000-step pretraining schedule and 2,000-step SFT starting schedule. These are proposals, not verified optimal settings or a guarantee of runtime or answer quality.
+Whole articles/conversation groups are split before chunking or tokenization, exact source hashes are recorded, and preparation publishes the final dataset only after every source and split succeeds. Review attribution/share-alike obligations before redistribution. No model-generated content is labelled as human-authored.
 
-The legacy English CPU resume and existing-Drive chat notebooks remain available only for legacy checkpoint compatibility/testing:
-- colab/QMini_English_CPU_One_Click_Resume.ipynb
-- colab/QMini_Existing_Drive_Data_CPU_Chat.ipynb
+## Current scope: no phone or Android deployment
 
-Do not continue new feature development on the legacy Q2-v2 route. Do not mix model packages, datasets, tokenizers, checkpoints, configs or Drive folders.
+Phone deployment is **not part of the active model task**. No Realme device, Android app, mobile RAM limit, ARM/NEON optimisation or phone latency target should constrain the Colab model architecture or training algorithm.
 
-## Phone deployment target
+Earlier phone-specific prototype work is preserved separately under `experiments/phone/realme_c17/`. It is parked, is not imported by `qmini_addsub/`, is not part of the main training notebook, and is not compiled by the active Add/Sub CI path. The current device label needs independent confirmation before that experimental folder is ever resumed.
 
-The initial target is the user's Realme C73 5G (reported model identifier RMX3945). The published specification lists a MediaTek Dimensity 6300 and 4 GB physical RAM. Dynamic RAM expansion is not physical RAM and cannot be counted as guaranteed process memory.
+## Evaluation gates
 
-The current .qma archive is a weight container with float32 auxiliary tensors, not a deployed engine. The current integer prototype covers additive projection and bounded residual addition, including a new native C++ scalar/ARM-NEON projection kernel. It is not a complete phone inference graph. Integer convolution, SSM, gating, experts, normalization, activation LUTs, output projection, Android packaging and full ARM64 runtime are still incomplete.
+A passing unit-test suite is not a language-quality result. Promotion requires:
+- Held-out English language loss and assistant response loss improvement.
+- Non-collapsed, non-repetitive outputs across independent prompts and multi-turn conversations.
+- Separate evaluation slices for instruction following, factual QA, arithmetic, logical reasoning, summarisation and context retention.
+- No train/validation/test leakage; all manifests and artifact hashes match.
+- Ablations comparing uniform SFT sampling with self-paced curriculum under matched compute and at least multiple seeds.
 
-See docs/PHONE_RUNTIME_READINESS.md for the device profile, proposed measurement protocol and replacement gates. The provisional targets in that file are goals, not measured speed or memory results.
+Keep the old model as a rollback baseline until the new model passes these gates. Do not claim human-level reasoning or general intelligence from a small synthetic smoke test.
 
-## Replacement gate — when Add/Sub can replace the old default
+## Development checks
 
-The Add/Sub model becomes the sole user-facing default only after:
-1. Real-data English pretraining and assistant SFT complete with immutable dataset, tokenizer, config and checkpoint hashes.
-2. Independent held-out tests pass for response quality, multi-turn continuity, task performance, factual consistency and repetition/collapse.
-3. The complete integer-only graph passes an operator audit and reference-parity tests; no float32 auxiliary inference path remains.
-4. ARM64 scalar and NEON implementations pass correctness tests and the complete model is measured on the actual Realme C73.
-5. Load, chat, export/resume and rollback are tested without deleting the legacy artifacts.
-
-Until then, Add/Sub is the **primary development target**, but it must not be described as a finished assistant or phone-ready release.
-
-## Evaluation and engineering checks
-
-Install and run the local suite:
+CI runs software tests and tiny controlled learning/evaluation fixtures. Those checks cover implementation and reproducibility, not real-world knowledge or assistant quality.
 
 ```bash
 python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-CI also performs CPU-only tests, native compilation, ARM64 cross-compilation, training/resume fixtures, quantization/export checks, and tiny smoke evaluations. A passing test suite verifies software properties; it does not establish natural-language capability. The tiny legacy smoke fixture has previously returned identical placeholder answers for every prompt, so it must not be presented as evidence of assistant quality.
-
-Track at minimum:
-- Held-out English language loss and response loss.
-- Task accuracy with separate math, logic, factual QA and instruction-following slices.
-- Multi-turn continuity and context/state tracking.
-- Blank, repeated, identical, truncated and malformed-answer rates.
-- Expert load balance and routing starvation.
-- Tokens/second, peak RAM, load time, packed size and sustained thermal performance.
-- Quantized-vs-reference error and actual ARM64 device behavior.
-
-## Repository layout
-
-- qmini_addsub/ — primary Add/Sub model, independent training, SFT, generation, export and integer-runtime prototype.
-- qmini/ — preserved legacy Q2-v2 model and compatibility tools.
-- configs/ — legacy model profiles and development fixtures.
-- scripts/ — pinned dataset preparation, tokenizer/stream building, benchmarks and development utilities.
-- tests/ — unit, regression and synthetic engineering fixtures.
-- colab/ — Add/Sub primary training notebook plus legacy compatibility notebooks.
-- docs/ — architecture, provenance, evaluation, cleanup audit, experimental roadmap and phone-readiness contract.
-
-For detailed architecture and data lineage, see qmini_addsub/README.md, docs/ADD_SUB_V1_SPEC.md, docs/EVALUATION.md and docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md.
+See `qmini_addsub/README.md`, `docs/ADD_SUB_V1_SPEC.md`, `docs/EVALUATION.md`, `docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md` and `experiments/phone/realme_c17/README.md` for implementation boundaries and status.
