@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import math
+import random
+from typing import Any
+
+import torch
+
+
+class SelfPacedCurriculumSampler:
+    """Loss-aware curriculum with a permanent uniform replay floor.
+
+    Examples are ranked by their EMA response loss. Sampling gradually moves
+    from the middle of the difficulty distribution toward moderately hard
+    examples. A fixed uniform component prevents the curriculum from forgetting
+    easy facts, common language patterns, or examples it has already mastered.
+    This is an SFT data sampler; it does not change model weights or fabricate
+    training examples.
+    """
+
+    FORMAT = "qmini-self-paced-curriculum-v1"
+
+    def __init__(
+        self,
+        dataset_size: int,
+        total_steps: int,
+        warmup_steps: int = 50,
+        uniform_fraction: float = 0.35,
+        start_quantile: float = 0.55,
+        end_quantile: float = 0.80,
+        bandwidth: float = 0.18,
+        ema_decay: float = 0.80,
+    ) -> None:
+        for name, value in (("dataset_size", dataset_size), ("total_steps", total_steps), ("warmup_steps", warmup_steps)):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer.")
+        if dataset_size < 1 or total_steps < 1 or warmup_steps < 1:
+            raise ValueError("dataset_size, total_steps and warmup_steps must be positive.")
+        for name, value in (("uniform_fraction", uniform_fraction), ("start_quantile", start_quantile), ("end_quantile", end_quantile), ("bandwidth", bandwidth), ("ema_decay", ema_decay)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise TypeError(f"{name} must be a finite number.")
+        if not 0.10 <= uniform_fraction <= 1.0:
+            raise ValueError("uniform_fraction must be between 0.10 and 1.0.")
+        if not 0.0 < start_quantile <= end_quantile < 1.0:
+            raise ValueError("difficulty quantiles must satisfy 0 < start <= end < 1.")
+        if bandwidth <= 0.0 or not 0.0 < ema_decay < 1.0:
+            raise ValueError("bandwidth must be positive and ema_decay must be in (0, 1).")
+        self.dataset_size = dataset_size
+        self.total_steps = total_steps
+        self.warmup_steps = warmup_steps
+        self.uniform_fraction = float(uniform_fraction)
+        self.start_quantile = float(start_quantile)
+        self.end_quantile = float(end_quantile)
+        self.bandwidth = float(bandwidth)
+        self.ema_decay = float(ema_decay)
+        self.step = 0
+        self.ema_loss: list[float | None] = [None] * dataset_size
+        self.update_count = [0] * dataset_size
+        self.last_focus_quantile = self.start_quantile
+
+    def _focus_quantile(self) -> float:
+        progress = (self.step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
+        progress = min(1.0, max(0.0, progress))
+        return self.start_quantile + (self.end_quantile - self.start_quantile) * progress
+
+    def sample(self, batch_size: int, rng: random.Random) -> tuple[list[int], dict[str, Any]]:
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer.")
+        if batch_size > self.dataset_size:
+            raise ValueError("batch_size cannot exceed the number of SFT records.")
+        if not isinstance(rng, random.Random):
+            raise TypeError("rng must be an instance of random.Random for exact resume.")
+        self.step += 1
+        seen = [index for index, value in enumerate(self.ema_loss) if value is not None]
+        if self.step <= self.warmup_steps or len(seen) < 2 or self.uniform_fraction >= 1.0:
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            self.last_focus_quantile = self.start_quantile
+            return selected, {"mode": "uniform_warmup", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
+
+        ordered = sorted(seen, key=lambda index: (self.ema_loss[index], index))
+        ranks = [0.5] * self.dataset_size
+        denominator = max(1, len(ordered) - 1)
+        for rank, index in enumerate(ordered):
+            ranks[index] = rank / denominator
+        target = self._focus_quantile()
+        self.last_focus_quantile = target
+        scores = [
+            math.exp(-0.5 * ((rank - target) / self.bandwidth) ** 2)
+            for rank in ranks
+        ]
+        score_total = sum(scores)
+        if not math.isfinite(score_total) or score_total <= 0.0:
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            return selected, {"mode": "uniform_fallback", "focus_quantile": target, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
+        probabilities = [
+            self.uniform_fraction / self.dataset_size
+            + (1.0 - self.uniform_fraction) * score / score_total
+            for score in scores
+        ]
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(rng.randrange(0, 2**63 - 1))
+        weights = torch.tensor(probabilities, dtype=torch.float64)
+        indices = torch.multinomial(weights, batch_size, replacement=False, generator=generator)
+        selected = [int(index) for index in indices.tolist()]
+        return selected, {"mode": "self_paced", "focus_quantile": target, "uniform_fraction": self.uniform_fraction, "seen_fraction": len(seen) / self.dataset_size}
+
+    def update(self, indices: list[int], losses: list[float]) -> None:
+        if len(indices) != len(losses):
+            raise ValueError("indices and losses must have the same length.")
+        if len(set(indices)) != len(indices):
+            raise ValueError("a sampled batch must not contain duplicate record indices.")
+        for index, loss in zip(indices, losses):
+            if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < self.dataset_size:
+                raise ValueError("curriculum record index is out of range.")
+            if isinstance(loss, bool) or not isinstance(loss, (int, float)) or not math.isfinite(loss) or loss < 0.0:
+                raise ValueError("per-record loss must be finite and non-negative.")
+            previous = self.ema_loss[index]
+            self.ema_loss[index] = float(loss) if previous is None else (
+                self.ema_decay * previous + (1.0 - self.ema_decay) * float(loss)
+            )
+            self.update_count[index] += 1
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "format": self.FORMAT,
+            "dataset_size": self.dataset_size,
+            "total_steps": self.total_steps,
+            "warmup_steps": self.warmup_steps,
+            "uniform_fraction": self.uniform_fraction,
+            "start_quantile": self.start_quantile,
+            "end_quantile": self.end_quantile,
+            "bandwidth": self.bandwidth,
+            "ema_decay": self.ema_decay,
+            "step": self.step,
+            "ema_loss": self.ema_loss,
+            "update_count": self.update_count,
+            "last_focus_quantile": self.last_focus_quantile,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if not isinstance(state, dict) or state.get("format") != self.FORMAT:
+            raise ValueError("Unsupported curriculum state format.")
+        expected = self.state_dict()
+        for key in ("dataset_size", "total_steps", "warmup_steps", "uniform_fraction", "start_quantile", "end_quantile", "bandwidth", "ema_decay"):
+            if state.get(key) != expected[key]:
+                raise ValueError(f"Curriculum resume contract mismatch: {key}.")
+        ema_loss = state.get("ema_loss")
+        update_count = state.get("update_count")
+        if not isinstance(ema_loss, list) or len(ema_loss) != self.dataset_size:
+            raise ValueError("Curriculum EMA state has an invalid length.")
+        if not isinstance(update_count, list) or len(update_count) != self.dataset_size:
+            raise ValueError("Curriculum update-count state has an invalid length.")
+        for value in ema_loss:
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0.0):
+                raise ValueError("Curriculum EMA state contains an invalid loss.")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in update_count):
+            raise ValueError("Curriculum update counts must be non-negative integers.")
+        step = state.get("step")
+        if isinstance(step, bool) or not isinstance(step, int) or step < 0 or step > self.total_steps:
+            raise ValueError("Curriculum step is outside the configured schedule.")
+        self.step = step
+        self.ema_loss = [None if value is None else float(value) for value in ema_loss]
+        self.update_count = list(update_count)
+        self.last_focus_quantile = float(state.get("last_focus_quantile", self.start_quantile))
