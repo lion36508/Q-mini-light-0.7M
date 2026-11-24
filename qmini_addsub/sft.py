@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +198,7 @@ def fine_tune_from_addsub_checkpoint(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
+    threads: int | None = None,
 ) -> dict[str, Any]:
     for name, value in (
         ("steps", steps),
@@ -212,6 +214,10 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("seed must be non-negative.")
     if not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("learning_rate must be finite and positive.")
+    if threads is not None:
+        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
+            raise ValueError("threads must be a positive integer when specified.")
+        torch.set_num_threads(threads)
     device = torch.device(device_name)
     base_path, tokenizer_path = Path(base_checkpoint), Path(tokenizer_path)
     train_path, valid_path, test_path, output = (
@@ -288,6 +294,7 @@ def fine_tune_from_addsub_checkpoint(
         "system_prompt": SYSTEM_TEXT,
         "save_every": save_every,
         "seed": seed,
+        "torch_num_threads": torch.get_num_threads(),
     }
 
     model = AddSubLanguageModel(config, seed=seed).to(device)
@@ -398,6 +405,7 @@ def fine_tune_from_addsub_checkpoint(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
+        step_started = time.perf_counter()
         current_lr = cosine_warmup_lr(step, steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
@@ -428,6 +436,7 @@ def fine_tune_from_addsub_checkpoint(
         optimizer.step()
         assert_finite_training_state(model, optimizer, step)
         last_loss = float(loss.detach())
+        step_seconds = max(time.perf_counter() - step_started, 1e-9)
 
         if step % 50 == 0 or step == steps:
             valid_loss = evaluate(valid_data, "validation")
@@ -436,6 +445,8 @@ def fine_tune_from_addsub_checkpoint(
                 "learning_rate": current_lr,
                 "train_loss": last_loss,
                 "valid_response_loss": valid_loss,
+                "step_seconds": step_seconds,
+                "supervised_tokens_per_second": target_count / step_seconds,
                 "router_balance_loss": float(result["aux_loss"].detach()),
                 "router_z_loss": float(result["router_z_loss"].detach()),
                 "router_load_by_layer": result["router_load"].detach().cpu().tolist(),
@@ -501,6 +512,7 @@ def main() -> None:
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--threads", type=int, default=None, help="CPU thread count; recorded in the exact-resume run contract.")
     args = parser.parse_args()
     result = fine_tune_from_addsub_checkpoint(
         base_checkpoint=args.base_checkpoint,
@@ -515,6 +527,7 @@ def main() -> None:
         save_every=args.save_every,
         device_name=args.device,
         resume=args.resume,
+        threads=args.threads,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
