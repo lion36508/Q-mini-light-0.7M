@@ -59,6 +59,8 @@ def assess_addsub_readiness(
     max_largest_identical_answer_fraction: float = 0.35,
 ) -> dict[str, Any]:
     """Fail closed on weak SFT learning or collapsed held-out Add/Sub answers."""
+    if not metrics:
+        raise ValueError("SFT metrics are empty; no training trajectory can be verified.")
     for name, value in (
         ("min_validation_improvement", min_validation_improvement),
         ("min_mean_token_f1", min_mean_token_f1),
