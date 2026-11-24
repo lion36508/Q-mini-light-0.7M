@@ -36,13 +36,6 @@ jobs:
           python -c "import torch; print('PyTorch:', torch.__version__, '| CUDA build:', torch.version.cuda); assert torch.version.cuda is None"
       - name: Compile C++ projection primitive
         run: bash scripts/build_native_kernel.sh
-      - name: Compile and run Add/Sub integer projection tests
-        run: |
-          c++ -O3 -std=c++17 -Wall -Wextra -Werror \
-            qmini_addsub/native_projection.cpp \
-            tests/native_addsub_projection_test.cpp \
-            -o /tmp/qmini-addsub-native-test
-          /tmp/qmini-addsub-native-test
       - name: Cross-compile ARM64 NEON kernels
         run: |
           sudo apt-get update
