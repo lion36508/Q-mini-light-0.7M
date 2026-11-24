@@ -39,6 +39,8 @@ Do not copy full Mamba-3 or Kimi Linear. Their published systems are tested at m
 
 **Required tests:** sequential recurrence vs parallel scan, finite gradients, no future-token leakage, batch-vs-streaming parity, state-cache size, long-range retrieval/state-tracking tasks, parameter count, CPU decode latency and activation-range calibration.
 
+**Newer comparison worth testing:** Gated DeltaNet-2 (May 2026) separates channel-wise erase and write gates rather than forcing one gate to perform both jobs. Its paper reports results at 1.3B parameters trained on 100B tokens; this does not establish a gain at Q-Mini's 0.76M scale. Treat it as a low-rank/diagonal-inspired ablation, not a drop-in copy: preserve bounded state, measure added cache/state cost, and require identical data/token/prompt budgets. Reference: https://arxiv.org/abs/2605.22791.
+
 ### 3. Compact retrieval sidecar (high utility, no neural parameter growth)
 
 Start with a deterministic BM25-style English retrieval index over user-approved local notes or reference documents. Return short passages with document identifiers and offsets so the assistant can ground answers and the UI can show sources. Keep retrieval optional and local-first. Do not add a separate large embedding model to the 0.7M core.
@@ -69,7 +71,7 @@ Keep the required five-symbol Add/Sub format as the baseline. A ternary comparis
 
 1. **Freeze and measure the real baseline:** finish one reproducible CPU training run on the reviewed English corpus; save data/tokenizer/run hashes; evaluate held-out language loss, task categories, multi-turn continuity, repetition, factuality and phone-independent CPU latency.
 2. **Build the external-memory and retrieval sidecars:** these improve effective context and access to user-approved facts without changing the neural parameter budget. Keep memory opt-in and auditable.
-3. **Run a selective-delta SSM ablation:** replace, do not stack on top of, the current diagonal SSM. Keep the reference config untouched. Evaluate the same tokens and prompts.
+3. **Run a selective-delta SSM ablation:** compare a small channel-wise erase/write-gate variant inspired by Gated DeltaNet-2 against the current diagonal SSM; replace the SSM for the experiment, do not stack another block on top. Keep the reference config untouched. Evaluate the same tokens and prompts.
 4. **Add bounded adaptive compute:** only after confidence/verifier calibration and objective task tests exist.
 5. **Compare optimizer and quantization variants:** training-only experiments, never default switches without measured wins.
 6. **Finish the complete integer-only runtime:** every operation in the actual deployed graph must be audited and covered by parity, overflow, saturation, cache, adversarial and ARM64 tests before claiming a multiply-free phone runtime.
@@ -86,6 +88,7 @@ Until the first real-data Add/Sub run completes, architecture changes should be 
 - NeurIPS 2025, *Titans: Learning to Memorize at Test Time*: https://proceedings.neurips.cc/paper_files/paper/2025/hash/a4ca07aa108036f80cbb5b82285fd4b1-Abstract-Conference.html
 - ICLR 2026, *Mamba-3: Improved Sequence Modeling using State Space Principles*: https://proceedings.iclr.cc/paper_files/paper/2026/hash/8abd2043b71a074278d5f687947bff9c-Abstract-Conference.html
 - Kimi Team, *Kimi Linear: An Expressive, Efficient Attention Architecture* (2025): https://arxiv.org/abs/2510.26692
+- NVIDIA et al., *Gated DeltaNet-2: Decoupling Erase and Write in Linear Attention* (2026): https://arxiv.org/abs/2605.22791
 - ICLR 2025, *Scaling LLM Test-Time Compute Optimally*: https://proceedings.iclr.cc/paper_files/paper/2025/hash/1b623663fd9b874366f3ce019fdfdd44-Abstract-Conference.html
 - Zhang et al., *Adam Improves Muon* (2026): https://arxiv.org/abs/2602.17080
 - Microsoft, BitNet inference framework: https://github.com/microsoft/BitNet
