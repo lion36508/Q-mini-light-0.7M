@@ -54,7 +54,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "START_SFT = False" in all_code
     assert "REPO_BRANCH = 'fix/dataset-switch-training-reset'" in all_code
     assert "trainability_finewiki_v1" in all_code
-    assert "PRETRAIN_STEPS = 10000" in all_code
+    assert "PRETRAIN_STEPS = 15000" in all_code
     assert "SEQUENCE_LENGTH = 512" in all_code
     assert "'--threads', str(CPU_THREADS)" in all_code
     assert "RUN_HELDOUT_EVAL = False" in all_code
