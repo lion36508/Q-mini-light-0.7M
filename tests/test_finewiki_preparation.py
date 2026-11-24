@@ -134,6 +134,65 @@ def test_pinned_finewiki_rejects_hash_mismatch_before_writing_splits(tmp_path, m
         prepare_module.prepare_finewiki_sample(tmp_path / "cache", output)
     assert not list(output.glob("pretrain_*.txt")) if output.exists() else True
 
+
+def test_full_dataset_preparation_rolls_back_when_an_instruction_source_fails(tmp_path, monkeypatch):
+    output = tmp_path / "fresh_data"
+    output.mkdir()
+    cache = tmp_path / "cache"
+
+    def fake_finewiki(_cache, staging):
+        (staging / "pretrain_train.txt").write_text(
+            "staged Wikipedia content\\n", encoding="utf-8"
+        )
+        return {
+            "splits": {
+                "train": {"articles": 1, "chunks": 1, "bytes": 10, "sha256": "a" * 64},
+                "validation": {"articles": 1, "chunks": 1, "bytes": 10, "sha256": "b" * 64},
+                "test": {"articles": 1, "chunks": 1, "bytes": 10, "sha256": "c" * 64},
+            }
+        }
+
+    def fail_oasst(_cache):
+        raise RuntimeError("simulated OASST download failure")
+
+    monkeypatch.setattr(prepare_module, "prepare_finewiki_sample", fake_finewiki)
+    monkeypatch.setattr(prepare_module, "load_oasst_conversations", fail_oasst)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_qmini_addsub_data",
+            "--output", str(output),
+            "--cache", str(cache),
+            "--accept-source-licenses",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="simulated OASST download failure"):
+        prepare_module.main()
+
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
+    assert not list(tmp_path.glob(".fresh_data.preparing-*"))
+
+
+def test_full_dataset_preparation_refuses_cache_inside_output(tmp_path, monkeypatch):
+    output = tmp_path / "dataset"
+    output.mkdir()
+    cache = output / "cache"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_qmini_addsub_data",
+            "--output", str(output),
+            "--cache", str(cache),
+            "--accept-source-licenses",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        prepare_module.main()
+
 def test_finewiki_rejects_empty_split_instead_of_silently_training(tmp_path):
     train_ids = []
     for page_id in range(1, 1000):
