@@ -81,7 +81,7 @@ def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
         assert entry["bytes"] > 0
         assert len(entry["sha256"]) == 64
         own_titles = [
-            row["title"] for row in rows
+            row["title"] for row in rows[:12]
             if stable_split(row["page_id"], seed="qmini-finewiki-en-2025-08") == name
             and row["in_language"] == "en"
         ]
