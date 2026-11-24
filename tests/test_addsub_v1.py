@@ -540,6 +540,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert sft_state["format"] == "qmini-addsub-sft-v8"
     assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v2"
     assert sft_state["curriculum"]["step"] == 1
+    assert sft_state["curriculum"]["dataset_size"] == sft_result["train_records"]
     assert "uniform_remainder_units" in sft_state["curriculum"]
     assert "torch_rng" in sft_state and "python_rng" in sft_state
     sft_metrics = [
