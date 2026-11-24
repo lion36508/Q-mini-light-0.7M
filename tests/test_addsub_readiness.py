@@ -41,7 +41,7 @@ def test_addsub_readiness_requires_validation_learning_and_noncollapsed_heldout_
     result = assess_addsub_readiness(_metrics(), _heldout())
     assert result["ready"] is True
     assert result["status"] == "ready_for_review"
-    assert result["checks_passed"] == result["checks_total"] == 3
+    assert result["checks_passed"] == result["checks_total"] == 4
 
 
 def test_addsub_answer_diversity_detects_same_answer_with_punctuation_variants():
@@ -68,6 +68,18 @@ def test_addsub_readiness_fails_for_constant_outputs_even_when_lexical_score_is_
     assert check["passed"] is False
     assert result["ready"] is False
 
+
+
+def test_addsub_readiness_fails_for_phrase_loops_inside_unique_answers():
+    repeated = "this phrase must not loop forever "
+    answers = [repeated * 5 + f"unique ending {index}" for index in range(50)]
+    heldout = _heldout()
+    heldout["output_diversity"] = _answer_diversity(answers)
+    result = assess_addsub_readiness(_metrics(), heldout)
+    check = next(item for item in result["checks"] if item["name"] == "heldout_repetition_collapse")
+    assert check["passed"] is False
+    assert check["observed"]["max_repeated_4gram_count"] > 4
+    assert result["ready"] is False
 
 def test_addsub_readiness_fails_when_validation_response_loss_does_not_improve():
     metrics = _metrics()
