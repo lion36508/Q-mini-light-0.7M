@@ -1922,7 +1922,10 @@ def test_self_paced_curriculum_warmup_focus_and_exact_resume():
     second, second_info = sampler.sample(4, rng)
     assert second_info["mode"] == "self_paced"
     assert 0.55 <= second_info["focus_quantile"] <= 0.80
-    assert second_info["uniform_fraction"] == 0.35
+    assert second_info["requested_uniform_fraction"] == 0.35
+    assert second_info["uniform_samples"] == 1
+    assert second_info["focused_samples"] == 3
+    assert second_info["uniform_fraction"] == 0.25
     assert len(set(second)) == 4
     sampler.update(second, [0.3, 0.9, 1.5, 2.4])
 
@@ -1953,15 +1956,18 @@ def test_self_paced_curriculum_preserves_uniform_replay_and_rejects_bad_updates(
         uniform_fraction=0.35,
     )
     rng = random.Random(7)
-    indices, _ = sampler.sample(3, rng)
+    indices, _ = sampler.sample(4, rng)
     with pytest.raises(ValueError, match="duplicate"):
         sampler.update([indices[0], indices[0]], [0.1, 0.2])
     with pytest.raises(ValueError, match="finite and non-negative"):
         sampler.update([indices[0]], [float("inf")])
-    sampler.update(indices, [0.1, 0.2, 0.3])
+    sampler.update(indices, [0.1, 0.2, 0.3, 0.4])
     selected, info = sampler.sample(4, rng)
     assert len(set(selected)) == 4
-    assert info["uniform_fraction"] == 0.35
+    assert info["mode"] == "self_paced"
+    assert info["requested_uniform_fraction"] == 0.35
+    assert info["uniform_samples"] == 1
+    assert info["focused_samples"] == 3
     assert all(sampler.update_count[index] >= 0 for index in range(8))
 
 
@@ -2042,4 +2048,25 @@ def test_legacy_sft_v6_remains_scaled_for_reference_inference_and_export(tmp_pat
     assert not hasattr(matrix_parameter, "_qmini_fixed_scale")
     assert "qmini-addsub-sft-v6" in ACCEPTED_CHECKPOINT_FORMATS
     assert "qmini-addsub-sft-v6" in SCALED_CHECKPOINT_FORMATS
+
+def test_self_paced_curriculum_carries_uniform_replay_quota_for_batch_one():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=80,
+        total_steps=101,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(101)
+    indices, _ = sampler.sample(1, rng)
+    sampler.update(indices, [0.25])
+    uniform_allocations = 0
+    for step in range(100):
+        selected, info = sampler.sample(1, rng)
+        uniform_allocations += info["uniform_samples"]
+        sampler.update(selected, [0.25 + (selected[0] % 10) / 10.0])
+    assert uniform_allocations == 35
+    state = sampler.state_dict()
+    assert 0.0 <= state["uniform_remainder"] < 1.0
 
