@@ -65,7 +65,7 @@ def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list
     """Split one page into bounded, paragraph-aware chunks without losing long sections."""
     if max_chars < 512:
         raise ValueError("max_chars must be at least 512.")
-    paragraphs = [part.strip() for part in re.split(r"\\n\\s*\\n", body) if part.strip()]
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
     chunks: list[str] = []
     current: list[str] = []
     current_size = 0
@@ -73,7 +73,7 @@ def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list
     def flush() -> None:
         nonlocal current, current_size
         if current:
-            chunks.append(f"# {title}\\n\\n" + "\\n\\n".join(current))
+            chunks.append(f"# {title}\n\n" + "\n\n".join(current))
             current = []
             current_size = 0
 
@@ -87,7 +87,7 @@ def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list
             if piece:
                 if current:
                     flush()
-                chunks.append(f"# {title} (continued)\\n\\n{piece}")
+                chunks.append(f"# {title} (continued)\n\n{piece}")
         if not paragraph:
             continue
         extra = len(paragraph) + (2 if current else 0)
@@ -135,7 +135,7 @@ def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
     dropped: dict[str, int] = defaultdict(int)
     seen_ids: set[str] = set()
     handles = {
-        name: path.open("w", encoding="utf-8", newline="\\n")
+        name: path.open("w", encoding="utf-8", newline="\n")
         for name, path in split_paths.items()
     }
     try:
@@ -184,7 +184,7 @@ def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
                         if reason != "accepted":
                             dropped[f"chunk_{reason}"] += 1
                             continue
-                        handles[split].write(cleaned + "\\n\\n")
+                        handles[split].write(cleaned + "\n\n")
                         counts[split]["chunks"] += 1
                         accepted_chunks += 1
                     if accepted_chunks:
