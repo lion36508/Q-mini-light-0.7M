@@ -45,7 +45,7 @@ After warm-up, rank examples by their EMA response loss. Gradually move the targ
 
 ### Uniform replay
 
-Blend at least 35% uniform probability with the focused difficulty distribution. This is a permanent rehearsal floor: easy/common language, previously learned facts and simple instructions continue to be seen. Set `--curriculum-uniform-fraction 1.0` for a pure uniform-sampling control experiment. Compare runs with identical base checkpoint, training records, seed, optimizer steps and token budgets.
+Blend at least 35% uniform probability with the focused difficulty distribution. This is a permanent rehearsal floor: easy/common language, previously learned facts and simple instructions continue to be seen. Set `--curriculum-uniform-fraction 1.0` for a pure uniform-sampling control experiment. The Colab notebook assigns distinct SFT/checkpoint/evaluation/export directories to the self-paced and uniform variants. Compare runs with identical base checkpoint, training records, seed, optimizer steps and token budgets.
 
 ### Exact resume
 
