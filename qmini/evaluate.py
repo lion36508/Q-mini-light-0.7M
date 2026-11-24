@@ -65,6 +65,29 @@ def token_f1(prediction: str, reference: str) -> float:
     return 0.0 if precision + recall == 0 else 2.0 * precision * recall / (precision + recall)
 
 
+def _prediction_diversity(predictions: list[str]) -> dict[str, Any]:
+    """Report exact normalized repeats; this is a collapse alarm, not semantics."""
+    if not predictions:
+        raise ValueError("Prediction-diversity analysis requires at least one answer.")
+    normalized = [normalize_answer(value) for value in predictions]
+    counts = Counter(normalized)
+    largest = max(counts.values())
+    unique_count = len(counts)
+    return {
+        "examples": len(normalized),
+        "unique_normalized_answers": unique_count,
+        "unique_answer_fraction": unique_count / len(normalized),
+        "largest_identical_answer_count": largest,
+        "largest_identical_answer_fraction": largest / len(normalized),
+        "empty_answer_count": sum(not value for value in normalized),
+        "all_outputs_identical": unique_count == 1,
+        "metric_note": (
+            "Exact equality after Unicode word normalization. Different wording "
+            "can still be semantically repetitive; human review is required."
+        ),
+    }
+
+
 _NUMBER_PATTERN = re.compile(
     r"(?<![\w.])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"
 )
@@ -401,6 +424,9 @@ def evaluate_task_file(
         "task_pass_rate_wilson_95": _wilson_interval(passed, total),
         "exact_match": exact / total,
         "mean_token_f1": f1_total / total,
+        "output_diversity": _prediction_diversity(
+            [case["prediction"] for case in cases]
+        ),
         "categories": categories,
         "languages": languages,
         "cases": cases,
@@ -712,6 +738,9 @@ def evaluate_conversation_file(
         "task_pass_rate_wilson_95": _wilson_interval(passed, total_turns),
         "exact_match": exact / total_turns,
         "mean_token_f1": f1_total / total_turns,
+        "output_diversity": _prediction_diversity(
+            [case["prediction"] for case in cases]
+        ),
         "categories": categories,
         "languages": languages,
         "cases": cases,
