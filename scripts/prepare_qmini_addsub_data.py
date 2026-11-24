@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,6 +94,7 @@ def _write_finewiki_rows(rows, output: Path) -> dict:
     }
     dropped: dict[str, int] = defaultdict(int)
     seen_ids: set[str] = set()
+    seen_content_hashes: set[str] = set()
     handles = {
         name: path.open("w", encoding="utf-8", newline="\n")
         for name, path in split_paths.items()
@@ -121,7 +123,18 @@ def _write_finewiki_rows(rows, output: Path) -> dict:
             if page_key in seen_ids:
                 dropped["duplicate_page_id"] += 1
                 continue
+            normalized_body = unicodedata.normalize(
+                "NFC", body.replace("\r\n", "\n").replace("\r", "\n")
+            )
+            content_fingerprint = hashlib.sha256(
+                " ".join(normalized_body.split()).encode("utf-8")
+            ).hexdigest()
+            if content_fingerprint in seen_content_hashes:
+                seen_ids.add(page_key)
+                dropped["duplicate_article_content"] += 1
+                continue
             seen_ids.add(page_key)
+            seen_content_hashes.add(content_fingerprint)
 
             split = stable_split(
                 page_key, seed="qmini-finewiki-en-2025-08"
