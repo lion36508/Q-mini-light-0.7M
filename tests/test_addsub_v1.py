@@ -34,8 +34,10 @@ from qmini_addsub.sft import ConversationDataset, _load_conversations
 def test_generation_stops_a_fourgram_phrase_before_a_fifth_repeat():
     three_repeats = [1, 2, 3, 4] * 3
     four_repeats = [1, 2, 3, 4] * 4
+    five_repeats = [1, 2, 3, 4] * 5
     assert _would_exceed_fourgram_repeat(three_repeats, 1) is False
-    assert _would_exceed_fourgram_repeat(four_repeats, 1) is True
+    assert _would_exceed_fourgram_repeat(four_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(five_repeats, 1) is True
     assert _would_exceed_fourgram_repeat([1, 2, 3], 9) is False
 
 
