@@ -1,27 +1,30 @@
-# Active Colab entry points — exactly two model lines
+# Active Colab entry points — Add/Sub is the primary model
 
-Only the following two model families are active in this repository. Do not mix their datasets, tokenizers, checkpoints, configs or Drive folders.
+There are exactly two model lines in this repository. The new Add/Sub model is the primary development/training target. The old Q-Mini Light Q2-v2 notebooks are retained only for compatibility, rollback and comparison. Never mix their datasets, tokenizers, checkpoints, configs or Drive folders.
 
-## 1. Legacy Q-Mini Light 0.7M
+## 1. Primary model: Q-Mini Add/Sub
 
-- **Training:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb). Uses the pinned DailyDialog/OpenAssistant preparation path and resumes only compatible legacy checkpoints.
-- **Chat/demo:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb). This is a runtime demonstration for an existing legacy checkpoint; it does not create a new model family.
+- **Training:** [Q-Mini Add/Sub English training notebook](QMini_AddSub_V1_From_Scratch.ipynb).
+- Package: qmini_addsub/.
+- Independent random initialization, English-first data preparation, tokenizer, pretraining, response-masked SFT and held-out evaluation.
+- CPU-only by default. All data download/import, tokenizer construction, pretraining, SFT, evaluation and export switches are OFF until explicitly reviewed and enabled.
+- Uses a new isolated Drive folder at Q mini 2 light/trainability_finewiki_v1. Do not overwrite the older trainability_v2 data/checkpoints.
+- No old Q2-v2 checkpoint is loaded.
+- The training model is experimental and the full integer-only Android runtime is not complete.
 
-Package: `qmini/`. Legacy artifacts and checkpoints stay in their existing format and location. This model uses its documented Q2 format and is not an Add/Sub-only runtime.
+## 2. Legacy model: Q-Mini Light Q2-v2 (compatibility only)
 
-## 2. New Q-Mini Add/Sub v1
+- **Existing-checkpoint chat:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb).
+- **Legacy resume/debug only:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb).
+- Package: qmini/.
+- Preserve its checkpoints/artifacts. Do not use it as the default route for new Add/Sub development.
 
-- **From-scratch training:** [Q-Mini Add/Sub v1 notebook](QMini_AddSub_V1_From_Scratch.ipynb). English-first, independent random initialization, separate tokenizer/data/checkpoint paths, CPU by default. Pretraining and SFT are OFF until explicitly enabled.
+## Replacement rule
 
-Package: `qmini_addsub/`. It must never load legacy `qmini/` weights or artifacts. The current implementation has the training/data pipeline and an additive projection reference primitive; the complete full-graph multiply-free inference runtime and export are still under development. It is not yet a trained or deployable assistant.
+The new Add/Sub model becomes the sole default only after real-data English pretraining and SFT, independent held-out quality checks, a complete audited integer-only graph, ARM64 scalar/NEON parity, and end-to-end measurements on the target Realme C73 5G. Until that is proven, legacy remains available for rollback but is not the primary development model.
+
+See docs/PHONE_RUNTIME_READINESS.md, docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md and qmini_addsub/README.md for status and requirements.
 
 ## Legacy regression fixtures
 
-Historical notebook snapshots used by CI are stored under
-`tests/fixtures/legacy_colab/`, outside the active Colab folder. They are kept
-only to protect legacy compatibility tests. Do not use them as current training
-instructions.
-
-Only the three notebooks linked above are supported entry points. The legacy
-and Add/Sub model packages, tokenizers, datasets and checkpoints must remain
-separate.
+Historical notebook snapshots used by CI are stored under tests/fixtures/legacy_colab/. They protect backward compatibility only; they are not current training instructions.
