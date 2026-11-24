@@ -1,10 +1,21 @@
-# Q-Mini Add/Sub v1
+# Q-Mini Add/Sub — Colab-only primary model
 
-An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
+An independent English-first model developed and trained through the repository's Google Colab notebook. This phase is about learning quality and model behavior, not phone deployment. The legacy Q2-v2 package and artifacts remain separate. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
 
 **Default experimental profile:** 1,024-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **760,340 parameters**. This size is a design baseline, not evidence of better model quality.
 
 Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
+
+## Colab SFT learning algorithm — self-paced curriculum v1
+
+The assistant SFT stage uses a difficulty-aware sampler rather than uniform-only sampling:
+
+- **Uniform warm-up:** first collect per-example assistant-response losses from the current model.
+- **Adaptive difficulty focus:** rank training examples by an exponential moving average of response loss. The target difficulty gradually moves from the 55th to the 80th percentile, focusing on examples that are challenging but not only the most pathological/high-noise records.
+- **Spaced replay:** at least 35% of the sampling distribution remains uniform, so easy/common language and already-learned behavior continue to be practised.
+- **Learning-state resume:** per-example EMA losses, update counts, sampler schedule and RNG state are stored in the SFT checkpoint. A different curriculum contract cannot be resumed silently.
+
+This is inspired by the self-paced curriculum direction explored in SPaCe (Findings of ACL 2026): https://aclanthology.org/2026.findings-acl.171/. Its published results do not prove a gain at Q-Mini's 760K scale. The Colab notebook must compare self-paced sampling with a uniform-sampling control under matched data, seeds and optimizer-step budgets before the curriculum is treated as a quality improvement.
 
 ## Add/Sub v2 algorithm-stability update
 
@@ -25,7 +36,7 @@ These changes are algorithmic stability measures, not a claim of improved langua
 - Five-symbol QAT weight alphabet: {-1.5, -0.5, 0, +0.5, +1.5}.
 - Three-bit packing/unpacking with invalid-code and non-canonical padding rejection.
 - Checkpoint-to-archive export of every five-symbol model weight, a separate auxiliary tensor sidecar, SHA-256 manifest validation and a strict reconstruction loader with parity/tamper tests.
-- Integer additive projection reference primitive plus a native C++ scalar/ARM-NEON projection kernel. The native harness exhaustively checks the supported activation/code pairs and invalid inputs; weights are consumed in feature-major transposed layout. This is one kernel, not a complete deployed model runtime.
+- A Python additive projection reference primitive for isolated arithmetic research. Native phone-specific projection experiments are parked under `experiments/phone/realme_c17/` and are not part of the primary model package or active CI.
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
@@ -34,9 +45,9 @@ These changes are algorithmic stability measures, not a claim of improved langua
 
 **Not yet complete**
 - The packed `.qma` export is an offline model-weight container. Its auxiliary normalization, bias and gate tensors are stored as float32; its loader reconstructs the PyTorch reference model. It is not the integer-only deployed inference graph.
-- The cached PyTorch generation path avoids reprocessing the full prompt, but it is a reference path and still uses floating-point operators. The integer runtime currently proves the projection primitive and bounded integer residual addition only.
-- Calibrated activation/state/gating LUTs, complete integer convolution/SSM/MoE/normalization/output execution and the compiled ARM64/Android runtime are not implemented.
-- No Add/Sub weights have been trained and no quality/phone performance results exist.
+- The cached PyTorch generation path avoids reprocessing the full prompt and remains a floating-point reference implementation for Colab evaluation. It is not a mobile runtime.
+- Phone-specific integer inference is out of scope for the active Colab model. Preserved experiments live under `experiments/phone/realme_c17/` and must not constrain the current architecture.
+- No Add/Sub weights have yet completed the real-data Colab training recipe; assistant quality has not been established.
 
 Do not use the PyTorch training graph as a production inference runtime. The training graph intentionally uses floating-point operations and optimizer arithmetic; the project requirement is that the deployed inference graph use only lookup, comparisons, integer addition and subtraction.
 
@@ -116,7 +127,7 @@ After a pretraining or SFT checkpoint exists, create a verified offline five-sym
 
 The archive contains all quantized matrix/embedding/depthwise weights packed at 3 bits per symbol, checksums, a configuration/tensor index and a float32 auxiliary tensor sidecar. Load it for PyTorch reference parity/tamper checks with `load_addsub_export`. It is not yet a production integer-only/mobile runtime.
 
-After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. The reference generator applies a recent-token repetition penalty and stops before an exact four-token phrase would be repeated for a fifth time; this is a last-resort loop guard, not a substitute for good training. A stopped/short answer can still fail the held-out quality gate. This is for correctness testing, not the multiplication-free phone runtime.
+After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. The reference generator applies a recent-token repetition penalty and stops before an exact four-token phrase would be repeated for a fifth time; this is a last-resort loop guard, not a substitute for good training. A stopped/short answer can still fail the held-out quality gate. This is a Colab-side reference chat path only; it is not presented as a phone runtime.
 
 Instruction fine-tuning may begin only from a checkpoint produced by this Add/Sub v1 pretraining code:
 
@@ -162,13 +173,13 @@ Synthetic tests and benchmarks remain outside the production corpus. A cleaning 
 
 ## Training speed measurement
 
-The CPU notebook selects up to four PyTorch CPU threads and passes that setting to both pretraining and SFT. Training metrics record measured step duration and effective tokens/second (or supervised assistant tokens/second); these are measurements from the actual runtime, not promised performance figures. The thread count is part of the run contract, so resuming with a different thread count fails closed instead of silently changing the run configuration. Keep batch size low enough for the Colab RAM limit; increasing learning rate is not a safe shortcut to faster learning.
+The active Colab notebook selects up to four PyTorch CPU threads and passes that setting to both pretraining and SFT. Training metrics record measured step duration and effective tokens/second (or supervised assistant tokens/second); these are measurements from the actual runtime, not promised performance figures. The thread count is part of the run contract, so resuming with a different thread count fails closed instead of silently changing the run configuration. Keep batch size low enough for the Colab RAM limit; increasing learning rate is not a safe shortcut to faster learning.
 
 ## Scaled QAT and balanced tokenizer update
 
 Dense Kaiming-normal master weights now use per-tensor scaled five-symbol STE (scale = 1.4 × mean absolute weight). Zero is exact and STE gradients remain live through zero master weights. Matrix weight decay is 0.01. The 1,024-token ByteLevel tokenizer samples up to 64 MiB from pretraining training text and includes all SFT training messages so conversational terms influence BPE merges. Validation and test are never used for tokenizer training.
 
-FineWiki article text is paragraph-chunked without splitting page identities across data splits. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.
+FineWiki article text is paragraph-chunked without splitting page identities across data splits. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. Phone deployment is explicitly outside the active Colab-only scope.
 
 
 ### Pretraining corpus selection
