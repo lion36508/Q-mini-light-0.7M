@@ -36,7 +36,7 @@ python -m qmini.cli eval-tasks \
   --max-new-tokens 96 --output /path/to/reports/task-eval.json
 ~~~
 
-The report contains exact-match and lexical token F1 overall and by category, plus every prompt/reference/prediction. These are transparent string-comparison diagnostics. They do not establish semantic correctness, factuality, instruction adherence or code correctness. Mathematics requires verified numeric scoring; code generation requires execution in a constrained test sandbox; reasoning requires independently checked multi-step tasks.
+The report contains exact-match and lexical token F1 overall and by category, plus every prompt/reference/prediction. It also reports normalized output diversity: unique-answer fraction, the largest identical-answer fraction, empty answers and an explicit all-outputs-identical flag. Treat a very high largest-identical-answer fraction as a collapse warning that blocks a "trained/ready" claim until investigated. This is an exact-repeat diagnostic, not a semantic-diversity score; paraphrased repetitions still need human review. None of these string metrics alone establishes semantic correctness, factuality, instruction adherence or code correctness. Mathematics requires verified numeric scoring; code generation requires execution in a constrained test sandbox; reasoning requires independently checked multi-step tasks.
 
 ## Required capability reporting
 
@@ -70,7 +70,7 @@ For the 5B design, compare the sparse profile against \`configs/qmini_dense_853m
 - Q2 packed versus dense/fake-quant output differences, including capability regression by task.
 - Prefill throughput, autoregressive decode latency/tokens/sec, peak process RSS, cold start and thermal behavior.
 
-The planner's 1.409 GB CPU working-set estimate for batch 1 is not a measured process RSS and does not establish a 4 GB-phone target. A release claim requires measurements on the actual device with the trained packed archive and tokenizer loaded.
+The planner's 1.409 GB CPU working-set estimate for batch 1 is not a measured process RSS and is not used as a phone deployment target. Phone deployment is outside the active Colab-only scope; this estimate must not be presented as a device benchmark.
 
 
 ## Metric aggregation
@@ -130,9 +130,36 @@ python -m qmini.cli eval-conversations \\
   --output reports/conversation-evaluation.json
 \`\`\`
 
-Generated assistant replies are fed back into the prompt for the next turn. The evaluator preserves system/role/end markers and removes only complete oldest turns when the prompt reaches \`max_context\`. If the current user turn cannot fit by itself, evaluation fails explicitly rather than silently truncating it. The report contains per-turn predictions, task-specific pass rate, Wilson intervals, per-category/per-language results and the history-token count before each turn.
+Generated assistant replies are fed back into the prompt for the next turn. The evaluator preserves system/role/end markers and removes only complete oldest turns when the prompt reaches \`max_context\`. If the current user turn cannot fit by itself, evaluation fails explicitly rather than silently truncating it. The report contains per-turn predictions, task-specific pass rate, Wilson intervals, per-category/per-language results, the history-token count before each turn, and normalized output-diversity/collapse diagnostics across all generated turns.
 
 The benchmark set must remain held out from tokenizer fitting, pretraining and SFT. Use numeric/JSON scorers for objectively structured answers where possible; lexical exact match and token F1 remain diagnostics. Human review and externally checked answers are still needed for open-ended factuality, science, reasoning and code behavior.
+
+
+## Fail-closed readiness gate
+
+Do not call a run "trained", "ready" or "assistant-capable" just because the optimizer reached its requested step count or the training loss decreased. After training, generate fresh task and multi-turn conversation reports using separate, human-authored English holdouts that were excluded from tokenizer fitting, pretraining and SFT:
+
+```bash
+python -m qmini.cli eval-tasks \
+  --model-dir /path/to/final_model \
+  --dataset /path/to/held-out/tasks.jsonl \
+  --max-new-tokens 96 --output reports/tasks.json
+
+python -m qmini.cli eval-conversations \
+  --model-dir /path/to/final_model \
+  --dataset /path/to/held-out/conversations.jsonl \
+  --max-new-tokens 96 --output reports/conversations.json
+
+python -m qmini.release_gate \
+  --metrics /path/to/run/metrics.jsonl \
+  --tasks-report reports/tasks.json \
+  --conversations-report reports/conversations.json \
+  --output reports/readiness.json
+```
+
+The gate fails closed unless at least two validation evaluations in the active dataset/scheduler phase show the configured relative NLL improvement, both held-out files have the configured minimum sample counts and pass rates, task and conversation files have different SHA-256 fingerprints, and neither output set shows empty-answer or excessive identical-answer collapse. Default floors are 1% validation-loss improvement, 20 task prompts, 20 conversation turns, 25% task/conversation pass rate, at least 50% unique normalized answers, and no single normalized answer above 35%. Adjust these floors only for a documented benchmark reason; do not lower them to make a failing model pass.
+
+A passing report is labelled `ready_for_review`, not "human-level". The checks are engineering gates: they can catch training stagnation and constant-answer loops, but they cannot prove semantic understanding, truthfulness, safety or human-like conversation. Human review remains mandatory for open-ended answers. A run with only one new validation evaluation after a dataset switch remains not ready.
 
 
 ## Q2-v2 production format and legacy archive compatibility

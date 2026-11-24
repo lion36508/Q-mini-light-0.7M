@@ -907,6 +907,25 @@ def test_resume_allows_audited_dataset_switch(tiny_config, tmp_path):
     assert switch["previous_train"] == first["resume_contract"]["train"]
     assert switch["previous_validation"] == first["resume_contract"]["validation"]
     assert len(switched["resume_contract"]["dataset_switch_history"]) == 1
+    # A corpus switch starts a clean AdamW phase instead of retaining moments
+    # from the previous distribution or continuing its nearly-finished LR ramp.
+    assert switched["schedule_start_step"] == 2
+    assert switched["schedule_total_steps"] == 3
+    optimizer_steps = [
+        int(value["step"].item())
+        for value in switched["optimizer"]["state"].values()
+        if "step" in value
+    ]
+    assert optimizer_steps and max(optimizer_steps) == 1
+    metrics = [
+        json.loads(line)
+        for line in (run / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    switched_metrics = metrics[-1]
+    assert switched_metrics["train_sha256"] == switched["resume_contract"]["train"]["sha256"]
+    assert switched_metrics["validation_sha256"] == switched["resume_contract"]["validation"]["sha256"]
+    assert switched_metrics["dataset_switch_step"] == 2
+    assert switched_metrics["schedule_start_step"] == 2
     train_model(
         tiny_config, train_bin, valid_bin, run,
         steps=4, batch_size=1, seq_len=8, grad_accum=1,
@@ -916,7 +935,30 @@ def test_resume_allows_audited_dataset_switch(tiny_config, tmp_path):
     resumed = torch.load(run / "latest.pt", map_location="cpu", weights_only=False)
     assert resumed["step"] == 4
     assert resumed["tokens_seen"] == 32
+    assert resumed["schedule_start_step"] == 2
+    assert resumed["schedule_total_steps"] == 4
     assert resumed["resume_contract"]["dataset_switch"]["switch_step"] == 2
+
+
+def test_dataset_switch_requires_a_new_optimizer_step(tiny_config, tmp_path):
+    train_bin = tmp_path / "train.bin"
+    valid_bin = tmp_path / "valid.bin"
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 10)
+    _write_stream(valid_bin, tiny_config.vocab_size, 256, 11)
+    run = tmp_path / "run"
+    train_model(
+        tiny_config, train_bin, valid_bin, run,
+        steps=2, batch_size=1, seq_len=8, grad_accum=1,
+        eval_every=1, save_every=1, eval_batches=1,
+    )
+    _write_stream(train_bin, tiny_config.vocab_size, 256, 99)
+    with pytest.raises(ValueError, match="dataset switch requires at least one new optimizer step"):
+        train_model(
+            tiny_config, train_bin, valid_bin, run,
+            steps=2, batch_size=1, seq_len=8, grad_accum=1,
+            eval_every=1, save_every=1, eval_batches=1,
+            resume=True, allow_dataset_change=True,
+        )
 
 
 def test_resume_with_dataset_switch_still_rejects_optimizer_change(tiny_config, tmp_path):

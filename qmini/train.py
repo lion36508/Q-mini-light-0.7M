@@ -825,7 +825,7 @@ def train_model(
     allow_batch_size_change: bool = False,
     allow_dataset_change: bool = False,
 ) -> Path:
-    """Pretrain from scratch/step-zero Q2 brain, SFT, deliberate batch tuning, or an audited dataset switch on resume."""
+    """Train or resume Q-Mini; dataset switches retain weights but reset AdamW and the LR phase."""
     config.validate()
     positive = {
         "steps": steps,
@@ -1038,6 +1038,8 @@ def train_model(
         for step_count in range(1, config.max_thinking_steps + 1)
     }
     schedule_total_steps = steps
+    schedule_start_step = 0
+    dataset_switched = False
     if resume:
         if not checkpoint_path.is_file():
             raise FileNotFoundError(f"No checkpoint to resume: {checkpoint_path}")
@@ -1078,10 +1080,10 @@ def train_model(
                 key: value for key, value in contract.items()
                 if key not in excluded_keys
             }, allow_batch_size_change=allow_batch_size_change)
-            _reconcile_resume_contract(
+            dataset_switched = _reconcile_resume_contract(
                 saved_contract, saved_core, current_core, contract, state,
                 allow_dataset_change=allow_dataset_change,
-                )
+            )
             # The initial model is loaded exactly once. On resume the caller must
             # not pass it again, but the checkpoint's original initialization
             # fingerprint must remain in every subsequent checkpoint and manifest.
@@ -1106,6 +1108,29 @@ def train_model(
         model.load_state_dict(state["model"], strict=True)
         optimizer.load_state_dict(state["optimizer"])
         start_step = int(state["step"])
+        schedule_start_step = (
+            start_step if dataset_switched
+            else int(state.get("schedule_start_step", 0))
+        )
+        if dataset_switched:
+            if steps <= start_step:
+                raise ValueError(
+                    "A dataset switch requires at least one new optimizer step; "
+                    "increase the target step count or start a fresh run."
+                )
+            # Old AdamW moments encode gradients from the previous corpus.
+            # Reusing them after a data switch can keep pushing the model in
+            # the old direction, so begin a fresh optimizer phase.
+            optimizer.state.clear()
+            schedule_total_steps = steps
+            print(
+                "Dataset switch: reset AdamW moments and restarted the "
+                f"learning-rate schedule at optimizer step {start_step:,}."
+            )
+        else:
+            schedule_total_steps = int(
+                state.get("schedule_total_steps", steps)
+            )
         tokens_seen = int(state.get(
             "tokens_seen", start_step * batch_size * grad_accum * seq_len
         ))
@@ -1116,7 +1141,6 @@ def train_model(
                 thinking_step_counts[step_key] = int(
                     saved_step_counts.get(step_key, 0)
                 )
-        schedule_total_steps = int(state.get("schedule_total_steps", steps))
         if "numpy_rng" in state:
             rng.bit_generator.state = state["numpy_rng"]
         if "python_rng" in state:
@@ -1127,7 +1151,7 @@ def train_model(
         if torch.cuda.is_available() and saved_cuda_rng is not None:
             if len(saved_cuda_rng) == torch.cuda.device_count():
                 torch.cuda.set_rng_state_all([item.cpu() for item in saved_cuda_rng])
-        if "scaler" in state:
+        if "scaler" in state and not dataset_switched:
             scaler.load_state_dict(state["scaler"])
 
         if start_step > steps:
@@ -1201,6 +1225,7 @@ def train_model(
         "model_config": config.to_dict(),
         "resume_contract": contract,
         "schedule_total_steps": schedule_total_steps,
+        "schedule_start_step": schedule_start_step,
         "thinking_step_sampling": {
             "distribution": "uniform_discrete",
             "minimum": 1,
@@ -1234,12 +1259,14 @@ def train_model(
     )
 
     def learning_rate_at(step: int) -> float:
-        warmup = max(1, int(schedule_total_steps * 0.03))
-        if step < warmup:
-            return learning_rate * (step + 1) / warmup
+        phase_step = max(0, step - schedule_start_step)
+        phase_steps = max(1, schedule_total_steps - schedule_start_step)
+        warmup = max(1, int(phase_steps * 0.03))
+        if phase_step < warmup:
+            return learning_rate * (phase_step + 1) / warmup
         progress = min(
             1.0,
-            max(0.0, (step - warmup) / max(1, schedule_total_steps - warmup)),
+            max(0.0, (phase_step - warmup) / max(1, phase_steps - warmup)),
         )
         return learning_rate * 0.5 * (1.0 + math.cos(math.pi * progress))
 
@@ -1326,6 +1353,14 @@ def train_model(
             "step": completed,
             "tokens_seen": tokens_seen,
             "supervised_tokens_seen": supervised_tokens_seen,
+            # Keep the loss curve auditable when an explicit dataset switch
+            # creates a new optimization phase inside one resumed run.
+            "train_sha256": contract["train"]["sha256"],
+            "validation_sha256": contract["validation"]["sha256"],
+            "dataset_switch_step": (
+                contract.get("dataset_switch", {}).get("switch_step")
+            ),
+            "schedule_start_step": schedule_start_step,
             "train_loss": accum["loss"],
             "train_cross_entropy": accum["ce"],
             "router_aux_loss": accum["aux"],
@@ -1365,6 +1400,7 @@ def train_model(
                 "supervised_tokens_seen": supervised_tokens_seen,
                 "thinking_step_counts": dict(thinking_step_counts),
                 "schedule_total_steps": schedule_total_steps,
+                "schedule_start_step": schedule_start_step,
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "config": config.to_dict(),
@@ -1515,7 +1551,8 @@ def _reconcile_resume_contract(
     is carried into the new contract. When only the data fingerprints differ
     and the caller explicitly allowed a dataset change, the switch is recorded
     (previous fingerprints plus the step it happened at) and the new contract
-    is re-baselined to the new data. Anything else is still a hard mismatch:
+    is re-baselined to the new data. The caller must reset optimizer moments and
+    start a fresh learning-rate phase. Anything else is still a hard mismatch:
     config, seed, learning rate, weight decay, effective batch and tokenizer
     changes are never allowed through this path.
     """
@@ -1524,7 +1561,7 @@ def _reconcile_resume_contract(
             contract["dataset_switch"] = saved_contract["dataset_switch"]
         if "dataset_switch_history" in saved_contract:
             contract["dataset_switch_history"] = saved_contract["dataset_switch_history"]
-        return
+        return False
     differing = {
         key
         for key in saved_core.keys() | current_core.keys()
@@ -1553,12 +1590,11 @@ def _reconcile_resume_contract(
         contract["dataset_switch_history"] = history
         print(
             "WARNING: authorized dataset switch on resume at step "
-            f"{int(state['step']):,}: the resume contract is re-baselined to the "
-            "new data. Optimizer state, model weights, config, seed, learning "
-            "rate, weight decay and effective batch are unchanged; only the data "
-            "fingerprints were replaced."
+            f"{int(state['step']):,}: data fingerprints were re-baselined. "
+            "Model weights and architecture are retained, but AdamW moments "
+            "and the learning-rate schedule must restart for the new corpus."
         )
-        return
+        return True
     raise ValueError(
         "Resume contract mismatch (dataset/tokenizer or optimizer settings). "
         "Use a new run directory for changed data or settings."

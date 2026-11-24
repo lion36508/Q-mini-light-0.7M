@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import torch
@@ -21,10 +22,15 @@ LEGACY_UNSCALED_CHECKPOINT_FORMATS = {
     "qmini-addsub-sft-v3",
     "qmini-addsub-sft-v2",
 }
+LEGACY_SCALED_CHECKPOINT_FORMATS = {
+    "qmini-addsub-sft-v6",
+    "qmini-addsub-sft-v7",
+}
 ACCEPTED_CHECKPOINT_FORMATS = {
     CHECKPOINT_FORMAT,
     SFT_FORMAT,
     *LEGACY_UNSCALED_CHECKPOINT_FORMATS,
+    *LEGACY_SCALED_CHECKPOINT_FORMATS,
 }
 
 
@@ -129,6 +135,20 @@ def _apply_repetition_penalty(logits: torch.Tensor, generated: list[int],
     return scores
 
 
+def _would_exceed_fourgram_repeat(
+    generated: list[int], next_token: int, max_repeats: int = 4
+) -> bool:
+    """Stop an exact four-token phrase before it would occur too many times."""
+    if len(generated) < 3:
+        return False
+    candidate = tuple([*generated[-3:], next_token])
+    existing = sum(
+        tuple(generated[index:index + 4]) == candidate
+        for index in range(max(0, len(generated) - 3))
+    )
+    return existing >= max_repeats
+
+
 def _choose_next_token(
     logits: torch.Tensor,
     temperature: float,
@@ -158,6 +178,8 @@ def _choose_next_token(
         scores[sorted_indices[remove]] = float("-inf")
 
     probabilities = torch.softmax(scores, dim=-1)
+    if not torch.isfinite(probabilities).all() or float(probabilities.sum()) <= 0.0:
+        raise FloatingPointError("Add/Sub token sampling produced invalid probabilities.")
     return int(torch.multinomial(probabilities, num_samples=1).item())
 
 
@@ -176,16 +198,32 @@ def generate_reply(
     repetition_window: int = 64,
 ) -> str:
     """Generate an assistant turn using the model's cached PyTorch reference path."""
-    if max_new_tokens < 1:
-        raise ValueError("max_new_tokens must be positive.")
-    if top_k < 0:
-        raise ValueError("top_k must be non-negative.")
-    if not 0.0 < top_p <= 1.0:
-        raise ValueError("top_p must be in (0, 1].")
-    if temperature < 0:
-        raise ValueError("temperature must be non-negative.")
-    if not 1.0 <= repetition_penalty <= 4.0 or repetition_window < 1:
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be a positive integer.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if (
+        isinstance(top_p, bool) or not isinstance(top_p, (int, float))
+        or not math.isfinite(float(top_p)) or not 0.0 < top_p <= 1.0
+    ):
+        raise ValueError("top_p must be finite and in (0, 1].")
+    if (
+        isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+        or not math.isfinite(float(temperature)) or temperature < 0
+    ):
+        raise ValueError("temperature must be finite and non-negative.")
+    if (
+        isinstance(repetition_penalty, bool)
+        or not isinstance(repetition_penalty, (int, float))
+        or not math.isfinite(float(repetition_penalty))
+        or not 1.0 <= repetition_penalty <= 4.0
+        or isinstance(repetition_window, bool)
+        or not isinstance(repetition_window, int)
+        or repetition_window < 1
+    ):
         raise ValueError("Invalid repetition penalty/window.")
+    if not isinstance(system_text, str):
+        raise TypeError("system_text must be a string.")
 
     model.eval()
     device = next(model.parameters()).device
@@ -196,9 +234,9 @@ def generate_reply(
 
     control = _special_ids(tokenizer)
     stop_ids = {
-        control["<eos>"], control["<|end|>"], control["<|user|>"],
-        control["<|system|>"], control["<|assistant|>"], control["<bos>"],
-        control["<pad>"],
+        control["<unk>"], control["<eos>"], control["<|end|>"],
+        control["<|user|>"], control["<|system|>"],
+        control["<|assistant|>"], control["<bos>"], control["<pad>"],
     }
 
     caches = model.init_cache(batch_size=1, device=device)
@@ -217,6 +255,8 @@ def generate_reply(
             repetition_window=repetition_window,
         )
         if next_id in stop_ids:
+            break
+        if _would_exceed_fourgram_repeat(generated, next_id):
             break
         generated.append(next_id)
         if index + 1 < generation_limit:

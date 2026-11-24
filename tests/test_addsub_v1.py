@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from qmini_addsub.config import AddSubConfig
+from qmini_addsub.curriculum import SelfPacedCurriculumSampler
 from qmini_addsub.data import (
     accept_oasst1_message,
     escape_special_token_literals,
@@ -13,6 +14,7 @@ from qmini_addsub.data import (
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel, AddSubLinear, SparseTop1Experts
+from qmini_addsub.generate import _would_exceed_fourgram_repeat
 from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
@@ -27,6 +29,17 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from qmini_addsub.sft import ConversationDataset, _load_conversations
+
+
+
+def test_generation_stops_a_fourgram_phrase_before_a_fifth_repeat():
+    three_repeats = [1, 2, 3, 4] * 3
+    four_repeats = [1, 2, 3, 4] * 4
+    five_repeats = [1, 2, 3, 4] * 5
+    assert _would_exceed_fourgram_repeat(three_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(four_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(five_repeats, 1) is True
+    assert _would_exceed_fourgram_repeat([1, 2, 3], 9) is False
 
 
 def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
@@ -52,6 +65,12 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
     assert "START_PRETRAIN = False" in all_code
     assert "START_SFT = False" in all_code
+    assert "REPO_BRANCH = 'fix/dataset-switch-training-reset'" in all_code
+    assert "trainability_finewiki_v1" in all_code
+    assert "PRETRAIN_STEPS = 15000" in all_code
+    assert "SEQUENCE_LENGTH = 512" in all_code
+    assert "'--threads', str(CPU_THREADS)" in all_code
+    assert "RUN_HELDOUT_EVAL = False" in all_code
     assert "EXPORT_PACKED_WEIGHTS = False" in all_code
     assert "RUN_HELDOUT_EVAL = False" in all_code
     assert "qmini_addsub.evaluate" in all_code
@@ -63,6 +82,18 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
+    pretraining_code = next(source for source in code if "qmini_addsub.train" in source)
+    sft_code = next(source for source in code if "qmini_addsub.sft" in source)
+    assert "--curriculum-uniform-fraction" not in pretraining_code
+    assert "'--curriculum-uniform-fraction', str(SFT_CURRICULUM_UNIFORM_FRACTION)" in sft_code
+    assert "uniform-control" in sft_code
+    assert "self-paced-u" in sft_code
+    assert "SFT_CURRICULUM_UNIFORM_FRACTION = 0.35" in all_code
+    assert "SFT_RUN_TAG = 'uniform-control'" in all_code
+    assert "SFT_DIR = VERSION_ROOT / 'runs' / ('sft-' + SFT_RUN_TAG)" in all_code
+    assert "HELDOUT_EVAL_DIR = VERSION_ROOT / 'evaluation' / 'heldout' / SFT_RUN_TAG" in all_code
+    assert "'--curriculum-uniform-fraction', str(SFT_CURRICULUM_UNIFORM_FRACTION)" in all_code
+    assert "Colab-only" in "".join(notebook["cells"][0]["source"])
 
 
 def test_addsub_config_is_independent_and_validates():
@@ -506,8 +537,22 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v6"
+    assert sft_state["format"] == "qmini-addsub-sft-v8"
+    assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v2"
+    assert sft_state["curriculum"]["step"] == 1
+    assert sft_state["curriculum"]["dataset_size"] == sft_result["train_records"]
+    assert "uniform_remainder_units" in sft_state["curriculum"]
     assert "torch_rng" in sft_state and "python_rng" in sft_state
+    sft_metrics = [
+        json.loads(line)
+        for line in (tmp_path / "sft" / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert sft_metrics[-1]["curriculum_requested_uniform_fraction"] == pytest.approx(0.35)
+    assert (
+        sft_metrics[-1]["curriculum_uniform_samples"]
+        + sft_metrics[-1]["curriculum_focused_samples"]
+    ) == 1
 
     resumed_sft_dir = tmp_path / "sft-resumed"
     resumed_sft_dir.mkdir()
@@ -1812,3 +1857,314 @@ def test_addsub_v2_router_and_residual_coefficients_are_validated():
         AddSubConfig(moe_balance_coef=-0.1).validate()
     with pytest.raises(ValueError, match="router_z_loss_coef"):
         AddSubConfig(router_z_loss_coef=float("inf")).validate()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_new_tokens": True},
+        {"max_new_tokens": 1.5},
+        {"top_k": 1.5},
+        {"top_p": float("nan")},
+        {"temperature": float("inf")},
+        {"temperature": float("nan")},
+        {"repetition_penalty": float("nan")},
+        {"repetition_window": 1.5},
+        {"repetition_window": True},
+    ],
+)
+def test_addsub_generation_rejects_invalid_numeric_controls(kwargs):
+    from qmini_addsub.generate import generate_reply
+
+    with pytest.raises((TypeError, ValueError)):
+        generate_reply(None, None, [], **kwargs)
+
+
+def test_addsub_generation_stops_on_unknown_token_instead_of_emitting_it():
+    from types import SimpleNamespace
+
+    from qmini_addsub.generate import generate_reply
+
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+        "hello": 8,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+
+    class UnknownFirstModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+            self.config = SimpleNamespace(max_context=32)
+
+        def init_cache(self, batch_size=1, device=None):
+            return []
+
+        def forward_step(self, input_ids, caches):
+            logits = torch.full((input_ids.shape[0], len(vocab)), -5.0)
+            logits[:, vocab["<unk>"]] = 10.0
+            return logits, caches
+
+    answer = generate_reply(
+        UnknownFirstModel(),
+        tokenizer,
+        [{"role": "user", "content": "hello"}],
+        max_new_tokens=8,
+        greedy=True,
+    )
+    assert answer == "I'm not sure how to answer that yet."
+
+def test_self_paced_curriculum_warmup_focus_and_exact_resume():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=16,
+        total_steps=20,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(91)
+    first, first_info = sampler.sample(4, rng)
+    assert first_info["mode"] == "uniform_warmup"
+    assert len(set(first)) == 4
+    sampler.update(first, [0.2, 0.7, 1.2, 2.0])
+
+    second, second_info = sampler.sample(4, rng)
+    assert second_info["mode"] == "self_paced"
+    assert 0.55 <= second_info["focus_quantile"] <= 0.80
+    assert second_info["requested_uniform_fraction"] == 0.35
+    assert second_info["uniform_samples"] == 1
+    assert second_info["focused_samples"] == 3
+    assert second_info["uniform_fraction"] == 0.25
+    assert len(set(second)) == 4
+    sampler.update(second, [0.3, 0.9, 1.5, 2.4])
+
+    state = sampler.state_dict()
+    rng_state = rng.getstate()
+    restored = SelfPacedCurriculumSampler(
+        dataset_size=16,
+        total_steps=20,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    restored.load_state_dict(state)
+    restored_rng = random.Random()
+    restored_rng.setstate(rng_state)
+    expected, _ = sampler.sample(5, rng)
+    actual, _ = restored.sample(5, restored_rng)
+    assert actual == expected
+    assert restored.state_dict() == sampler.state_dict()
+
+
+def test_self_paced_curriculum_preserves_uniform_replay_and_rejects_bad_updates():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=8,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(7)
+    indices, _ = sampler.sample(4, rng)
+    with pytest.raises(ValueError, match="duplicate"):
+        sampler.update([indices[0], indices[0]], [0.1, 0.2])
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        sampler.update([indices[0]], [float("inf")])
+    sampler.update(indices, [0.1, 0.2, 0.3, 0.4])
+    selected, info = sampler.sample(4, rng)
+    assert len(set(selected)) == 4
+    assert info["mode"] == "self_paced"
+    assert info["requested_uniform_fraction"] == 0.35
+    assert info["uniform_samples"] == 1
+    assert info["focused_samples"] == 3
+    assert all(sampler.update_count[index] >= 0 for index in range(8))
+
+
+def test_self_paced_curriculum_resume_rejects_different_schedule():
+    with pytest.raises(ValueError, match="0.35"):
+        SelfPacedCurriculumSampler(dataset_size=10, total_steps=100, warmup_steps=5, uniform_fraction=0.20)
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=10,
+        total_steps=100,
+        warmup_steps=5,
+        uniform_fraction=0.35,
+    )
+    state = sampler.state_dict()
+    incompatible = SelfPacedCurriculumSampler(
+        dataset_size=10,
+        total_steps=100,
+        warmup_steps=5,
+        uniform_fraction=0.50,
+    )
+    with pytest.raises(ValueError, match="uniform_fraction"):
+        incompatible.load_state_dict(state)
+
+def test_self_paced_curriculum_supports_pure_uniform_control():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=12,
+        total_steps=8,
+        warmup_steps=1,
+        uniform_fraction=1.0,
+    )
+    rng = random.Random(123)
+    first, first_info = sampler.sample(4, rng)
+    sampler.update(first, [0.1, 0.3, 0.7, 1.1])
+    second, second_info = sampler.sample(4, rng)
+    assert first_info["mode"] == "uniform_control"
+    assert second_info["mode"] == "uniform_control"
+    assert len(set(second)) == 4
+    assert second_info["uniform_fraction"] == 1.0
+
+def test_phone_native_prototype_is_parked_outside_active_addsub_and_ci():
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "qmini_addsub" / "native_projection.cpp").exists()
+    parked_kernel = root / "experiments" / "phone" / "realme_c17" / "native_projection.cpp"
+    assert parked_kernel.is_file()
+
+    workflow = (root / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert "qmini_addsub/native_projection.cpp" not in workflow
+    assert "qmini/native_kernel.cpp" in workflow
+
+@pytest.mark.parametrize("checkpoint_format", ["qmini-addsub-sft-v6", "qmini-addsub-sft-v7"])
+def test_legacy_scaled_sft_checkpoints_remain_readable_for_inference_and_export(tmp_path, checkpoint_format):
+    from qmini_addsub.export import ACCEPTED_CHECKPOINT_FORMATS, SCALED_CHECKPOINT_FORMATS
+    from qmini_addsub.generate import load_addsub_model
+
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+    )
+    original = AddSubLanguageModel(config)
+    checkpoint_path = tmp_path / f"legacy-{checkpoint_format}.pt"
+    torch.save(
+        {
+            "format": checkpoint_format,
+            "step": 10,
+            "config": config.to_dict(),
+            "model": original.state_dict(),
+        },
+        checkpoint_path,
+    )
+    loaded = load_addsub_model(checkpoint_path, device_name="cpu")
+    matrix_parameter = loaded.token_embedding.weight
+    assert not hasattr(matrix_parameter, "_qmini_fixed_scale")
+    assert checkpoint_format in ACCEPTED_CHECKPOINT_FORMATS
+    assert checkpoint_format in SCALED_CHECKPOINT_FORMATS
+
+def test_self_paced_curriculum_carries_uniform_replay_quota_for_batch_one():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=80,
+        total_steps=101,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(101)
+    indices, _ = sampler.sample(1, rng)
+    sampler.update(indices, [0.25])
+    uniform_allocations = 0
+    for step in range(100):
+        selected, info = sampler.sample(1, rng)
+        uniform_allocations += info["uniform_samples"]
+        sampler.update(selected, [0.25 + (selected[0] % 10) / 10.0])
+    assert uniform_allocations == 35
+    state = sampler.state_dict()
+    assert 0 <= state["uniform_remainder_units"] < sampler.UNIFORM_QUOTA_SCALE
+    assert 0.0 <= sampler.uniform_remainder < 1.0
+
+def test_self_paced_curriculum_focuses_only_on_measured_records_and_handles_loss_ties():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=20,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(77)
+    seen, warmup_info = sampler.sample(5, rng)
+    assert warmup_info["mode"] == "uniform_warmup"
+    sampler.update(seen, [1.0, 1.0, 1.0, 1.0, 1.0])
+
+    selected, info = sampler.sample(4, rng)
+    assert info["mode"] == "self_paced"
+    assert info["focused_samples"] == 3
+    uniform_selected = set(selected[: info["uniform_samples"]])
+    focused_selected = set(selected[info["uniform_samples"] :])
+    assert len(uniform_selected & focused_selected) == 0
+    assert focused_selected.issubset(set(seen) - uniform_selected)
+    assert len(selected) == len(set(selected)) == 4
+
+def test_self_paced_curriculum_rejects_invalid_fixed_point_replay_state():
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=8,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    state = sampler.state_dict()
+    state["uniform_remainder_units"] = sampler.UNIFORM_QUOTA_SCALE
+    with pytest.raises(ValueError, match="fixed-point replay remainder"):
+        sampler.load_state_dict(state)
+
+
+
+
+def test_checkpoint_discovery_uses_numeric_step_order_and_safe_prefixes(tmp_path):
+    from qmini_addsub.checkpoints import checkpoint_step, latest_checkpoint
+
+    (tmp_path / "checkpoint-step-000000009.pt").write_bytes(b"9")
+    (tmp_path / "checkpoint-step-000000100.pt").write_bytes(b"100")
+    (tmp_path / "checkpoint-step-000000020.pt").write_bytes(b"20")
+    latest = latest_checkpoint(tmp_path, "checkpoint")
+    assert latest is not None
+    assert latest.name == "checkpoint-step-000000100.pt"
+    assert checkpoint_step(latest, "checkpoint") == 100
+    assert latest_checkpoint(tmp_path, "sft-checkpoint") is None
+
+
+def test_checkpoint_discovery_returns_none_for_missing_directory(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    assert latest_checkpoint(tmp_path / "not-created", "checkpoint") is None
+
+
+@pytest.mark.parametrize("prefix", ["unknown", "../checkpoint", ""])
+def test_checkpoint_discovery_rejects_unsupported_prefix(tmp_path, prefix):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    with pytest.raises(ValueError, match="Unsupported checkpoint prefix"):
+        latest_checkpoint(tmp_path, prefix)
+
+
+def test_checkpoint_discovery_fails_closed_on_malformed_or_ambiguous_names(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    malformed = tmp_path / "checkpoint-step-latest.pt"
+    malformed.write_bytes(b"x")
+    with pytest.raises(ValueError, match="Malformed"):
+        latest_checkpoint(tmp_path, "checkpoint")
+
+    malformed.unlink()
+    (tmp_path / "checkpoint-step-0007.pt").write_bytes(b"a")
+    (tmp_path / "checkpoint-step-7.pt").write_bytes(b"b")
+    with pytest.raises(ValueError, match="Ambiguous"):
+        latest_checkpoint(tmp_path, "checkpoint")

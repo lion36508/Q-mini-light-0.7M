@@ -1,27 +1,26 @@
-# Active Colab entry points — exactly two model lines
+# Colab training entry points — Add/Sub is primary
 
-Only the following two model families are active in this repository. Do not mix their datasets, tokenizers, checkpoints, configs or Drive folders.
+**Current scope: Google Colab only.** The new Q-Mini Add/Sub model is developed, trained, resumed and evaluated through its Colab notebook. Phone/Android deployment is explicitly out of scope in this phase.
 
-## 1. Legacy Q-Mini Light 0.7M
+## 1. Primary training notebook — Q-Mini Add/Sub
 
-- **Training:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb). Uses the pinned DailyDialog/OpenAssistant preparation path and resumes only compatible legacy checkpoints.
-- **Chat/demo:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb). This is a runtime demonstration for an existing legacy checkpoint; it does not create a new model family.
+- Notebook: [Q-Mini Add/Sub Colab-only English training](QMini_AddSub_V1_From_Scratch.ipynb)
+- Package: `qmini_addsub/`
+- Independent random initialization, pinned English corpus preparation, tokenizer build, pretraining, response-masked assistant SFT and held-out evaluation.
+- CPU-only by default, conservative thread count, separate Drive folder `Q mini 2 light/trainability_finewiki_v1`.
+- SFT uses the experimental self-paced difficulty sampler with 35% uniform replay; metrics and checkpoint state preserve the sampler's state for exact resume.
+- All data preparation and training switches are OFF by default. Review source licenses and available storage before enabling each stage.
+- No legacy Q2-v2 checkpoint is loaded.
 
-Package: `qmini/`. Legacy artifacts and checkpoints stay in their existing format and location. This model uses its documented Q2 format and is not an Add/Sub-only runtime.
+## 2. Legacy Q-Mini Light Q2-v2 — compatibility only
 
-## 2. New Q-Mini Add/Sub v1
+- Existing checkpoint chat: [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb).
+- Legacy resume/debug only: [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb).
+- Package: `qmini/`.
+- Preserve the old checkpoints, data and tokenizer. Do not use this route for new Add/Sub development.
 
-- **From-scratch training:** [Q-Mini Add/Sub v1 notebook](QMini_AddSub_V1_From_Scratch.ipynb). English-first, independent random initialization, separate tokenizer/data/checkpoint paths, CPU by default. Pretraining and SFT are OFF until explicitly enabled.
+## 3. Phone experiments are parked separately
 
-Package: `qmini_addsub/`. It must never load legacy `qmini/` weights or artifacts. The current implementation has the training/data pipeline and an additive projection reference primitive; the complete full-graph multiply-free inference runtime and export are still under development. It is not yet a trained or deployable assistant.
+Phone-specific prototypes are kept under `experiments/phone/realme_c17/`. They are not imported by the active model, not part of the training notebook, and not part of the Add/Sub CI path. The current phase does not build or benchmark Android/mobile inference.
 
-## Legacy regression fixtures
-
-Historical notebook snapshots used by CI are stored under
-`tests/fixtures/legacy_colab/`, outside the active Colab folder. They are kept
-only to protect legacy compatibility tests. Do not use them as current training
-instructions.
-
-Only the three notebooks linked above are supported entry points. The legacy
-and Add/Sub model packages, tokenizers, datasets and checkpoints must remain
-separate.
+See `docs/EXPERIMENTAL_TECHNOLOGY_ROADMAP_2026.md` for the Colab research plan and `qmini_addsub/README.md` for the SFT learning recipe.
