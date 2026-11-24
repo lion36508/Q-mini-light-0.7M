@@ -86,10 +86,11 @@ def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
             and row["in_language"] == "en"
         ]
         for title in own_titles:
-            assert title in split_text[name]
+            title_heading = f"# {title}\\n"
+            assert title_heading in split_text[name]
             for other_name, other_text in split_text.items():
                 if other_name != name:
-                    assert title not in other_text
+                    assert title_heading not in other_text
 
     with pytest.raises(FileExistsError, match="fresh versioned data folder"):
         _write_finewiki_rows(_rows_for_all_splits(), tmp_path)
