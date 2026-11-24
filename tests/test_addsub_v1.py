@@ -2008,3 +2008,34 @@ def test_phone_native_prototype_is_parked_outside_active_addsub_and_ci():
     assert "qmini_addsub/native_projection.cpp" not in workflow
     assert "qmini/native_kernel.cpp" in workflow
 
+def test_legacy_sft_v6_remains_scaled_for_reference_inference_and_export(tmp_path):
+    from qmini_addsub.export import ACCEPTED_CHECKPOINT_FORMATS, SCALED_CHECKPOINT_FORMATS
+    from qmini_addsub.generate import load_addsub_model
+
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+    )
+    original = AddSubLanguageModel(config)
+    checkpoint_path = tmp_path / "legacy-sft-v6.pt"
+    torch.save(
+        {
+            "format": "qmini-addsub-sft-v6",
+            "step": 10,
+            "config": config.to_dict(),
+            "model": original.state_dict(),
+        },
+        checkpoint_path,
+    )
+    loaded = load_addsub_model(checkpoint_path, device_name="cpu")
+    matrix_parameter = loaded.token_embedding.weight
+    assert not hasattr(matrix_parameter, "_qmini_fixed_scale")
+    assert "qmini-addsub-sft-v6" in ACCEPTED_CHECKPOINT_FORMATS
+    assert "qmini-addsub-sft-v6" in SCALED_CHECKPOINT_FORMATS
+
