@@ -73,7 +73,7 @@ Keep AdamW as the control. Test a hybrid optimizer only on a short, reproducible
 
 Microsoft BitNet demonstrates ternary 1.58-bit models and optimized CPU kernels, but its official model and reported speed results are at a vastly larger scale than Q-Mini. Reference: https://github.com/microsoft/BitNet.
 
-Keep the required five-symbol Add/Sub format as the baseline. A ternary comparison may be run as a separately versioned quantization ablation only after the baseline has real trained weights. It must not silently change the five-symbol checkpoint format or be marketed as equivalent. Compare model quality, packed size, integer-only operator coverage and actual ARM CPU latency.
+Keep the required five-symbol Add/Sub format as the baseline. A ternary comparison may be run as a separately versioned quantization ablation only after the baseline has real trained weights. It must not silently change the five-symbol checkpoint format or be marketed as equivalent. Compare held-out model quality, packed size, quantization error, Colab CPU memory use and wall-clock training/evaluation cost.
 
 ## Recommended implementation order — Colab track
 
