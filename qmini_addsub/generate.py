@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import torch
@@ -158,6 +159,8 @@ def _choose_next_token(
         scores[sorted_indices[remove]] = float("-inf")
 
     probabilities = torch.softmax(scores, dim=-1)
+    if not torch.isfinite(probabilities).all() or float(probabilities.sum()) <= 0.0:
+        raise FloatingPointError("Add/Sub token sampling produced invalid probabilities.")
     return int(torch.multinomial(probabilities, num_samples=1).item())
 
 
@@ -176,16 +179,32 @@ def generate_reply(
     repetition_window: int = 64,
 ) -> str:
     """Generate an assistant turn using the model's cached PyTorch reference path."""
-    if max_new_tokens < 1:
-        raise ValueError("max_new_tokens must be positive.")
-    if top_k < 0:
-        raise ValueError("top_k must be non-negative.")
-    if not 0.0 < top_p <= 1.0:
-        raise ValueError("top_p must be in (0, 1].")
-    if temperature < 0:
-        raise ValueError("temperature must be non-negative.")
-    if not 1.0 <= repetition_penalty <= 4.0 or repetition_window < 1:
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be a positive integer.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if (
+        isinstance(top_p, bool) or not isinstance(top_p, (int, float))
+        or not math.isfinite(float(top_p)) or not 0.0 < top_p <= 1.0
+    ):
+        raise ValueError("top_p must be finite and in (0, 1].")
+    if (
+        isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+        or not math.isfinite(float(temperature)) or temperature < 0
+    ):
+        raise ValueError("temperature must be finite and non-negative.")
+    if (
+        isinstance(repetition_penalty, bool)
+        or not isinstance(repetition_penalty, (int, float))
+        or not math.isfinite(float(repetition_penalty))
+        or not 1.0 <= repetition_penalty <= 4.0
+        or isinstance(repetition_window, bool)
+        or not isinstance(repetition_window, int)
+        or repetition_window < 1
+    ):
         raise ValueError("Invalid repetition penalty/window.")
+    if not isinstance(system_text, str):
+        raise TypeError("system_text must be a string.")
 
     model.eval()
     device = next(model.parameters()).device
@@ -196,9 +215,9 @@ def generate_reply(
 
     control = _special_ids(tokenizer)
     stop_ids = {
-        control["<eos>"], control["<|end|>"], control["<|user|>"],
-        control["<|system|>"], control["<|assistant|>"], control["<bos>"],
-        control["<pad>"],
+        control["<unk>"], control["<eos>"], control["<|end|>"],
+        control["<|user|>"], control["<|system|>"],
+        control["<|assistant|>"], control["<bos>"], control["<pad>"],
     }
 
     caches = model.init_cache(batch_size=1, device=device)
