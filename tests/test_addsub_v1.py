@@ -537,10 +537,10 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v7"
-    assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v1"
+    assert sft_state["format"] == "qmini-addsub-sft-v8"
+    assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v2"
     assert sft_state["curriculum"]["step"] == 1
-    assert "uniform_remainder" in sft_state["curriculum"]
+    assert "uniform_remainder_units" in sft_state["curriculum"]
     assert "torch_rng" in sft_state and "python_rng" in sft_state
     sft_metrics = [
         json.loads(line)
@@ -2085,7 +2085,8 @@ def test_self_paced_curriculum_carries_uniform_replay_quota_for_batch_one():
         sampler.update(selected, [0.25 + (selected[0] % 10) / 10.0])
     assert uniform_allocations == 35
     state = sampler.state_dict()
-    assert 0.0 <= state["uniform_remainder"] < 1.0
+    assert 0 <= state["uniform_remainder_units"] < sampler.UNIFORM_QUOTA_SCALE
+    assert 0.0 <= sampler.uniform_remainder < 1.0
 
 def test_self_paced_curriculum_focuses_only_on_measured_records_and_handles_loss_ties():
     import random
@@ -2109,4 +2110,16 @@ def test_self_paced_curriculum_focuses_only_on_measured_records_and_handles_loss
     assert len(uniform_selected & focused_selected) == 0
     assert focused_selected.issubset(set(seen) - uniform_selected)
     assert len(selected) == len(set(selected)) == 4
+
+def test_self_paced_curriculum_rejects_invalid_fixed_point_replay_state():
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=8,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    state = sampler.state_dict()
+    state["uniform_remainder_units"] = sampler.UNIFORM_QUOTA_SCALE
+    with pytest.raises(ValueError, match="fixed-point replay remainder"):
+        sampler.load_state_dict(state)
 
