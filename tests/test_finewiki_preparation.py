@@ -1,8 +1,14 @@
+import hashlib
+import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
+import zstandard
 
 from qmini_addsub.data import stable_split
+from scripts import prepare_qmini_addsub_data as prepare_module
 from scripts.prepare_qmini_addsub_data import _article_text_chunks, _write_finewiki_rows
 
 
@@ -83,6 +89,44 @@ def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
     with pytest.raises(FileExistsError, match="fresh versioned data folder"):
         _write_finewiki_rows(_rows_for_all_splits(), tmp_path)
 
+
+
+def test_pinned_finewiki_download_streams_jsonl_after_hash_verification(tmp_path, monkeypatch):
+    rows = _rows_for_all_splits()
+    compressed = zstandard.ZstdCompressor().compress(
+        ("\n".join(json.dumps(row) for row in rows) + "\n").encode("utf-8")
+    )
+    archive = tmp_path / "fixture.jsonl.zst"
+    archive.write_bytes(compressed)
+    expected_sha = hashlib.sha256(compressed).hexdigest()
+    monkeypatch.setattr(prepare_module, "FINEWIKI_SHA256", expected_sha)
+
+    fake_hub = ModuleType("huggingface_hub")
+    fake_hub.hf_hub_download = lambda **kwargs: str(archive)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    report = prepare_module.prepare_finewiki_sample(
+        tmp_path / "cache", tmp_path / "prepared"
+    )
+    assert report["sha256"] == expected_sha
+    assert report["license"] == "CC-BY-SA-4.0"
+    assert report["synthetic_training_records_included"] == 0
+    assert sum(item["articles"] for item in report["splits"].values()) == len(rows)
+
+
+def test_pinned_finewiki_rejects_hash_mismatch_before_writing_splits(tmp_path, monkeypatch):
+    archive = tmp_path / "wrong.jsonl.zst"
+    archive.write_bytes(zstandard.ZstdCompressor().compress(b"{}\n"))
+    monkeypatch.setattr(prepare_module, "FINEWIKI_SHA256", "0" * 64)
+
+    fake_hub = ModuleType("huggingface_hub")
+    fake_hub.hf_hub_download = lambda **kwargs: str(archive)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    output = tmp_path / "prepared"
+    with pytest.raises(ValueError, match="failed pinned SHA-256"):
+        prepare_module.prepare_finewiki_sample(tmp_path / "cache", output)
+    assert not list(output.glob("pretrain_*.txt")) if output.exists() else True
 
 def test_finewiki_rejects_empty_split_instead_of_silently_training(tmp_path):
     train_ids = []
