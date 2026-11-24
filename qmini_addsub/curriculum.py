@@ -10,10 +10,11 @@ import torch
 class SelfPacedCurriculumSampler:
     """Loss-aware curriculum with a permanent uniform replay floor.
 
-    Examples are ranked by their EMA response loss. Sampling gradually moves
-    from the middle of the difficulty distribution toward moderately hard
-    examples. A fixed uniform component prevents the curriculum from forgetting
-    easy facts, common language patterns, or examples it has already mastered.
+    Examples are ranked by their EMA response loss, but only after their
+    difficulty has actually been measured. Sampling gradually moves from the
+    middle of the observed difficulty distribution toward moderately hard
+    examples. A fractional uniform quota is carried across steps, so even
+    batch-size-one training preserves the requested long-run replay share.
     This is an SFT data sampler; it does not change model weights or fabricate
     training examples.
     """
