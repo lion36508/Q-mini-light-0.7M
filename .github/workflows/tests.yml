@@ -36,7 +36,7 @@ jobs:
           python -c "import torch; print('PyTorch:', torch.__version__, '| CUDA build:', torch.version.cuda); assert torch.version.cuda is None"
       - name: Compile C++ projection primitive
         run: bash scripts/build_native_kernel.sh
-      - name: Cross-compile ARM64 NEON kernels
+      - name: Cross-compile legacy ARM64 NEON kernel
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-aarch64-linux-gnu
@@ -45,7 +45,6 @@ jobs:
           aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -Werror -fPIC -shared \
             qmini_addsub/native_projection.cpp -o /tmp/libqmini-addsub-projection-aarch64.so
           file /tmp/libqmini_kernel_aarch64.so
-          file /tmp/libqmini-addsub-projection-aarch64.so
       - name: Validate Colab notebook Python syntax
         run: |
           python - <<'PY'
