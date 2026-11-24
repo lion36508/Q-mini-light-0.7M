@@ -18,6 +18,26 @@ def test_answer_normalization_and_lexical_f1():
     assert evaluate.token_f1("blue", "red") == 0.0
 
 
+def test_prediction_diversity_flags_constant_outputs_and_counts_repeats():
+    report = evaluate._prediction_diversity([
+        "Same answer!",
+        "same answer.",
+        "A different reply",
+        "",
+    ])
+    assert report["examples"] == 4
+    assert report["unique_normalized_answers"] == 3
+    assert report["unique_answer_fraction"] == 0.75
+    assert report["largest_identical_answer_count"] == 2
+    assert report["largest_identical_answer_fraction"] == 0.5
+    assert report["empty_answer_count"] == 1
+    assert report["all_outputs_identical"] is False
+
+    collapsed = evaluate._prediction_diversity(["one answer", "One answer!", "ONE ANSWER"])
+    assert collapsed["all_outputs_identical"] is True
+    assert collapsed["largest_identical_answer_fraction"] == 1.0
+
+
 def test_language_evaluation_reports_masked_metrics_and_expert_load(tiny_config, tmp_path):
     model = QMiniMoE(tiny_config).eval()
     token_path = tmp_path / "valid.bin"
@@ -193,6 +213,9 @@ def test_multi_turn_conversation_evaluation_reuses_prior_assistant_turns(
     assert report["dataset_sha256"] == hashlib.sha256(dataset.read_bytes()).hexdigest()
     assert report["turns"] == 3
     assert report["task_pass_rate"] == 1.0
+    assert report["output_diversity"]["unique_normalized_answers"] == 2
+    assert report["output_diversity"]["largest_identical_answer_fraction"] == pytest.approx(2 / 3)
+    assert report["output_diversity"]["all_outputs_identical"] is False
     assert set(report["languages"]) == {"en", "hi"}
     assert report["languages"]["en"]["turns"] == 2
     assert "<|assistant|>42\n<|end|>" in prompts[1]
