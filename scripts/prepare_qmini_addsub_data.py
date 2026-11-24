@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import re
+import shutil
+import tempfile
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -482,74 +484,83 @@ def main() -> None:
             "OASST1 Apache-2.0 and Dolly CC-BY-SA-3.0 terms."
         )
 
-    output, cache = Path(args.output), Path(args.cache)
-    output.mkdir(parents=True, exist_ok=True)
-    managed_outputs = [
-        output / "dataset_manifest.json",
-        output / "pretrain_train.txt",
-        output / "pretrain_validation.txt",
-        output / "pretrain_test.txt",
-        output / "sft_train.jsonl",
-        output / "sft_validation.jsonl",
-        output / "sft_test.jsonl",
-    ]
-    existing_outputs = [str(path) for path in managed_outputs if path.exists()]
-    if existing_outputs:
-        parser.error(
-            "Prepared output already exists; use a fresh versioned data folder to "
-            "avoid overwriting a prior dataset: " + ", ".join(existing_outputs)
-        )
-    print("Preparing hash-pinned FineWiki English Wikipedia sample...")
-    finewiki_info = prepare_finewiki_sample(cache, output)
-    print("Preparing strictly filtered human OASST1 conversations...")
-    oasst_records, oasst_info = load_oasst_conversations(cache)
-    print("Preparing human-authored Databricks Dolly instructions...")
-    dolly_records, dolly_info = load_dolly_conversations(cache)
+    output = Path(args.output).expanduser().resolve()
+    cache = Path(args.cache).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        if not output.is_dir():
+            parser.error(f"Output path is not a directory: {output}")
+        existing = [str(path) for path in output.iterdir()]
+        if existing:
+            parser.error(
+                "Prepared output directory is not empty; choose a fresh versioned "
+                "folder to avoid overwriting a prior dataset: " + ", ".join(existing[:8])
+            )
 
-    all_conversations = oasst_records + dolly_records
-    sft_splits = write_sft_splits(output, all_conversations)
-    manifest = {
-        "format": "qmini-addsub-data-v1",
-        "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "language": "English",
-        "synthetic_training_records_included": 0,
-        "cleaning_policy": {
-            "version": "qmini-addsub-text-clean-v2",
-            "normalization": "Unicode NFC; normalized line endings; horizontal whitespace collapse; control-character removal",
-            "rejections": ["short/empty text", "overlong text", "email addresses", "credential-like secrets", "explicitly labelled phone-contact strings"],
-            "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
-            "maximum_text_characters": 32768
-        },
-        "pretraining": finewiki_info,
-        "instruction_sources": {
-            "oasst1": oasst_info,
-            "dolly": dolly_info,
-        },
-        "approved_instruction_sources": [
-            OASST_REPOSITORY,
-            DOLLY_REPOSITORY,
-        ],
-        "instruction_splits": sft_splits,
-        "excluded_sources": {
-            "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
-            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; FineWiki English Wikipedia is the human-authored pretraining source.",
-            "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
-        },
-        "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
-    }
-    manifest_path = output / "dataset_manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps({
-        "manifest": str(manifest_path),
-        "finewiki_english": finewiki_info["splits"],
-        "oasst1_conversations": len(oasst_records),
-        "dolly_conversations": len(dolly_records),
-        "sft_splits": sft_splits,
-        "synthetic_training_records_included": 0,
-    }, ensure_ascii=False, indent=2))
+    staging = Path(tempfile.mkdtemp(
+        prefix=f".{output.name}.preparing-",
+        dir=output.parent,
+    ))
+    try:
+        print("Preparing hash-pinned FineWiki English Wikipedia sample...")
+        finewiki_info = prepare_finewiki_sample(cache, staging)
+        print("Preparing strictly filtered human OASST1 conversations...")
+        oasst_records, oasst_info = load_oasst_conversations(cache)
+        print("Preparing human-authored Databricks Dolly instructions...")
+        dolly_records, dolly_info = load_dolly_conversations(cache)
+
+        all_conversations = oasst_records + dolly_records
+        sft_splits = write_sft_splits(staging, all_conversations)
+        manifest = {
+            "format": "qmini-addsub-data-v1",
+            "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "language": "English",
+            "synthetic_training_records_included": 0,
+            "cleaning_policy": {
+                "version": "qmini-addsub-text-clean-v2",
+                "normalization": "Unicode NFC; normalized line endings; horizontal whitespace collapse; control-character removal",
+                "rejections": ["short/empty text", "overlong text", "email addresses", "credential-like secrets", "explicitly labelled phone-contact strings"],
+                "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
+                "maximum_text_characters": 32768
+            },
+            "pretraining": finewiki_info,
+            "instruction_sources": {
+                "oasst1": oasst_info,
+                "dolly": dolly_info,
+            },
+            "approved_instruction_sources": [
+                OASST_REPOSITORY,
+                DOLLY_REPOSITORY,
+            ],
+            "instruction_splits": sft_splits,
+            "excluded_sources": {
+                "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
+                "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; FineWiki English Wikipedia is the human-authored pretraining source.",
+                "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
+            },
+            "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
+        }
+        manifest_path = staging / "dataset_manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        # Commit a complete prepared dataset with one same-filesystem directory rename.
+        if output.exists():
+            output.rmdir()  # It was checked to be empty above.
+        staging.replace(output)
+        print(json.dumps({
+            "manifest": str(output / "dataset_manifest.json"),
+            "finewiki_english": finewiki_info["splits"],
+            "oasst1_conversations": len(oasst_records),
+            "dolly_conversations": len(dolly_records),
+            "sft_splits": sft_splits,
+            "synthetic_training_records_included": 0,
+        }, ensure_ascii=False, indent=2))
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 if __name__ == "__main__":
