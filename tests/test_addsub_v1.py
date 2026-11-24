@@ -534,7 +534,18 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert sft_state["format"] == "qmini-addsub-sft-v7"
     assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v1"
     assert sft_state["curriculum"]["step"] == 1
+    assert "uniform_remainder" in sft_state["curriculum"]
     assert "torch_rng" in sft_state and "python_rng" in sft_state
+    sft_metrics = [
+        json.loads(line)
+        for line in (tmp_path / "sft" / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert sft_metrics[-1]["curriculum_requested_uniform_fraction"] == pytest.approx(0.35)
+    assert (
+        sft_metrics[-1]["curriculum_uniform_samples"]
+        + sft_metrics[-1]["curriculum_focused_samples"]
+    ) == 1
 
     resumed_sft_dir = tmp_path / "sft-resumed"
     resumed_sft_dir.mkdir()
