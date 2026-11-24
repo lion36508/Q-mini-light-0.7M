@@ -136,9 +136,9 @@ After held-out evaluation, run the readiness gate against the same SFT metrics a
 
     python -m qmini_addsub.readiness --metrics runs/qmini_addsub_v1_sft/sft_metrics.jsonl --heldout-summary runs/qmini_addsub_v1_eval/heldout_summary.json --output runs/qmini_addsub_v1_eval/readiness.json
 
-By default this requires at least two validation-response-loss measurements in the same SFT data/tokenizer run, at least 1% relative validation-loss improvement, at least 50 independent held-out conversations, zero generation failures, mean lexical token F1 of at least 0.15, at least 40% unique normalized answers and no single answer repeated on more than 35% of prompts. It also verifies the held-out test/tokenizer/data-manifest fingerprints against the SFT run. The thresholds can be explicitly changed on the command line, but must not be weakened merely to make a run pass.
+By default this requires at least two validation-response-loss measurements in the same SFT data/tokenizer run, at least 1% relative validation-loss improvement, at least 50 independent held-out conversations, zero generation failures, mean lexical token F1 of at least 0.15, at least 40% unique normalized answers, no single answer repeated on more than 35% of prompts, no more than 8% repeated four-word n-grams inside answers, and no four-word phrase repeated more than four times within any single answer. It also verifies the held-out test/tokenizer/data-manifest fingerprints against the SFT run. This catches both identical-answer collapse across prompts and obvious phrase loops within a generated answer. The thresholds can be explicitly changed on the command line, but must not be weakened merely to make a run pass.
 
-A passing report is labelled `ready_for_review`, not human-level. The gate detects training stagnation, lineage mismatch, generation errors and constant/repetitive answer loops. It does not prove semantic understanding, factuality, reasoning, safety or general human-like conversation; open-ended English answers still need human review against independently verified references. A model that fails remains `not_ready` and must not be presented as a finished assistant.
+A passing report is labelled `ready_for_review`, not human-level. The gate detects training stagnation, lineage mismatch, generation errors, repeated answers across prompts and repeated four-word phrases inside individual answers. It does not prove semantic understanding, factuality, reasoning, safety or general human-like conversation; open-ended English answers still need human review against independently verified references. A model that fails remains `not_ready` and must not be presented as a finished assistant.
 
 ## Inference arithmetic contract
 
@@ -157,6 +157,10 @@ OASST1 still requires `lang == "en"`, `ready_for_export`, positive review, `dele
 
 Synthetic tests and benchmarks remain outside the production corpus. A cleaning pass never converts a synthetic sample into a human-authored one.
 
+
+## Training speed measurement
+
+The CPU notebook selects up to four PyTorch CPU threads and passes that setting to both pretraining and SFT. Training metrics record measured step duration and effective tokens/second (or supervised assistant tokens/second); these are measurements from the actual runtime, not promised performance figures. The thread count is part of the run contract, so resuming with a different thread count fails closed instead of silently changing the run configuration. Keep batch size low enough for the Colab RAM limit; increasing learning rate is not a safe shortcut to faster learning.
 
 ## Scaled QAT and balanced tokenizer update
 
