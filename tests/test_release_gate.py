@@ -120,7 +120,15 @@ def test_release_gate_rejects_training_set_reused_for_both_heldout_reports():
 def test_release_gate_rejects_insufficient_heldout_sample_count():
     task, conversation = _reports()
     task["examples"] = 4
-    task["output_diversity"] = _diversity(4)
+    task["output_diversity"] = {
+        "examples": 4,
+        "unique_normalized_answers": 3,
+        "unique_answer_fraction": 0.75,
+        "largest_identical_answer_count": 2,
+        "largest_identical_answer_fraction": 0.5,
+        "empty_answer_count": 0,
+        "all_outputs_identical": False,
+    }
     report = assess_release_readiness(_metrics(), task, conversation)
     check = next(item for item in report["checks"] if item["name"] == "task_accuracy")
     assert check["passed"] is False
