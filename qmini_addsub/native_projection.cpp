@@ -98,11 +98,12 @@ QMINI_ADDSUB_EXPORT int qmini_addsub_projection_i8(
                 const int16x8_t triple = vaddq_s16(vaddq_s16(activation, activation), activation);
                 const int16x8_t negative_triple = vnegq_s16(triple);
                 const uint8x8_t codes = vld1_u8(feature_codes);
+                const uint16x8_t codes_wide = vmovl_u8(codes);
                 int16x8_t contribution = vdupq_n_s16(0);
-                contribution = vbslq_s16(vmovl_u8(vceq_u8(codes, vdup_n_u8(0))), negative_triple, contribution);
-                contribution = vbslq_s16(vmovl_u8(vceq_u8(codes, vdup_n_u8(1))), negative, contribution);
-                contribution = vbslq_s16(vmovl_u8(vceq_u8(codes, vdup_n_u8(3))), activation, contribution);
-                contribution = vbslq_s16(vmovl_u8(vceq_u8(codes, vdup_n_u8(4))), triple, contribution);
+                contribution = vbslq_s16(vceqq_u16(codes_wide, vdupq_n_u16(0)), negative_triple, contribution);
+                contribution = vbslq_s16(vceqq_u16(codes_wide, vdupq_n_u16(1)), negative, contribution);
+                contribution = vbslq_s16(vceqq_u16(codes_wide, vdupq_n_u16(3)), activation, contribution);
+                contribution = vbslq_s16(vceqq_u16(codes_wide, vdupq_n_u16(4)), triple, contribution);
                 sum_low = vaddw_s16(sum_low, vget_low_s16(contribution));
                 sum_high = vaddw_s16(sum_high, vget_high_s16(contribution));
                 feature_codes += out_features;
