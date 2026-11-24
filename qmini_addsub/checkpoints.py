@@ -12,7 +12,7 @@ def checkpoint_step(path: str | Path, prefix: str) -> int:
     if prefix not in _SUPPORTED_PREFIXES:
         raise ValueError(f"Unsupported checkpoint prefix: {prefix!r}.")
     name = Path(path).name
-    match = re.fullmatch(rf"{re.escape(prefix)}-step-(\\d+)\\.pt", name)
+    match = re.fullmatch(rf"{re.escape(prefix)}-step-(\d+)\.pt", name)
     if match is None:
         raise ValueError(
             f"Malformed {prefix} checkpoint filename {name!r}; "
