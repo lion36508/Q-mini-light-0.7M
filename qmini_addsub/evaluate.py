@@ -47,6 +47,30 @@ def lexical_scores(reference: str, prediction: str) -> dict[str, float]:
     }
 
 
+def _answer_diversity(predictions: list[str]) -> dict[str, Any]:
+    """Measure exact normalized repeats to expose constant-answer collapse."""
+    if not predictions:
+        raise ValueError("Output-diversity analysis requires at least one prediction.")
+    normalized = [" ".join(_words(value)) for value in predictions]
+    counts = Counter(normalized)
+    unique_count = len(counts)
+    largest_count = max(counts.values())
+    total = len(normalized)
+    return {
+        "examples": total,
+        "unique_normalized_answers": unique_count,
+        "unique_answer_fraction": unique_count / total,
+        "largest_identical_answer_count": largest_count,
+        "largest_identical_answer_fraction": largest_count / total,
+        "empty_answer_count": sum(not value for value in normalized),
+        "all_outputs_identical": unique_count == 1,
+        "metric_note": (
+            "Exact equality after Unicode word normalization. Paraphrased or "
+            "semantically repetitive answers require human review."
+        ),
+    }
+
+
 @torch.inference_mode()
 def evaluate_heldout_conversations(
     checkpoint_path: str | Path,
@@ -150,6 +174,9 @@ def evaluate_heldout_conversations(
         "mean_token_f1": sum(item["token_f1"] for item in scores) / len(scores),
         "mean_reference_tokens": sum(item["reference_tokens"] for item in scores) / len(scores),
         "mean_prediction_tokens": sum(item["prediction_tokens"] for item in scores) / len(scores),
+        "output_diversity": _answer_diversity(
+            [row["prediction"] for row in rows]
+        ),
         "metric_limit": (
             "Exact match and bag-of-words token overlap are lexical indicators only; "
             "they do not evaluate factuality, reasoning or semantic correctness."
