@@ -29,7 +29,7 @@ Potential future experiment: cluster article chunks by topic and difficulty, the
 
 ## 4. Stage B — self-paced assistant SFT
 
-Implemented algorithm: `qmini-self-paced-curriculum-v1`.
+Implemented algorithm: `qmini-self-paced-curriculum-v2` (fixed-point replay quota).
 
 ### Per-example difficulty measurement
 
