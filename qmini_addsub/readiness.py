@@ -57,6 +57,8 @@ def assess_addsub_readiness(
     min_mean_token_f1: float = 0.15,
     min_unique_answer_fraction: float = 0.40,
     max_largest_identical_answer_fraction: float = 0.35,
+    max_repeated_4gram_fraction: float = 0.08,
+    max_repeated_4gram_count: int = 4,
 ) -> dict[str, Any]:
     """Fail closed on weak SFT learning or collapsed held-out Add/Sub answers."""
     if not metrics:
@@ -66,12 +68,15 @@ def assess_addsub_readiness(
         ("min_mean_token_f1", min_mean_token_f1),
         ("min_unique_answer_fraction", min_unique_answer_fraction),
         ("max_largest_identical_answer_fraction", max_largest_identical_answer_fraction),
+        ("max_repeated_4gram_fraction", max_repeated_4gram_fraction),
     ):
         number = _finite(value, name)
         if not 0.0 <= number <= 1.0:
             raise ValueError(f"{name} must be in [0, 1].")
     if isinstance(min_test_records, bool) or not isinstance(min_test_records, int) or min_test_records < 1:
         raise ValueError("min_test_records must be a positive integer.")
+    if isinstance(max_repeated_4gram_count, bool) or not isinstance(max_repeated_4gram_count, int) or max_repeated_4gram_count < 1:
+        raise ValueError("max_repeated_4gram_count must be a positive integer.")
 
     previous_step = 0
     for index, record in enumerate(metrics, 1):
@@ -185,6 +190,10 @@ def assess_addsub_readiness(
     largest = diversity.get("largest_identical_answer_count")
     empty = diversity.get("empty_answer_count")
     all_identical = diversity.get("all_outputs_identical")
+    repeated_4gram_fraction = _finite(
+        diversity.get("repeated_4gram_fraction"), "repeated_4gram_fraction"
+    )
+    max_repeated_4gram_count_observed = diversity.get("max_repeated_4gram_count")
     unique_fraction = _finite(diversity.get("unique_answer_fraction"), "unique_answer_fraction")
     largest_fraction = _finite(
         diversity.get("largest_identical_answer_fraction"),
@@ -204,6 +213,10 @@ def assess_addsub_readiness(
         or not isinstance(empty, int)
         or not 0 <= empty <= examples
         or not isinstance(all_identical, bool)
+        or isinstance(max_repeated_4gram_count_observed, bool)
+        or not isinstance(max_repeated_4gram_count_observed, int)
+        or max_repeated_4gram_count_observed < 0
+        or not 0.0 <= repeated_4gram_fraction <= 1.0
         or not 0.0 <= unique_fraction <= 1.0
         or not 0.0 <= largest_fraction <= 1.0
         or not math.isclose(unique_fraction, unique / examples, rel_tol=0.0, abs_tol=1e-9)
@@ -219,6 +232,8 @@ def assess_addsub_readiness(
             and empty == 0
             and unique_fraction >= min_unique_answer_fraction
             and largest_fraction <= max_largest_identical_answer_fraction
+            and repeated_4gram_fraction <= max_repeated_4gram_fraction
+            and max_repeated_4gram_count_observed <= max_repeated_4gram_count
         ),
         "observed": {
             "test_records": count,
@@ -228,6 +243,8 @@ def assess_addsub_readiness(
             "largest_identical_answer_fraction": largest_fraction,
             "empty_answer_count": empty,
             "all_outputs_identical": all_identical,
+            "repeated_4gram_fraction": repeated_4gram_fraction,
+            "max_repeated_4gram_count": max_repeated_4gram_count_observed,
         },
         "required": {
             "minimum_test_records": min_test_records,
@@ -235,6 +252,8 @@ def assess_addsub_readiness(
             "maximum_largest_identical_answer_fraction": max_largest_identical_answer_fraction,
             "empty_answer_count": 0,
             "all_outputs_identical": False,
+            "maximum_repeated_4gram_fraction": max_repeated_4gram_fraction,
+            "maximum_repeated_4gram_count": max_repeated_4gram_count,
         },
         "detail": "Constant or heavily repeated answers block readiness even if training loss fell.",
     })
@@ -283,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-mean-token-f1", type=float, default=0.15)
     parser.add_argument("--min-unique-answer-fraction", type=float, default=0.40)
     parser.add_argument("--max-largest-identical-answer-fraction", type=float, default=0.35)
+    parser.add_argument("--max-repeated-4gram-fraction", type=float, default=0.08)
+    parser.add_argument("--max-repeated-4gram-count", type=int, default=4)
     args = parser.parse_args(argv)
     report = assess_addsub_readiness(
         _load_metrics(args.metrics),
@@ -292,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         min_mean_token_f1=args.min_mean_token_f1,
         min_unique_answer_fraction=args.min_unique_answer_fraction,
         max_largest_identical_answer_fraction=args.max_largest_identical_answer_fraction,
+        max_repeated_4gram_fraction=args.max_repeated_4gram_fraction,
+        max_repeated_4gram_count=args.max_repeated_4gram_count,
     )
     _save_json(report, args.output)
     print(json.dumps(report, ensure_ascii=False, indent=2))
