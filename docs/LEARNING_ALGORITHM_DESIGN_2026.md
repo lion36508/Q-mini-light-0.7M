@@ -2,7 +2,7 @@
 
 **Scope:** this document defines the active Google Colab training system. Phone/Android/ARM deployment is explicitly excluded and preserved separately under `experiments/phone/realme_c17/`.
 
-**Status:** the self-paced assistant-SFT sampler is implemented in `qmini_addsub/curriculum.py` and wired into SFT checkpoint format v7. The complete learning recipe is experimental; it has not yet been proven to improve a real-data run.
+**Status:** the self-paced assistant-SFT sampler is implemented in `qmini_addsub/curriculum.py` and wired into SFT checkpoint format v8. The complete learning recipe is experimental; it has not yet been proven to improve a real-data run.
 
 ## 1. Learning is more than parameter count
 
