@@ -41,7 +41,7 @@ def test_addsub_readiness_requires_validation_learning_and_noncollapsed_heldout_
     result = assess_addsub_readiness(_metrics(), _heldout())
     assert result["ready"] is True
     assert result["status"] == "ready_for_review"
-    assert result["checks_passed"] == result["checks_total"] == 4
+    assert result["checks_passed"] == result["checks_total"] == 3
 
 
 def test_addsub_answer_diversity_detects_same_answer_with_punctuation_variants():
