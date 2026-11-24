@@ -57,7 +57,7 @@ Do not continue new feature development on the legacy Q2-v2 route. Do not mix mo
 
 The initial target is the user's Realme C73 5G (reported model identifier RMX3945). The published specification lists a MediaTek Dimensity 6300 and 4 GB physical RAM. Dynamic RAM expansion is not physical RAM and cannot be counted as guaranteed process memory.
 
-The current .qma archive is a weight container with float32 auxiliary tensors, not a deployed engine. The current integer prototype only covers additive projection and bounded residual addition. Integer convolution, SSM, gating, experts, normalization, activation LUTs, output projection, Android packaging and full ARM64 runtime are still incomplete.
+The current .qma archive is a weight container with float32 auxiliary tensors, not a deployed engine. The current integer prototype covers additive projection and bounded residual addition, including a new native C++ scalar/ARM-NEON projection kernel. It is not a complete phone inference graph. Integer convolution, SSM, gating, experts, normalization, activation LUTs, output projection, Android packaging and full ARM64 runtime are still incomplete.
 
 See docs/PHONE_RUNTIME_READINESS.md for the device profile, proposed measurement protocol and replacement gates. The provisional targets in that file are goals, not measured speed or memory results.
 
