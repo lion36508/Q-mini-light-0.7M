@@ -128,6 +128,16 @@ After SFT, run greedy generation only on the manifest-declared held-out test spl
 
 The evaluator verifies the test-file hash and tokenizer fingerprint, keeps prior turns as context, and writes every generated answer/reference pair plus exact-match and token-overlap metrics. These are lexical baselines only; they do not prove factuality, reasoning or semantic correctness. Never use the SFT training or validation split as the reported held-out result.
 
+## Fail-closed Add/Sub assistant readiness gate
+
+After held-out evaluation, run the readiness gate against the same SFT metrics and held-out report:
+
+    python -m qmini_addsub.readiness --metrics runs/qmini_addsub_v1_sft/sft_metrics.jsonl --heldout-summary runs/qmini_addsub_v1_eval/heldout_summary.json --output runs/qmini_addsub_v1_eval/readiness.json
+
+By default this requires at least two validation-response-loss measurements in the same SFT data/tokenizer run, at least 1% relative validation-loss improvement, at least 50 independent held-out conversations, zero generation failures, mean lexical token F1 of at least 0.15, at least 40% unique normalized answers and no single answer repeated on more than 35% of prompts. It also verifies the held-out test/tokenizer/data-manifest fingerprints against the SFT run. The thresholds can be explicitly changed on the command line, but must not be weakened merely to make a run pass.
+
+A passing report is labelled `ready_for_review`, not human-level. The gate detects training stagnation, lineage mismatch, generation errors and constant/repetitive answer loops. It does not prove semantic understanding, factuality, reasoning, safety or general human-like conversation; open-ended English answers still need human review against independently verified references. A model that fails remains `not_ready` and must not be presented as a finished assistant.
+
 ## Inference arithmetic contract
 
 The required weight codebook is {-1.5, -0.5, 0, +0.5, +1.5}. Five symbols require at least three bits; they cannot be encoded in fixed two-bit storage.
