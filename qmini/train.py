@@ -825,7 +825,7 @@ def train_model(
     allow_batch_size_change: bool = False,
     allow_dataset_change: bool = False,
 ) -> Path:
-    """Pretrain from scratch/step-zero Q2 brain, SFT, deliberate batch tuning, or an audited dataset switch on resume."""
+    """Train or resume Q-Mini; dataset switches retain weights but reset AdamW and the LR phase."""
     config.validate()
     positive = {
         "steps": steps,
@@ -1151,7 +1151,7 @@ def train_model(
         if torch.cuda.is_available() and saved_cuda_rng is not None:
             if len(saved_cuda_rng) == torch.cuda.device_count():
                 torch.cuda.set_rng_state_all([item.cpu() for item in saved_cuda_rng])
-        if "scaler" in state:
+        if "scaler" in state and not dataset_switched:
             scaler.load_state_dict(state["scaler"])
 
         if start_step > steps:
