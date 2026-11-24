@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +108,7 @@ def train_from_scratch(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
+    threads: int | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
     config = config or AddSubConfig()
@@ -131,6 +133,10 @@ def train_from_scratch(
         raise ValueError("learning_rate must be finite and positive.")
     if sequence_length > config.max_context:
         raise ValueError("sequence_length exceeds the configured context.")
+    if threads is not None:
+        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
+            raise ValueError("threads must be a positive integer when specified.")
+        torch.set_num_threads(threads)
     device = torch.device(device_name)
     train_path, valid_path = Path(train_bin), Path(valid_bin)
     tokenizer_path, output = Path(tokenizer_path), Path(output_dir)
@@ -233,6 +239,7 @@ def train_from_scratch(
         "save_every": save_every,
         "validate_every": validate_every,
         "seed": seed,
+        "torch_num_threads": torch.get_num_threads(),
     }
     model = AddSubLanguageModel(config, seed=seed).to(device)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
@@ -372,6 +379,7 @@ def train_from_scratch(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
+        step_started = time.perf_counter()
         current_lr = cosine_warmup_lr(step, steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
@@ -398,6 +406,7 @@ def train_from_scratch(
         optimizer.step()
         assert_finite_training_state(model, optimizer, step)
         last_loss = float(token_loss.detach())
+        step_seconds = max(time.perf_counter() - step_started, 1e-9)
 
         if step % validate_every == 0 or step == steps:
             valid_loss = evaluate(valid_tokens)
@@ -405,6 +414,8 @@ def train_from_scratch(
                 "step": step,
                 "learning_rate": current_lr,
                 "train_token_loss": last_loss,
+                "step_seconds": step_seconds,
+                "tokens_per_second": (batch_size * sequence_length) / step_seconds,
                 "valid_token_loss": valid_loss,
                 "router_balance_loss": float(result["aux_loss"].detach()),
                 "router_z_loss": float(result["router_z_loss"].detach()),
@@ -468,6 +479,7 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--seed", type=int, default=20261119)
+    parser.add_argument("--threads", type=int, default=None, help="CPU thread count; recorded in the exact-resume run contract.")
     args = parser.parse_args()
     config = None
     if args.config is not None:
@@ -490,6 +502,7 @@ def main() -> None:
         seed=args.seed,
         device_name=args.device,
         resume=args.resume,
+        threads=args.threads,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
