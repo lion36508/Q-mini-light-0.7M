@@ -72,16 +72,34 @@ class SelfPacedCurriculumSampler:
             raise TypeError("rng must be an instance of random.Random for exact resume.")
         self.step += 1
         seen = [index for index, value in enumerate(self.ema_loss) if value is not None]
-        if self.step <= self.warmup_steps or len(seen) < 2 or self.uniform_fraction >= 1.0:
+        if self.uniform_fraction >= 1.0:
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            self.last_focus_quantile = self.start_quantile
+            return selected, {"mode": "uniform_control", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
+        if self.step <= self.warmup_steps:
             selected = rng.sample(range(self.dataset_size), k=batch_size)
             self.last_focus_quantile = self.start_quantile
             return selected, {"mode": "uniform_warmup", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
+        if len(seen) < 2:
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            self.last_focus_quantile = self.start_quantile
+            return selected, {"mode": "uniform_fallback", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
 
-        ordered = sorted(seen, key=lambda index: (self.ema_loss[index], index))
+        ordered = sorted(seen, key=lambda index: self.ema_loss[index])
         ranks = [0.5] * self.dataset_size
         denominator = max(1, len(ordered) - 1)
-        for rank, index in enumerate(ordered):
-            ranks[index] = rank / denominator
+        cursor = 0
+        # Give ties their average rank so record index never becomes a fake
+        # difficulty signal when multiple examples have exactly equal EMA loss.
+        while cursor < len(ordered):
+            end = cursor + 1
+            current_loss = self.ema_loss[ordered[cursor]]
+            while end < len(ordered) and self.ema_loss[ordered[end]] == current_loss:
+                end += 1
+            average_rank = ((cursor + end - 1) / 2.0) / denominator
+            for position in range(cursor, end):
+                ranks[ordered[position]] = average_rank
+            cursor = end
         target = self._focus_quantile()
         self.last_focus_quantile = target
         scores = [
@@ -161,4 +179,12 @@ class SelfPacedCurriculumSampler:
         self.step = step
         self.ema_loss = [None if value is None else float(value) for value in ema_loss]
         self.update_count = list(update_count)
-        self.last_focus_quantile = float(state.get("last_focus_quantile", self.start_quantile))
+        last_focus_quantile = state.get("last_focus_quantile", self.start_quantile)
+        if (
+            isinstance(last_focus_quantile, bool)
+            or not isinstance(last_focus_quantile, (int, float))
+            or not math.isfinite(last_focus_quantile)
+            or not 0.0 < last_focus_quantile < 1.0
+        ):
+            raise ValueError("Curriculum checkpoint contains an invalid focus quantile.")
+        self.last_focus_quantile = float(last_focus_quantile)
