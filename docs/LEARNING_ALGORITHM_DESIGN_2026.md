@@ -49,7 +49,7 @@ A fractional quota is carried across optimizer steps so the requested 35% unifor
 
 ### Exact resume
 
-Checkpoint SFT v7 stores:
+Checkpoint SFT v8 stores:
 - per-record EMA response losses and update counts;
 - current curriculum step, schedule and hyperparameters;
 - Python/Torch RNG and optimizer states;
