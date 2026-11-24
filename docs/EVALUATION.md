@@ -36,7 +36,7 @@ python -m qmini.cli eval-tasks \
   --max-new-tokens 96 --output /path/to/reports/task-eval.json
 ~~~
 
-The report contains exact-match and lexical token F1 overall and by category, plus every prompt/reference/prediction. These are transparent string-comparison diagnostics. They do not establish semantic correctness, factuality, instruction adherence or code correctness. Mathematics requires verified numeric scoring; code generation requires execution in a constrained test sandbox; reasoning requires independently checked multi-step tasks.
+The report contains exact-match and lexical token F1 overall and by category, plus every prompt/reference/prediction. It also reports normalized output diversity: unique-answer fraction, the largest identical-answer fraction, empty answers and an explicit all-outputs-identical flag. Treat a very high largest-identical-answer fraction as a collapse warning that blocks a "trained/ready" claim until investigated. This is an exact-repeat diagnostic, not a semantic-diversity score; paraphrased repetitions still need human review. None of these string metrics alone establishes semantic correctness, factuality, instruction adherence or code correctness. Mathematics requires verified numeric scoring; code generation requires execution in a constrained test sandbox; reasoning requires independently checked multi-step tasks.
 
 ## Required capability reporting
 
@@ -130,7 +130,7 @@ python -m qmini.cli eval-conversations \\
   --output reports/conversation-evaluation.json
 \`\`\`
 
-Generated assistant replies are fed back into the prompt for the next turn. The evaluator preserves system/role/end markers and removes only complete oldest turns when the prompt reaches \`max_context\`. If the current user turn cannot fit by itself, evaluation fails explicitly rather than silently truncating it. The report contains per-turn predictions, task-specific pass rate, Wilson intervals, per-category/per-language results and the history-token count before each turn.
+Generated assistant replies are fed back into the prompt for the next turn. The evaluator preserves system/role/end markers and removes only complete oldest turns when the prompt reaches \`max_context\`. If the current user turn cannot fit by itself, evaluation fails explicitly rather than silently truncating it. The report contains per-turn predictions, task-specific pass rate, Wilson intervals, per-category/per-language results, the history-token count before each turn, and normalized output-diversity/collapse diagnostics across all generated turns.
 
 The benchmark set must remain held out from tokenizer fitting, pretraining and SFT. Use numeric/JSON scorers for objectively structured answers where possible; lexical exact match and token F1 remain diagnostics. Human review and externally checked answers are still needed for open-ended factuality, science, reasoning and code behavior.
 
