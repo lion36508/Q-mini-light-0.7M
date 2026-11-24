@@ -70,7 +70,7 @@ For the 5B design, compare the sparse profile against \`configs/qmini_dense_853m
 - Q2 packed versus dense/fake-quant output differences, including capability regression by task.
 - Prefill throughput, autoregressive decode latency/tokens/sec, peak process RSS, cold start and thermal behavior.
 
-The planner's 1.409 GB CPU working-set estimate for batch 1 is not a measured process RSS and does not establish a 4 GB-phone target. A release claim requires measurements on the actual device with the trained packed archive and tokenizer loaded.
+The planner's 1.409 GB CPU working-set estimate for batch 1 is not a measured process RSS and is not used as a phone deployment target. Phone deployment is outside the active Colab-only scope; this estimate must not be presented as a device benchmark.
 
 
 ## Metric aggregation
