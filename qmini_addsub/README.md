@@ -73,15 +73,17 @@ Then build the tokenizer and streams. SFT data is optional at this stage; the to
     python scripts/train_qmini_addsub_tokenizer.py
     python scripts/encode_qmini_addsub_streams.py
 
-The existing pinned WikiText/OASST1/Dolly preparation command remains optional. No dataset is downloaded by importing the model package or by running CI. The Add/Sub Colab notebook has data import, tokenizer build, pretraining and SFT switches OFF by default.
+The pinned FineWiki/OASST1/Dolly preparation command remains optional. No dataset is downloaded by importing the model package or by running CI. The Add/Sub Colab notebook has data import, tokenizer build, pretraining and SFT switches OFF by default.
 
 ## English training-data mix
 
-The default preparation script uses:
+The default preparation script uses three complementary English sources:
 
-1. **WikiText-103 raw** for next-token language pretraining. The source archive is SHA-256 pinned; source metadata reports CC-BY-SA/GFDL terms (upstream raw metadata does not pin one single version).
+1. **FineWiki English Wikipedia sample** for factual next-token pretraining. It is a pinned, SHA-256-verified 1% random sample (about 210 MB compressed) from an August 2025 Wikimedia Enterprise English Wikipedia snapshot. The source was cleaned by FineWiki to remove template/markup noise and retains readable article structure. Every Wikipedia page ID is deterministically assigned to exactly one of train/validation/test before its text is chunked, so chunks from one article cannot leak across splits. License: CC-BY-SA-4.0; preserve attribution to Wikipedia contributors and FineWiki and review share-alike obligations.
 2. **OpenAssistant OASST1** for English human-annotated multi-turn conversation data. Only ready-for-export, positively reviewed, non-deleted, explicitly non-synthetic messages and rank-0 assistant answers are retained. The pinned source revision/file hash is verified. License: Apache-2.0.
 3. **Databricks Dolly 15k** for human-authored instruction/response examples. Dataset revision is pinned and source file SHA-256 is recorded at preparation time. License: CC-BY-SA-3.0.
+
+The complete FineWiki English dataset is much larger than this sample and is deliberately not downloaded by default; the 1% sample is the practical CPU/Drive starting point, not a claim that it contains all Wikipedia knowledge. Wikipedia supplies factual breadth, while OASST1 and Dolly provide assistant-style dialogue and instructions. No single corpus is "the world's best" across all tasks.
 
 DailyDialog is deliberately excluded from this default mix because its dataset card lists CC-BY-NC-SA-4.0 non-commercial/share-alike conditions. TinyStories, Alpaca/UltraChat, teacher-generated outputs and other model-generated corpora are excluded from production training.
 
@@ -89,9 +91,9 @@ Review each source's terms before use or redistribution. Attribution/share-alike
 
 ## Reproducible build steps
 
-Install the data-preparation extras without replacing the environment's existing PyTorch:
+Install data preparation tools without replacing the environment's existing PyTorch:
 
-    python -m pip install -e ".[addsub-data]"
+    python -m pip install "huggingface_hub>=0.28" "pyarrow>=15.0" "zstandard>=0.22"
 
 Prepare pinned data:
 
@@ -160,9 +162,9 @@ Synthetic tests and benchmarks remain outside the production corpus. A cleaning 
 
 Dense Kaiming-normal master weights now use per-tensor scaled five-symbol STE (scale = 1.4 × mean absolute weight). Zero is exact and STE gradients remain live through zero master weights. Matrix weight decay is 0.01. The 1,024-token ByteLevel tokenizer samples up to 64 MiB from pretraining training text and includes all SFT training messages so conversational terms influence BPE merges. Validation and test are never used for tokenizer training.
 
-WikiText `@-@` and spaces before punctuation are normalized. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.
+FineWiki article text is paragraph-chunked without splitting page identities across data splits. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.
 
 
 ### Pretraining corpus selection
 
-The default pinned pretraining source is Simple English Wikipedia, dump 2026-03-01, from `juno-labs/simple_wikipedia` at revision `e95aee4ada4de4ec556d93505e577b29f9ff9a08`. The 439,202,943-byte Parquet file is SHA-256 checked before use. Only the human-authored `content_no_link` article text and titles are used; the dataset's model-generated `importance` labels are ignored. Article page IDs are split deterministically 90/5/5 for train/validation/test. The dataset is CC-BY-SA-3.0 and requires attribution/share-alike review.
+The default pinned pretraining source is `agentlans/HuggingFaceFW-finewiki-sample`, file `en.jsonl.zst`, source revision `e0bbfbb`. Its compressed file SHA-256 is checked before use. The file is a 1% random sample of cleaned English FineWiki articles from the August 2025 Wikimedia Enterprise snapshot. Rows must declare `in_language=en` and `wikiname=enwiki`; articles need a valid page ID, title and usable text. Page IDs are deduplicated and assigned deterministically 90/5/5 to train/validation/test before paragraph-aware chunking, preserving whole-article split isolation. The source license is CC-BY-SA-4.0. The manifest records the pinned file hash, source revision, license, sample method, attribution, split hashes, article/chunk counts and rejected rows. The complete FineWiki English dataset is approximately 35.1 GB and is not downloaded by default.
