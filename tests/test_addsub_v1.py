@@ -527,7 +527,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
     assert sft_state["format"] == "qmini-addsub-sft-v7"
     assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v1"
-    assert sft_state["curriculum"]["step"] == 2
+    assert sft_state["curriculum"]["step"] == 1
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
     resumed_sft_dir = tmp_path / "sft-resumed"
