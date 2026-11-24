@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from qmini_addsub.config import AddSubConfig
+from qmini_addsub.curriculum import SelfPacedCurriculumSampler
 from qmini_addsub.data import (
     accept_oasst1_message,
     escape_special_token_literals,
@@ -1894,3 +1895,82 @@ def test_addsub_generation_stops_on_unknown_token_instead_of_emitting_it():
         greedy=True,
     )
     assert answer == "I'm not sure how to answer that yet."
+
+def test_self_paced_curriculum_warmup_focus_and_exact_resume():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=16,
+        total_steps=20,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(91)
+    first, first_info = sampler.sample(4, rng)
+    assert first_info["mode"] == "uniform_warmup"
+    assert len(set(first)) == 4
+    sampler.update(first, [0.2, 0.7, 1.2, 2.0])
+
+    second, second_info = sampler.sample(4, rng)
+    assert second_info["mode"] == "self_paced"
+    assert 0.55 <= second_info["focus_quantile"] <= 0.80
+    assert second_info["uniform_fraction"] == 0.35
+    assert len(set(second)) == 4
+    sampler.update(second, [0.3, 0.9, 1.5, 2.4])
+
+    state = sampler.state_dict()
+    rng_state = rng.getstate()
+    restored = SelfPacedCurriculumSampler(
+        dataset_size=16,
+        total_steps=20,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    restored.load_state_dict(state)
+    restored_rng = random.Random()
+    restored_rng.setstate(rng_state)
+    expected, _ = sampler.sample(5, rng)
+    actual, _ = restored.sample(5, restored_rng)
+    assert actual == expected
+    assert restored.state_dict() == sampler.state_dict()
+
+
+def test_self_paced_curriculum_preserves_uniform_replay_and_rejects_bad_updates():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=8,
+        total_steps=10,
+        warmup_steps=1,
+        uniform_fraction=0.35,
+    )
+    rng = random.Random(7)
+    indices, _ = sampler.sample(3, rng)
+    with pytest.raises(ValueError, match="duplicate"):
+        sampler.update([indices[0], indices[0]], [0.1, 0.2])
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        sampler.update([indices[0]], [float("inf")])
+    sampler.update(indices, [0.1, 0.2, 0.3])
+    selected, info = sampler.sample(4, rng)
+    assert len(set(selected)) == 4
+    assert info["uniform_fraction"] == 0.35
+    assert all(sampler.update_count[index] >= 0 for index in range(8))
+
+
+def test_self_paced_curriculum_resume_rejects_different_schedule():
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=10,
+        total_steps=100,
+        warmup_steps=5,
+        uniform_fraction=0.35,
+    )
+    state = sampler.state_dict()
+    incompatible = SelfPacedCurriculumSampler(
+        dataset_size=10,
+        total_steps=100,
+        warmup_steps=5,
+        uniform_fraction=0.50,
+    )
+    with pytest.raises(ValueError, match="uniform_fraction"):
+        incompatible.load_state_dict(state)
+
