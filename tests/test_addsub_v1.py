@@ -1962,6 +1962,8 @@ def test_self_paced_curriculum_preserves_uniform_replay_and_rejects_bad_updates(
 
 
 def test_self_paced_curriculum_resume_rejects_different_schedule():
+    with pytest.raises(ValueError, match="0.35"):
+        SelfPacedCurriculumSampler(dataset_size=10, total_steps=100, warmup_steps=5, uniform_fraction=0.20)
     sampler = SelfPacedCurriculumSampler(
         dataset_size=10,
         total_steps=100,
