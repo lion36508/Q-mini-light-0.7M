@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
+import re
 import shutil
 import urllib.request
-import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,12 +23,12 @@ from qmini_addsub.data import (
 )
 
 
-WIKITEXT_URL = (
-    "https://s3.amazonaws.com/research.metamind.io/wikitext/"
-    "wikitext-103-raw-v1.zip"
-)
-WIKITEXT_SHA256 = "91c00ae287f0d699e18605c84afc9e45c192bc6b7797ff8837e5474655a33794"
-WIKITEXT_SIZE = 191_984_949
+FINEWIKI_REPOSITORY = "agentlans/HuggingFaceFW-finewiki-sample"
+FINEWIKI_REVISION = "e0bbfbb"
+FINEWIKI_FILE = "en.jsonl.zst"
+FINEWIKI_SHA256 = "57fc6edbc8472c5424b421a222860a1853274601f3b6e7ac2e5542af5956d04e"
+FINEWIKI_LICENSE = "CC-BY-SA-4.0"
+FINEWIKI_SNAPSHOT = "2025-08"
 OASST_REPOSITORY = "OpenAssistant/oasst1"
 OASST_REVISION = "fdf72ae0827c1cda404ff25b6603abec9e3399b"
 OASST_FILE = "data/train-00000-of-00001-b42a775f407cee45.parquet"
@@ -36,12 +37,6 @@ OASST_SIZE = 39_516_251
 DOLLY_REPOSITORY = "databricks/databricks-dolly-15k"
 DOLLY_REVISION = "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a"
 DOLLY_FILE = "databricks-dolly-15k.jsonl"
-
-SIMPLE_WIKI_REPOSITORY = "juno-labs/simple_wikipedia"
-SIMPLE_WIKI_REVISION = "e95aee4ada4de4ec556d93505e577b29f9ff9a08"
-SIMPLE_WIKI_FILE = "data/train-00000-of-00001.parquet"
-SIMPLE_WIKI_SHA256 = "112b847312d4315c1c4cc75c02d2d153f17bce7ee4a3a1d57dc09385da72a02a"
-SIMPLE_WIKI_SIZE = 439_202_943
 
 
 def download_verified(url: str, destination: Path, sha256: str, size: int) -> Path:
@@ -66,53 +61,136 @@ def download_verified(url: str, destination: Path, sha256: str, size: int) -> Pa
     return destination
 
 
-def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
-    """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
-    parquet_path = Path(hf_hub_download(
-        repo_id=SIMPLE_WIKI_REPOSITORY,
-        filename=SIMPLE_WIKI_FILE,
+def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list[str]:
+    """Split one page into bounded, paragraph-aware chunks without losing long sections."""
+    if max_chars < 512:
+        raise ValueError("max_chars must be at least 512.")
+    paragraphs = [part.strip() for part in re.split(r"\\n\\s*\\n", body) if part.strip()]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_size = 0
+
+    def flush() -> None:
+        nonlocal current, current_size
+        if current:
+            chunks.append(f"# {title}\\n\\n" + "\\n\\n".join(current))
+            current = []
+            current_size = 0
+
+    for original in paragraphs:
+        paragraph = original
+        while len(paragraph) > max_chars:
+            cut = paragraph.rfind(" ", 0, max_chars)
+            if cut < max_chars // 2:
+                cut = max_chars
+            piece, paragraph = paragraph[:cut].strip(), paragraph[cut:].strip()
+            if piece:
+                if current:
+                    flush()
+                chunks.append(f"# {title} (continued)\\n\\n{piece}")
+        if not paragraph:
+            continue
+        extra = len(paragraph) + (2 if current else 0)
+        if current and current_size + extra > max_chars:
+            flush()
+        current.append(paragraph)
+        current_size += len(paragraph) + (2 if len(current) > 1 else 0)
+    flush()
+    return chunks
+
+
+def prepare_finewiki_sample(cache: Path, output: Path) -> dict:
+    """Prepare a hash-pinned 1% random English FineWiki sample, split by whole page."""
+    compressed_path = Path(hf_hub_download(
+        repo_id=FINEWIKI_REPOSITORY,
+        filename=FINEWIKI_FILE,
         repo_type="dataset",
-        revision=SIMPLE_WIKI_REVISION,
+        revision=FINEWIKI_REVISION,
         cache_dir=str(cache / "huggingface"),
     ))
-    actual_size = parquet_path.stat().st_size
-    actual_sha = sha256_file(parquet_path)
-    if actual_size != SIMPLE_WIKI_SIZE or actual_sha != SIMPLE_WIKI_SHA256:
+    actual_sha = sha256_file(compressed_path)
+    if actual_sha != FINEWIKI_SHA256:
         raise ValueError(
-            "Simple English Wikipedia file failed pinned size/SHA-256 verification."
+            "FineWiki English sample failed pinned SHA-256 verification; "
+            "refusing to train on an unverified source."
         )
 
-    table = pq.read_table(
-        parquet_path,
-        columns=["page_id", "title", "content_no_link", "error"],
-    )
+    try:
+        import zstandard
+    except ImportError as exc:
+        raise RuntimeError(
+            "The Add/Sub data extra requires zstandard. Install with "
+            "python -m pip install 'zstandard>=0.22'."
+        ) from exc
+
     output.mkdir(parents=True, exist_ok=True)
     split_paths = {
         name: output / f"pretrain_{name}.txt"
         for name in ("train", "validation", "test")
     }
-    counts = {name: {"articles": 0, "bytes": 0} for name in split_paths}
-    dropped = {"source_error": 0, "empty_or_rejected": 0}
-    handles = {name: path.open("w", encoding="utf-8", newline="\n")
-               for name, path in split_paths.items()}
+    counts = {
+        name: {"articles": 0, "chunks": 0, "bytes": 0}
+        for name in split_paths
+    }
+    dropped: dict[str, int] = defaultdict(int)
+    seen_ids: set[str] = set()
+    handles = {
+        name: path.open("w", encoding="utf-8", newline="\\n")
+        for name, path in split_paths.items()
+    }
     try:
-        for row in table.to_pylist():
-            if row.get("error") is True:
-                dropped["source_error"] += 1
-                continue
-            title, title_reason = normalize_training_text(row.get("title"), min_chars=1)
-            content, content_reason = normalize_training_text(
-                row.get("content_no_link"), min_chars=20
-            )
-            if title_reason != "accepted" or content_reason != "accepted":
-                dropped["empty_or_rejected"] += 1
-                continue
-            article = f"{title}\n{content}\n"
-            split = stable_split(
-                str(row["page_id"]), seed="qmini-simplewiki-20260301"
-            )
-            handles[split].write(article)
-            counts[split]["articles"] += 1
+        with compressed_path.open("rb") as source:
+            reader = zstandard.ZstdDecompressor().stream_reader(source)
+            with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
+                for line_number, line in enumerate(text_stream, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"FineWiki JSONL line {line_number} is invalid."
+                        ) from exc
+                    if not isinstance(row, dict):
+                        dropped["not_object"] += 1
+                        continue
+                    if row.get("in_language") != "en" or row.get("wikiname") != "enwiki":
+                        dropped["not_english_enwiki"] += 1
+                        continue
+                    page_id = row.get("id") or row.get("page_id")
+                    title, title_reason = normalize_training_text(
+                        row.get("title"), min_chars=1, max_chars=512
+                    )
+                    body = row.get("text")
+                    if not isinstance(page_id, (str, int)) or not str(page_id).strip():
+                        dropped["missing_page_id"] += 1
+                        continue
+                    page_key = str(page_id).strip()
+                    if page_key in seen_ids:
+                        dropped["duplicate_page_id"] += 1
+                        continue
+                    seen_ids.add(page_key)
+                    if title_reason != "accepted" or not isinstance(body, str) or len(body.strip()) < 200:
+                        dropped["empty_or_invalid_article"] += 1
+                        continue
+                    split = stable_split(
+                        page_key, seed="qmini-finewiki-en-2025-08"
+                    )
+                    accepted_chunks = 0
+                    for chunk in _article_text_chunks(title, body):
+                        cleaned, reason = normalize_training_text(
+                            chunk, min_chars=200, max_chars=32768
+                        )
+                        if reason != "accepted":
+                            dropped[f"chunk_{reason}"] += 1
+                            continue
+                        handles[split].write(cleaned + "\\n\\n")
+                        counts[split]["chunks"] += 1
+                        accepted_chunks += 1
+                    if accepted_chunks:
+                        counts[split]["articles"] += 1
+                    else:
+                        dropped["article_without_usable_chunks"] += 1
     finally:
         for handle in handles.values():
             handle.close()
@@ -120,65 +198,25 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     for split, path in split_paths.items():
         counts[split]["bytes"] = path.stat().st_size
         counts[split]["sha256"] = sha256_file(path)
-        if counts[split]["articles"] == 0:
-            raise ValueError(f"SimpleWiki {split} split is empty.")
+        if counts[split]["articles"] == 0 or counts[split]["chunks"] == 0:
+            raise ValueError(f"FineWiki {split} split is empty.")
 
     return {
-        "repository": SIMPLE_WIKI_REPOSITORY,
-        "revision": SIMPLE_WIKI_REVISION,
-        "file": SIMPLE_WIKI_FILE,
-        "dump_date": "2026-03-01",
+        "repository": FINEWIKI_REPOSITORY,
+        "revision": FINEWIKI_REVISION,
+        "file": FINEWIKI_FILE,
         "sha256": actual_sha,
-        "size_bytes": actual_size,
-        "license": "CC-BY-SA-3.0",
-        "text_field": "content_no_link",
+        "license": FINEWIKI_LICENSE,
+        "upstream_dataset": "HuggingFaceFW/finewiki",
+        "upstream_snapshot": FINEWIKI_SNAPSHOT,
+        "upstream_snapshot_source": "Wikimedia Enterprise English Wikipedia main-namespace snapshot",
         "human_authored_source": True,
-        "generated_importance_labels_used": False,
-        "split_rule": "stable SHA-256 page_id split: 90% train, 5% validation, 5% test",
+        "synthetic_training_records_included": 0,
+        "sample_method": "uniform random 1% sample of the English FineWiki page corpus; pinned source file",
+        "split_rule": "stable SHA-256 page-ID split: 90% train, 5% validation, 5% test; all chunks of one page stay in one split",
         "splits": counts,
-        "dropped": dropped,
-    }
-
-
-def prepare_wikitext(cache: Path, output: Path) -> dict:
-    archive_path = download_verified(
-        WIKITEXT_URL,
-        cache / "wikitext-103-raw-v1.zip",
-        WIKITEXT_SHA256,
-        WIKITEXT_SIZE,
-    )
-    split_specs = {
-        "train": "wiki.train.raw",
-        "validation": "wiki.valid.raw",
-        "test": "wiki.test.raw",
-    }
-    output.mkdir(parents=True, exist_ok=True)
-    counts = {}
-    with zipfile.ZipFile(archive_path) as archive:
-        members = archive.namelist()
-        for split, wanted in split_specs.items():
-            matches = [name for name in members if Path(name).name == wanted]
-            if len(matches) != 1:
-                raise ValueError(
-                    f"Expected one {wanted} in WikiText archive; found {matches}"
-                )
-            text = archive.read(matches[0]).decode("utf-8")
-            target = output / f"pretrain_{split}.txt"
-            target.write_text(text, encoding="utf-8", newline="\n")
-            counts[split] = {
-                "lines": sum(1 for line in text.splitlines() if line.strip()),
-                "bytes": target.stat().st_size,
-                "sha256": sha256_file(target),
-            }
-    return {
-        "repository": "Salesforce/wikitext",
-        "subset": "wikitext-103-raw-v1",
-        "upstream_archive": WIKITEXT_URL,
-        "archive_sha256": WIKITEXT_SHA256,
-        "archive_size_bytes": WIKITEXT_SIZE,
-        "license": "CC-BY-SA / GFDL (upstream WikiText metadata; confirm applicable version and source terms)",
-        "citation": "Merity et al., WikiText: A long-term dependency language modeling dataset",
-        "splits": counts,
+        "dropped": dict(sorted(dropped.items())),
+        "attribution": "Wikipedia contributors; FineWiki dataset (Guilherme Penedo); processed sample by agentlans",
     }
 
 
@@ -411,26 +449,26 @@ def write_sft_splits(output: Path, conversations: list[dict]) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare pinned, non-synthetic English data for Q-Mini Add/Sub v1."
+        description="Prepare pinned, non-synthetic English data for Q-Mini Add/Sub v2."
     )
     parser.add_argument("--output", default="data/qmini_addsub_v1")
     parser.add_argument("--cache", default=".cache/qmini_addsub_v1")
     parser.add_argument(
         "--accept-source-licenses",
         action="store_true",
-        help="Confirm attribution/share-alike and source-specific license terms before download.",
+        help="Confirm FineWiki CC-BY-SA-4.0, OASST1 Apache-2.0 and Dolly CC-BY-SA-3.0 terms before download.",
     )
     args = parser.parse_args()
     if not args.accept_source_licenses:
         parser.error(
-            "Pass --accept-source-licenses only after reviewing SimpleWiki CC-BY-SA-3.0, "
+            "Pass --accept-source-licenses only after reviewing FineWiki CC-BY-SA-4.0, "
             "OASST1 Apache-2.0 and Dolly CC-BY-SA-3.0 terms."
         )
 
     output, cache = Path(args.output), Path(args.cache)
     output.mkdir(parents=True, exist_ok=True)
-    print("Preparing hash-pinned Simple English Wikipedia training data...")
-    simplewiki_info = prepare_simple_wikipedia(cache, output)
+    print("Preparing hash-pinned FineWiki English Wikipedia sample...")
+    finewiki_info = prepare_finewiki_sample(cache, output)
     print("Preparing strictly filtered human OASST1 conversations...")
     oasst_records, oasst_info = load_oasst_conversations(cache)
     print("Preparing human-authored Databricks Dolly instructions...")
@@ -450,7 +488,7 @@ def main() -> None:
             "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
             "maximum_text_characters": 32768
         },
-        "pretraining": simplewiki_info,
+        "pretraining": finewiki_info,
         "instruction_sources": {
             "oasst1": oasst_info,
             "dolly": dolly_info,
@@ -462,7 +500,7 @@ def main() -> None:
         "instruction_splits": sft_splits,
         "excluded_sources": {
             "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
-            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; Simple English Wikipedia is the human-authored pretraining source.",
+            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; FineWiki English Wikipedia is the human-authored pretraining source.",
             "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
         },
         "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
@@ -474,7 +512,7 @@ def main() -> None:
     )
     print(json.dumps({
         "manifest": str(manifest_path),
-        "simple_wikipedia": simplewiki_info["splits"],
+        "finewiki_english": finewiki_info["splits"],
         "oasst1_conversations": len(oasst_records),
         "dolly_conversations": len(dolly_records),
         "sft_splits": sft_splits,
