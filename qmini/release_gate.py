@@ -118,6 +118,7 @@ def assess_release_readiness(
         record for record in metrics
         if record.get("schedule_start_step", 0) == phase_start
         and "eval_loss" in record
+        and isinstance(record.get("validation_sha256"), str)
     ]
     eval_losses = [
         _number(record["eval_loss"], "validation eval_loss")
@@ -126,8 +127,12 @@ def assess_release_readiness(
     validation_hashes = {
         record.get("validation_sha256")
         for record in phase_metrics
-        if record.get("validation_sha256") is not None
     }
+    if any(
+        len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+        for value in validation_hashes
+    ):
+        raise ValueError("Validation dataset fingerprint must be a lowercase SHA-256.")
     if len(validation_hashes) > 1:
         raise ValueError("Validation dataset fingerprint changed within the active training phase.")
     if len(eval_losses) < 2:
@@ -166,12 +171,19 @@ def assess_release_readiness(
         or conversation_count < 0
     ):
         raise ValueError("Conversation evaluation report has an invalid turns count.")
+    if task_report.get("format") != "qmini-task-evaluation-v2":
+        raise ValueError("Task report must use qmini-task-evaluation-v2.")
+    if conversation_report.get("format") != "qmini-conversation-evaluation-v1":
+        raise ValueError("Conversation report must use qmini-conversation-evaluation-v1.")
     task_hash = task_report.get("dataset_sha256")
     conversation_hash = conversation_report.get("dataset_sha256")
-    if not isinstance(task_hash, str) or len(task_hash) != 64:
-        raise ValueError("Task evaluation report is missing its dataset SHA-256.")
-    if not isinstance(conversation_hash, str) or len(conversation_hash) != 64:
-        raise ValueError("Conversation report is missing its dataset SHA-256.")
+    for label, value in (("Task", task_hash), ("Conversation", conversation_hash)):
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(char not in "0123456789abcdef" for char in value)
+        ):
+            raise ValueError(f"{label} evaluation report is missing a valid dataset SHA-256.")
     checks.append(_check(
         "independent_held_out_sets",
         task_hash != conversation_hash,
@@ -208,6 +220,8 @@ def assess_release_readiness(
                 "regenerate it with the current evaluator."
             )
         examples = diversity.get("examples")
+        unique_count = diversity.get("unique_normalized_answers")
+        largest_count = diversity.get("largest_identical_answer_count")
         unique_fraction = _number(
             diversity.get("unique_answer_fraction"),
             f"{label} unique_answer_fraction",
@@ -218,14 +232,21 @@ def assess_release_readiness(
         )
         empty_count = diversity.get("empty_answer_count")
         all_identical = diversity.get("all_outputs_identical")
+        expected_count = task_count if label == "task" else conversation_count
         if (
             isinstance(examples, bool) or not isinstance(examples, int) or examples < 1
-            or isinstance(empty_count, bool) or not isinstance(empty_count, int) or empty_count < 0
+            or examples != expected_count
+            or isinstance(unique_count, bool) or not isinstance(unique_count, int) or not 1 <= unique_count <= examples
+            or isinstance(largest_count, bool) or not isinstance(largest_count, int) or not 1 <= largest_count <= examples
+            or isinstance(empty_count, bool) or not isinstance(empty_count, int) or not 0 <= empty_count <= examples
             or not isinstance(all_identical, bool)
             or not 0.0 <= unique_fraction <= 1.0
             or not 0.0 <= largest_fraction <= 1.0
+            or not math.isclose(unique_fraction, unique_count / examples, rel_tol=0.0, abs_tol=1e-9)
+            or not math.isclose(largest_fraction, largest_count / examples, rel_tol=0.0, abs_tol=1e-9)
+            or all_identical != (unique_count == 1)
         ):
-            raise ValueError(f"{label} output_diversity fields are malformed.")
+            raise ValueError(f"{label} output_diversity fields are malformed or inconsistent.")
         enough_examples = examples >= (
             min_task_examples if label == "task" else min_conversation_turns
         )
