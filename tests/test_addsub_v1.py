@@ -83,7 +83,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
     assert "'--curriculum-uniform-fraction', '0.35'" in all_code
-    assert "Google Colab only" in notebook["cells"][0]["source"][1] or "Google Colab only" in "".join(notebook["cells"][0]["source"])
+    assert "Colab-only" in "".join(notebook["cells"][0]["source"])
 
 
 def test_addsub_config_is_independent_and_validates():
