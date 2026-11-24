@@ -41,11 +41,11 @@ Start with uniform sampling for `max(1, min(100, floor(0.05 × planned_steps)))`
 
 ### Adaptive focus
 
-After warm-up, rank examples by their EMA response loss. Gradually move the target difficulty from the 55th percentile to the 80th percentile over the planned SFT run. Use a smooth Gaussian focus band with bandwidth 0.18; this favours moderately difficult examples without repeatedly selecting only the highest-loss/noisiest records.
+After warm-up, rank only records with an observed EMA response loss; records not yet sampled are never assigned a fabricated median difficulty. Gradually move the target difficulty from the 55th percentile to the 80th percentile over the planned SFT run. Use a smooth Gaussian focus band with bandwidth 0.18; this favours moderately difficult examples without repeatedly selecting only the highest-loss/noisiest records. Equal-loss ties receive average ranks so source-file order cannot act as a false difficulty signal.
 
 ### Uniform replay
 
-Blend at least 35% uniform probability with the focused difficulty distribution. This is a permanent rehearsal floor: easy/common language, previously learned facts and simple instructions continue to be seen. Set `--curriculum-uniform-fraction 1.0` for a pure uniform-sampling control experiment. The Colab notebook assigns distinct SFT/checkpoint/evaluation/export directories to the self-paced and uniform variants. Compare runs with identical base checkpoint, training records, seed, optimizer steps and token budgets.
+A fractional quota is carried across optimizer steps so the requested 35% uniform replay is preserved over the run even when batch size is one; integer sample counts are allocated deterministically. Focused examples are drawn without replacement from records with measured EMA loss. If too few measured records are available, the remaining batch slots fall back to uniform sampling. Set `--curriculum-uniform-fraction 1.0` for a pure uniform-sampling control. The Colab notebook assigns distinct SFT/checkpoint/evaluation/export directories to the self-paced and uniform variants. Compare runs with identical base checkpoint, training records, seed, optimizer steps and supervised token budgets.
 
 ### Exact resume
 
