@@ -53,6 +53,10 @@ def test_finewiki_chunker_preserves_content_and_respects_boundaries():
 def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
     rows = _rows_for_all_splits()
     rows.append(dict(rows[0]))  # Duplicate page ID must not create a second article.
+    duplicate_content = dict(rows[1])
+    duplicate_content["page_id"] = "duplicate-content-id"
+    duplicate_content["title"] = "Duplicate content under another page ID"
+    rows.append(duplicate_content)
     rows.append({
         "page_id": "not-english",
         "title": "Ignored",
@@ -64,6 +68,7 @@ def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
     report = _write_finewiki_rows(rows, tmp_path)
     assert set(report["splits"]) == {"train", "validation", "test"}
     assert report["dropped"]["duplicate_page_id"] == 1
+    assert report["dropped"]["duplicate_article_content"] == 1
     assert report["dropped"]["not_english_enwiki"] == 1
 
     split_text = {
