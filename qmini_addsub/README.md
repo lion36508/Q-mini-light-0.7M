@@ -99,6 +99,8 @@ Prepare pinned data:
 
     python scripts/prepare_qmini_addsub_data.py --accept-source-licenses
 
+Preparation uses a temporary sibling staging directory and publishes the final dataset folder only after Wikipedia, OASST1, Dolly, all three splits and the manifest have completed. A failed source download removes the partial staging output so a retry does not inherit half-written training files. The download cache must remain outside the prepared output folder; cached downloads can be reused after a failed attempt. The target output folder must be empty or new and is never overwritten.
+
 Train the tokenizer using only training splits, then encode pretraining text:
 
     python scripts/train_qmini_addsub_tokenizer.py
