@@ -456,7 +456,10 @@ def fine_tune_from_addsub_checkpoint(
         result = model(inputs, attention_mask=inputs.ne(pad_id))
         target_count = int((labels != -100).sum())
         if target_count == 0:
-            continue
+            raise ValueError(
+                "Sampled SFT batch contains no assistant response targets; "
+                "refusing to advance the curriculum or optimizer schedule."
+            )
         token_losses = F.cross_entropy(
             result["logits"].float().reshape(-1, config.vocab_size),
             labels.reshape(-1),
@@ -500,6 +503,9 @@ def fine_tune_from_addsub_checkpoint(
                 "curriculum_mode": curriculum_info["mode"],
                 "curriculum_focus_quantile": curriculum_info["focus_quantile"],
                 "curriculum_uniform_fraction": curriculum_info["uniform_fraction"],
+                "curriculum_requested_uniform_fraction": curriculum_info["requested_uniform_fraction"],
+                "curriculum_uniform_samples": curriculum_info["uniform_samples"],
+                "curriculum_focused_samples": curriculum_info["focused_samples"],
                 "curriculum_seen_fraction": curriculum_info["seen_fraction"],
                 "curriculum_sampled_mean_response_loss": float(per_record_losses.detach().mean()),
                 "train_sha256": hashes["train_sha256"],
@@ -550,7 +556,8 @@ def fine_tune_from_addsub_checkpoint(
             "format": sampler.FORMAT,
             "seen_records": sum(count > 0 for count in sampler.update_count),
             "total_records": sampler.dataset_size,
-            "uniform_replay_fraction": sampler.uniform_fraction,
+            "requested_uniform_replay_fraction": sampler.uniform_fraction,
+            "uniform_replay_quota_remainder": sampler.uniform_remainder,
         },
         "output_dir": str(output),
         "note": "SFT uses adaptive difficulty sampling with uniform replay; this is an experimental training recipe, not a claim of improved quality until held-out evaluation passes.",
