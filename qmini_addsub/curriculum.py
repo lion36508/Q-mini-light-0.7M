@@ -19,7 +19,8 @@ class SelfPacedCurriculumSampler:
     training examples.
     """
 
-    FORMAT = "qmini-self-paced-curriculum-v1"
+    FORMAT = "qmini-self-paced-curriculum-v2"
+    UNIFORM_QUOTA_SCALE = 1_000_000_000
 
     def __init__(
         self,
@@ -58,7 +59,8 @@ class SelfPacedCurriculumSampler:
         self.ema_loss: list[float | None] = [None] * dataset_size
         self.update_count = [0] * dataset_size
         self.last_focus_quantile = self.start_quantile
-        self.uniform_remainder = 0.0
+        self.uniform_fraction_units = int(round(self.uniform_fraction * self.UNIFORM_QUOTA_SCALE))
+        self.uniform_remainder_units = 0
 
     def _focus_quantile(self) -> float:
         progress = (self.step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
@@ -95,9 +97,17 @@ class SelfPacedCurriculumSampler:
 
         # Carry fractional replay quota across steps. This preserves the requested
         # long-run fraction even for batch_size=1, without stochastic rounding drift.
-        replay_budget = self.uniform_remainder + batch_size * self.uniform_fraction
-        uniform_count = min(batch_size, int(math.floor(replay_budget + 1e-12)))
-        self.uniform_remainder = replay_budget - uniform_count
+        replay_budget_units = (
+            self.uniform_remainder_units
+            + batch_size * self.uniform_fraction_units
+        )
+        uniform_count = min(
+            batch_size,
+            replay_budget_units // self.UNIFORM_QUOTA_SCALE,
+        )
+        self.uniform_remainder_units = (
+            replay_budget_units - uniform_count * self.UNIFORM_QUOTA_SCALE
+        )
         uniform_indices = rng.sample(range(self.dataset_size), k=uniform_count)
         selected_set = set(uniform_indices)
         focused_count = batch_size - uniform_count
@@ -214,7 +224,7 @@ class SelfPacedCurriculumSampler:
             "ema_loss": self.ema_loss,
             "update_count": self.update_count,
             "last_focus_quantile": self.last_focus_quantile,
-            "uniform_remainder": self.uniform_remainder,
+            "uniform_remainder_units": self.uniform_remainder_units,
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -250,12 +260,16 @@ class SelfPacedCurriculumSampler:
         ):
             raise ValueError("Curriculum checkpoint contains an invalid focus quantile.")
         self.last_focus_quantile = float(last_focus_quantile)
-        uniform_remainder = state.get("uniform_remainder", 0.0)
+        uniform_remainder_units = state.get("uniform_remainder_units")
         if (
-            isinstance(uniform_remainder, bool)
-            or not isinstance(uniform_remainder, (int, float))
-            or not math.isfinite(uniform_remainder)
-            or not 0.0 <= uniform_remainder < 1.0
+            isinstance(uniform_remainder_units, bool)
+            or not isinstance(uniform_remainder_units, int)
+            or not 0 <= uniform_remainder_units < self.UNIFORM_QUOTA_SCALE
         ):
-            raise ValueError("Curriculum checkpoint contains an invalid uniform replay remainder.")
-        self.uniform_remainder = float(uniform_remainder)
+            raise ValueError("Curriculum checkpoint contains an invalid fixed-point replay remainder.")
+        self.uniform_remainder_units = uniform_remainder_units
+
+    @property
+    def uniform_remainder(self) -> float:
+        """Fractional replay quota carried into the next optimizer step."""
+        return self.uniform_remainder_units / self.UNIFORM_QUOTA_SCALE
