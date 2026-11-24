@@ -9,7 +9,7 @@ from torch import nn
 def build_adamw(
     model: nn.Module,
     learning_rate: float,
-    weight_decay: float = 0.1,
+    weight_decay: float = 0.01,
 ) -> torch.optim.AdamW:
     """AdamW with decay only on matrix/tensor weights, not biases or norm scales."""
     if not math.isfinite(learning_rate) or learning_rate <= 0:

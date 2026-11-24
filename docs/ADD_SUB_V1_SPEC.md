@@ -47,9 +47,9 @@ The independent Add/Sub v1 training graph currently reuses three useful architec
 - gated diagonal state-space recurrence for running context;
 - sparse Top-1 expert routing with per-token selected expert computation.
 
-The default configuration is English-first with a 512-token vocabulary, width 96, four blocks, two experts and a 170-wide SwiGLU bottleneck per expert. Each block uses RMSNorm, causal depthwise convolution with dilations 1/2/4/8, an input-dependent gated diagonal state-space recurrence with an associative parallel scan, and sparse Top-1 expert dispatch. Three learnable sigmoid-bounded residual branch gates control the local convolution, state-space and expert updates. A hard activation clamp is intentionally avoided so gradients are not cut at a clipping boundary. The current instantiated training model has **710,676 parameters**. This is an experimental design, not a claim of lower validation loss until measured on held-out English data.
+The default configuration is English-first with a 1,024-token vocabulary, width 96, four blocks, two experts and a 170-wide SwiGLU bottleneck per expert. Each block uses RMSNorm, causal depthwise convolution with dilations 1/2/4/8, an input-dependent gated diagonal state-space recurrence with an associative parallel scan, and sparse Top-1 expert dispatch. Three learnable sigmoid-bounded residual branch gates control the local convolution, state-space and expert updates; the v2 training algorithm initializes each gate at 0.1 so branches begin as controlled residual corrections rather than 0.5-strength updates. Sparse routing uses a Switch-style load-balancing objective plus a separately weighted log-partition-squared router z-loss; both objectives use only valid non-padding tokens. Per-layer assignment fractions and router losses are logged so expert collapse is observable. A hard activation clamp is intentionally avoided so gradients are not cut at a clipping boundary. The current instantiated training model has **760,340 parameters**. This is an experimental design, not a claim of lower validation loss until measured on held-out English data.
 
-The training graph uses five-symbol STE/QAT matrix weights and sparse SwiGLU experts. Pretraining and SFT use AdamW with matrix-weight decay, no decay on vector/bias/norm parameters, linear LR warm-up and cosine decay to a 10% floor. Training/optimization is allowed to use floating-point arithmetic, multiplication and gradient operations. The deployment restriction applies to the inference graph only. Do not call the training model the Add/Sub-only runtime.
+The training graph uses five-symbol STE/QAT matrix weights and sparse SwiGLU experts. Pretraining and SFT use AdamW with matrix-weight decay, no decay on vector/bias/norm parameters, linear LR warm-up and cosine decay to a 10% floor. The MoE balance and router z-loss coefficients are explicit configuration values stored in run/checkpoint identity. Training/optimization is allowed to use floating-point arithmetic, multiplication and gradient operations. The deployment restriction applies to the inference graph only. Do not call the training model the Add/Sub-only runtime.
 
 ## 5. Training policy
 
@@ -114,3 +114,19 @@ The loader must reject Q2-v1, Q2-v2, dense PyTorch checkpoints and any unknown a
 - Do not re-enable TinyStories or teacher-generated synthetic samples as production training data.
 - Do not claim 2-bit storage for five symbols.
 - Do not claim an add/sub-only runtime until the complete deployed graph and compiled instructions pass the acceptance tests.
+
+
+## 10. 23 November 2026 — scaled QAT and tokenizer revision
+
+- Fixed thresholds created a broad forward quantization deadzone in master-weight units. The STE still passed gradients; the problem was that small master-weight updates did not change forward symbols.
+- The revised training graph uses dense Kaiming-normal master weights and a detached per-tensor scale (1.4 × mean absolute weight) before selecting five normalized symbols. Exact zero remains a code; zero-initialized SSM decay weights still receive STE gradients.
+- Matrix weight decay is 0.01. Pretraining and SFT checkpoint IDs were bumped to prevent incompatible resumes.
+- The tokenizer target is 1,024. The full reversible 256-byte ByteLevel fallback remains; a maximum 64 MiB sample of pretraining training text is balanced with the complete SFT training split. Validation/test are excluded.
+- WikiText `@-@` and spaces before punctuation are normalized. System prompt is `You are Q-Mini.`; reference decoding uses configurable repetition penalty, default 1.18 over recent 64 tokens.
+- Packed archive v2 records one scale per tensor and keeps v1 read compatibility. It is not a complete integer-only Android runtime.
+- New model has 760,340 parameters; old 710,676-parameter checkpoints remain preserved but require fresh training under the new tokenizer and optimizer contract.
+
+
+## 11. 23 November 2026 — Simple English pretraining source
+
+The default pinned pretraining source is the human-authored Simple English Wikipedia snapshot from 2026-03-01. It has 276,302 articles in the published card; the 439,202,943-byte parquet file is pinned by revision and SHA-256. Only `title` and `content_no_link` are used. Generated importance labels are not training targets or text. Stable page-ID hashing makes 90/5/5 train/validation/test splits. The source is CC-BY-SA-3.0 and requires attribution/share-alike review. The old WikiText helper remains available in source for historical compatibility but is no longer the default pinned pretraining corpus.

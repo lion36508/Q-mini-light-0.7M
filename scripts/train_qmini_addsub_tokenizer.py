@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from pathlib import Path
 
 from tokenizers import Tokenizer
@@ -11,7 +12,7 @@ from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
 from tokenizers.trainers import BpeTrainer
 
 from qmini_addsub.config import AddSubConfig
-from qmini_addsub.data import escape_special_token_literals
+from qmini_addsub.data import escape_special_token_literals, normalize_training_text
 from qmini_addsub.train import sha256_file
 
 
@@ -33,7 +34,9 @@ def main() -> None:
     )
     parser.add_argument("--data-dir", default="data/qmini_addsub_v1")
     parser.add_argument("--output", default="artifacts/qmini_addsub_v1/tokenizer.json")
-    parser.add_argument("--vocab-size", type=int, default=512)
+    parser.add_argument("--vocab-size", type=int, default=1024)
+    parser.add_argument("--pretrain-byte-budget", type=int, default=64 * 1024 * 1024)
+    parser.add_argument("--seed", type=int, default=20261123)
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -70,6 +73,8 @@ def main() -> None:
         raise ValueError("SFT train file exists but is not declared in the dataset manifest.")
     if not 264 <= args.vocab_size <= 65536:
         raise ValueError("Byte-level BPE vocab_size must be between 264 and 65536 (uint16 token streams).")
+    if args.pretrain_byte_budget < 1 or args.seed < 0:
+        raise ValueError("Pretraining byte budget must be positive and seed non-negative.")
 
     # Only the training split is used. Validation/test text is never read here.
     trainer_corpus = Path(args.output).with_suffix(".training-text.tmp")
@@ -78,13 +83,35 @@ def main() -> None:
     tokenizer_temporary = output.with_suffix(output.suffix + ".tmp")
     config_temporary = config_path.with_suffix(config_path.suffix + ".tmp")
     trainer_corpus.parent.mkdir(parents=True, exist_ok=True)
+    pretrain_source_bytes = pretrain.stat().st_size
+    sample_probability = min(1.0, args.pretrain_byte_budget / max(1, pretrain_source_bytes))
+    rng = random.Random(args.seed)
+    pretrain_sampled_bytes = 0
+    sft_sampled_bytes = 0
     try:
         with trainer_corpus.open("w", encoding="utf-8") as target:
+            # Sample up to 64 MiB of pretraining training text; include the
+            # complete SFT training split so chat vocabulary affects BPE merges.
             with pretrain.open("r", encoding="utf-8") as source:
+                first_accepted = None
                 for line in source:
-                    text = line.strip()
-                    if text:
-                        target.write(escape_special_token_literals(text) + "\n")
+                    raw = line.strip()
+                    if not raw or rng.random() > sample_probability:
+                        continue
+                    cleaned, reason = normalize_training_text(raw, min_chars=1)
+                    if reason != "accepted":
+                        continue
+                    escaped = escape_special_token_literals(cleaned)
+                    count = len(escaped.encode("utf-8"))
+                    if pretrain_sampled_bytes + count > args.pretrain_byte_budget:
+                        continue
+                    if first_accepted is None:
+                        first_accepted = escaped
+                    target.write(escaped + "\n")
+                    pretrain_sampled_bytes += count
+                if pretrain_sampled_bytes == 0 and first_accepted is not None:
+                    target.write(first_accepted + "\n")
+                    pretrain_sampled_bytes = len(first_accepted.encode("utf-8"))
             if sft_train_entry is not None:
                 with sft.open("r", encoding="utf-8") as source:
                     for line_number, line in enumerate(source, 1):
@@ -96,8 +123,13 @@ def main() -> None:
                             raise ValueError(f"{sft}:{line_number}: invalid JSONL.") from exc
                         for message in record.get("messages", []):
                             content = str(message.get("content") or "").strip()
-                            if content:
-                                target.write(escape_special_token_literals(content) + "\n")
+                            cleaned, reason = normalize_training_text(content)
+                            if reason == "accepted":
+                                escaped = escape_special_token_literals(cleaned)
+                                target.write(escaped + "\n")
+                                sft_sampled_bytes += len(escaped.encode("utf-8"))
+        if pretrain_sampled_bytes == 0:
+            raise RuntimeError("Tokenizer sampling produced no usable pretraining text.")
 
         tokenizer = Tokenizer(BPE(unk_token="<unk>"))
         tokenizer.pre_tokenizer = ByteLevelPreTokenizer(add_prefix_space=False)
@@ -140,6 +172,10 @@ def main() -> None:
             "vocab_size": actual_vocab_size,
             "special_tokens": {token: tokenizer.token_to_id(token) for token in SPECIAL_TOKENS},
             "trained_on": trained_on,
+            "pretrain_source_bytes": pretrain_source_bytes,
+            "pretrain_sampled_bytes": pretrain_sampled_bytes,
+            "sft_sampled_bytes": sft_sampled_bytes,
+            "sft_tokenizer_corpus_share": sft_sampled_bytes / max(1, pretrain_sampled_bytes + sft_sampled_bytes),
             "validation_test_used": False,
         }, indent=2))
     finally:

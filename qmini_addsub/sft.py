@@ -21,11 +21,8 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v4"
-SYSTEM_TEXT = (
-    "You are Q-Mini, a helpful English assistant. Answer the user's actual question "
-    "clearly and accurately. Do not invent facts; state uncertainty when needed."
-)
+SFT_FORMAT = "qmini-addsub-sft-v6"
+SYSTEM_TEXT = "You are Q-Mini."
 
 
 def _load_conversations(
@@ -286,13 +283,16 @@ def fine_tune_from_addsub_checkpoint(
         "planned_steps": steps,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "matrix_weight_decay": 0.01,
+        "quantization": "scaled-five-symbol-v2",
+        "system_prompt": SYSTEM_TEXT,
         "save_every": save_every,
         "seed": seed,
     }
 
     model = AddSubLanguageModel(config, seed=seed).to(device)
     model.load_state_dict(base["model"], strict=True)
-    optimizer = build_adamw(model, learning_rate, weight_decay=0.1)
+    optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     hashes = {
         "base_sha256": sha256_file(base_path),
         "tokenizer_sha256": sha256_file(tokenizer_path),
@@ -415,7 +415,10 @@ def fine_tune_from_addsub_checkpoint(
             result["logits"].float().reshape(-1, config.vocab_size),
             labels.reshape(-1),
             ignore_index=-100,
-        ) + 0.01 * result["aux_loss"]
+        ) + (
+            config.moe_balance_coef * result["aux_loss"]
+            + config.router_z_loss_coef * result["router_z_loss"]
+        )
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite SFT loss at step {step}.")
         loss.backward()
@@ -433,6 +436,9 @@ def fine_tune_from_addsub_checkpoint(
                 "learning_rate": current_lr,
                 "train_loss": last_loss,
                 "valid_response_loss": valid_loss,
+                "router_balance_loss": float(result["aux_loss"].detach()),
+                "router_z_loss": float(result["router_z_loss"].detach()),
+                "router_load_by_layer": result["router_load"].detach().cpu().tolist(),
                 "train_sha256": hashes["train_sha256"],
                 "valid_sha256": hashes["valid_sha256"],
                 "test_sha256": hashes["test_sha256"],

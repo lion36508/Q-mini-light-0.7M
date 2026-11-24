@@ -16,9 +16,9 @@ Do not mix the two model lines. The Add/Sub loader must never read legacy Q2-v2 
 
 ## Q-Mini Add/Sub v1 — independent from-scratch model
 
-The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline, plus a verified offline packed-weight export/loader. The Add/Sub Colab entry point checks out the open draft branch `cleanup/verified-data-and-addsub-v1` until that PR is reviewed and merged.
+The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline, plus a verified offline packed-weight export/loader. The Add/Sub Colab entry point checks out the repository's `main` branch.
 
-The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path, a hash-verified held-out assistant evaluation runner, and an offline `.qma` archive exporter/loader for all five-symbol weights plus an integrity-checked float32 auxiliary sidecar; none of these is the strict integer-only deployed runtime. The random-init pretraining model, local no-download dataset importer, optional pinned-source preparation and response-masked SFT stage are available. You can choose your own already-reviewed English dataset later; data import, tokenizer construction, pretraining and SFT are OFF by default in the Add/Sub Colab notebook. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
+The current Add/Sub training algorithm also starts residual branches at 0.1 strength, adds an explicitly weighted router z-loss beside load balancing, and logs per-layer expert usage to expose routing collapse. These are stability improvements, not a claim of trained quality. The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path, a hash-verified held-out assistant evaluation runner, and an offline `.qma` archive exporter/loader for all five-symbol weights plus an integrity-checked float32 auxiliary sidecar; none of these is the strict integer-only deployed runtime. The random-init pretraining model, local no-download dataset importer, optional pinned-source preparation and response-masked SFT stage are available. You can choose your own already-reviewed English dataset later; data import, tokenizer construction, pretraining and SFT are OFF by default in the Add/Sub Colab notebook. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
 
 Training uses three pinned, provenance-recorded English corpora: WikiText-103 raw for language pretraining, reviewed/non-synthetic English OASST1 conversations, and human-authored Databricks Dolly instruction pairs. TinyStories, Alpaca/UltraChat and model-generated teacher data are excluded. DailyDialog is excluded from the default mix because its license has non-commercial/share-alike terms. Review dataset licenses before use/redistribution.
 
@@ -95,3 +95,11 @@ The CI suite also compiles the native C++ projection primitive and cross-compile
 - No model training is started by CI or by this README.
 
 For the history, confirmed defects, data-quality policy and cleanup decisions, read [Project history and cleanup audit (Hindi)](docs/PROJECT_HISTORY_AND_CLEANUP_AUDIT_HI.md).
+
+
+### Add/Sub scaled trainability revision
+
+The Add/Sub development branch now includes scaled five-symbol QAT, dense initialization, 0.01 matrix decay, a 1,024-token chat-aware ByteLevel tokenizer and repetition penalty. It is a new 760,340-parameter identity; the prior 710,676-parameter model and Drive artifacts are preserved. Response quality still requires fresh training and held-out English evaluation.
+
+
+The Add/Sub default corpus preparation now uses a hash-pinned Simple English Wikipedia snapshot (human-authored text only; model-generated importance labels are ignored) with leakage-safe page-ID splits. Its CC-BY-SA-3.0 obligations are documented and must be reviewed before enabling corpus preparation.
