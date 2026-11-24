@@ -21,7 +21,7 @@ Do not add a second copy of these components. The five-symbol alphabet needs thr
 
 ## Colab learning algorithm — new experiment
 
-The SFT stage now includes `qmini-self-paced-curriculum-v1`: uniform warm-up, per-example EMA response-loss difficulty ranking, gradual focus from the 55th to 80th difficulty percentile, and at least 35% uniform replay. Its state and schedule are checkpointed for exact resume. See [Learning Algorithm Design](LEARNING_ALGORITHM_DESIGN_2026.md).
+The SFT stage now includes `qmini-self-paced-curriculum-v2`: uniform warm-up, per-example EMA response-loss difficulty ranking, gradual focus from the 55th to 80th difficulty percentile, and at least 35% uniform replay. Its state and schedule are checkpointed for exact resume. See [Learning Algorithm Design](LEARNING_ALGORITHM_DESIGN_2026.md).
 
 This is inspired by SPaCe (Findings of ACL 2026), but is not a reproduction. It remains an experiment until compared against a uniform-sampling control under matched seeds, records, supervised tokens and optimizer steps. The sampler reads only train split losses and does not introduce model-generated training examples.
 
