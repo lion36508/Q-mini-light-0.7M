@@ -40,7 +40,7 @@ These changes are algorithmic stability measures, not a claim of improved langua
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
-- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v7 checkpoints, plus a separate held-out SFT test split.
+- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v8 checkpoints, plus a separate held-out SFT test split.
 - Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
