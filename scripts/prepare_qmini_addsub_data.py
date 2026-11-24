@@ -5,8 +5,6 @@ import hashlib
 import io
 import json
 import re
-import shutil
-import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,28 +33,6 @@ OASST_SIZE = 39_516_251
 DOLLY_REPOSITORY = "databricks/databricks-dolly-15k"
 DOLLY_REVISION = "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a"
 DOLLY_FILE = "databricks-dolly-15k.jsonl"
-
-
-def download_verified(url: str, destination: Path, sha256: str, size: int) -> Path:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_file():
-        if destination.stat().st_size == size and sha256_file(destination) == sha256:
-            return destination
-        destination.unlink()
-    temporary = destination.with_suffix(destination.suffix + ".download")
-    request = urllib.request.Request(url, headers={"User-Agent": "Q-Mini-AddSub-Data-Prep/1.0"})
-    with urllib.request.urlopen(request, timeout=90) as response, temporary.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    actual_size = temporary.stat().st_size
-    actual_sha = sha256_file(temporary)
-    if actual_size != size or actual_sha != sha256:
-        temporary.unlink(missing_ok=True)
-        raise ValueError(
-            f"Dataset integrity mismatch: size {actual_size}/{size}, "
-            f"SHA-256 {actual_sha}/{sha256}"
-        )
-    temporary.replace(destination)
-    return destination
 
 
 def _article_text_chunks(title: str, body: str, max_chars: int = 28_000) -> list[str]:
