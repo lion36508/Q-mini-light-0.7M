@@ -40,7 +40,7 @@ Training uses floating-point PyTorch operations and quantization-aware training.
 The Add/Sub SFT stage now uses an experimental **self-paced difficulty curriculum**:
 - A uniform warm-up first measures the model's current response loss on individual human-authored training examples.
 - The sampler then focuses progressively on moderately difficult examples based on their EMA response loss.
-- At least 35% uniform replay remains in the sampling distribution so easy/common language and previously learned facts continue to be practised.
+- After warm-up, a carried quota allocates 35% of examples across the full training run to uniform replay (including batch-size 1); the remaining eligible examples focus on measured, moderately difficult records. Unseen examples are never given invented difficulty scores.
 - The Colab notebook can run a separate pure-uniform control (`1.0`) and stores its SFT checkpoints/evaluation/export artifacts in a separate variant folder.
 - Sampling state, schedule, per-example difficulty history and random state are stored in the SFT checkpoint for exact resume.
 
