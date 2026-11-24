@@ -486,6 +486,8 @@ def main() -> None:
 
     output = Path(args.output).expanduser().resolve()
     cache = Path(args.cache).expanduser().resolve()
+    if cache == output or output in cache.parents:
+        parser.error("The download cache must be outside the prepared dataset output folder.")
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         if not output.is_dir():
