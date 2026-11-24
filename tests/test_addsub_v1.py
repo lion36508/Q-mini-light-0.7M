@@ -2125,3 +2125,46 @@ def test_self_paced_curriculum_rejects_invalid_fixed_point_replay_state():
     with pytest.raises(ValueError, match="fixed-point replay remainder"):
         sampler.load_state_dict(state)
 
+
+
+
+def test_checkpoint_discovery_uses_numeric_step_order_and_safe_prefixes(tmp_path):
+    from qmini_addsub.checkpoints import checkpoint_step, latest_checkpoint
+
+    (tmp_path / "checkpoint-step-000000009.pt").write_bytes(b"9")
+    (tmp_path / "checkpoint-step-000000100.pt").write_bytes(b"100")
+    (tmp_path / "checkpoint-step-000000020.pt").write_bytes(b"20")
+    latest = latest_checkpoint(tmp_path, "checkpoint")
+    assert latest is not None
+    assert latest.name == "checkpoint-step-000000100.pt"
+    assert checkpoint_step(latest, "checkpoint") == 100
+    assert latest_checkpoint(tmp_path, "sft-checkpoint") is None
+
+
+def test_checkpoint_discovery_returns_none_for_missing_directory(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    assert latest_checkpoint(tmp_path / "not-created", "checkpoint") is None
+
+
+@pytest.mark.parametrize("prefix", ["unknown", "../checkpoint", ""])
+def test_checkpoint_discovery_rejects_unsupported_prefix(tmp_path, prefix):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    with pytest.raises(ValueError, match="Unsupported checkpoint prefix"):
+        latest_checkpoint(tmp_path, prefix)
+
+
+def test_checkpoint_discovery_fails_closed_on_malformed_or_ambiguous_names(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    malformed = tmp_path / "checkpoint-step-latest.pt"
+    malformed.write_bytes(b"x")
+    with pytest.raises(ValueError, match="Malformed"):
+        latest_checkpoint(tmp_path, "checkpoint")
+
+    malformed.unlink()
+    (tmp_path / "checkpoint-step-0007.pt").write_bytes(b"a")
+    (tmp_path / "checkpoint-step-7.pt").write_bytes(b"b")
+    with pytest.raises(ValueError, match="Ambiguous"):
+        latest_checkpoint(tmp_path, "checkpoint")
