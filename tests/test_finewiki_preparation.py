@@ -86,7 +86,7 @@ def test_finewiki_split_is_by_whole_article_and_records_hashes(tmp_path):
             and row["in_language"] == "en"
         ]
         for title in own_titles:
-            title_heading = f"# {title}\\n"
+            title_heading = f"# {title}\n"
             assert title_heading in split_text[name]
             for other_name, other_text in split_text.items():
                 if other_name != name:
