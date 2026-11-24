@@ -114,7 +114,7 @@ After a pretraining or SFT checkpoint exists, create a verified offline five-sym
 
 The archive contains all quantized matrix/embedding/depthwise weights packed at 3 bits per symbol, checksums, a configuration/tensor index and a float32 auxiliary tensor sidecar. Load it for PyTorch reference parity/tamper checks with `load_addsub_export`. It is not yet a production integer-only/mobile runtime.
 
-After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
+After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. The reference generator applies a recent-token repetition penalty and stops before an exact four-token phrase would be repeated for a fifth time; this is a last-resort loop guard, not a substitute for good training. A stopped/short answer can still fail the held-out quality gate. This is for correctness testing, not the multiplication-free phone runtime.
 
 Instruction fine-tuning may begin only from a checkpoint produced by this Add/Sub v1 pretraining code:
 
