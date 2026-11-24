@@ -12,7 +12,7 @@ The assistant SFT stage uses a difficulty-aware sampler rather than uniform-only
 
 - **Uniform warm-up:** first collect per-example assistant-response losses from the current model.
 - **Adaptive difficulty focus:** rank training examples by an exponential moving average of response loss. The target difficulty gradually moves from the 55th to the 80th percentile, focusing on examples that are challenging but not only the most pathological/high-noise records.
-- **Spaced replay:** at least 35% of the sampling distribution remains uniform, so easy/common language and already-learned behavior continue to be practised.
+- **Spaced replay:** a fractional quota carries across optimizer steps to allocate 35% of post-warm-up training examples to uniform replay, even at batch size 1. Focused selections are drawn only from records with measured loss; unseen records are not assigned an artificial median difficulty.
 - **Learning-state resume:** per-example EMA losses, update counts, sampler schedule and RNG state are stored in the SFT checkpoint. A different curriculum contract cannot be resumed silently.
 
 This is inspired by the self-paced curriculum direction explored in SPaCe (Findings of ACL 2026): https://aclanthology.org/2026.findings-acl.171/. Its published results do not prove a gain at Q-Mini's 760K scale. The Colab notebook must compare self-paced sampling with a uniform-sampling control under matched data, seeds and optimizer-step budgets before the curriculum is treated as a quality improvement.
