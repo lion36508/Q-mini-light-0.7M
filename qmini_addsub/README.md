@@ -40,7 +40,7 @@ These changes are algorithmic stability measures, not a claim of improved langua
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
-- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v4 checkpoints, plus a separate held-out SFT test split.
+- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v7 checkpoints, plus a separate held-out SFT test split.
 - Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
 
 **Not yet complete**
@@ -49,7 +49,7 @@ These changes are algorithmic stability measures, not a claim of improved langua
 - Phone-specific integer inference is out of scope for the active Colab model. Preserved experiments live under `experiments/phone/realme_c17/` and must not constrain the current architecture.
 - No Add/Sub weights have yet completed the real-data Colab training recipe; assistant quality has not been established.
 
-Do not use the PyTorch training graph as a production inference runtime. The training graph intentionally uses floating-point operations and optimizer arithmetic; the project requirement is that the deployed inference graph use only lookup, comparisons, integer addition and subtraction.
+Do not use the PyTorch training graph as a production inference runtime. The training graph intentionally uses floating-point operations and optimizer arithmetic. A deployed phone inference graph is not part of the current Colab-only scope; phone-specific prototypes are parked separately.
 
 ## Legacy and new model separation
 
