@@ -82,6 +82,12 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
+    pretraining_code = next(source for source in code if "qmini_addsub.train" in source)
+    sft_code = next(source for source in code if "qmini_addsub.sft" in source)
+    assert "--curriculum-uniform-fraction" not in pretraining_code
+    assert "'--curriculum-uniform-fraction', str(SFT_CURRICULUM_UNIFORM_FRACTION)" in sft_code
+    assert "uniform-control" in sft_code
+    assert "self-paced-u" in sft_code
     assert "SFT_CURRICULUM_UNIFORM_FRACTION = 0.35" in all_code
     assert "SFT_RUN_TAG = 'uniform-control'" in all_code
     assert "SFT_DIR = VERSION_ROOT / 'runs' / ('sft-' + SFT_RUN_TAG)" in all_code
