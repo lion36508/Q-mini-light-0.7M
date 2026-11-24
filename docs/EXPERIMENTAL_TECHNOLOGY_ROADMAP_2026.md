@@ -5,17 +5,25 @@
 ## Product and safety constraints
 
 - Keep exactly two model lines in this repository: the preserved legacy `qmini/` model and the independent `qmini_addsub/` model.
-- All new model experiments belong inside the Add/Sub line, behind versioned configs or isolated modules. Do not modify legacy weights, checkpoints, tokenizer, trainer or runtime.
+- The primary Add/Sub model is developed, trained, resumed and evaluated through Google Colab only. The active notebook uses CPU-only defaults and a separate Drive folder.
+- Phone/Android/ARM deployment is out of scope. Historical phone prototypes are preserved separately in `experiments/phone/realme_c17/`; they are not imported by the model, Colab notebook or active Add/Sub CI.
+- All active model experiments belong inside `qmini_addsub/`, behind versioned configs and checkpoint contracts. Do not modify legacy weights, checkpoints, tokenizer, trainer or runtime.
 - Preserve the 760,340-parameter Add/Sub reference profile until a measured ablation justifies a new profile.
-- Training may use floating-point arithmetic. The deployed Add/Sub inference path must eventually satisfy the full lookup/comparison/integer-add/subtract contract; no floating-point multiply, matrix multiply or hidden rescaling in the deployed graph.
+- Training may use floating-point arithmetic; the five-symbol QAT representation is an experimental training choice, not a claim of integer-only runtime.
 - No external pretrained weights. English-first, provenance-checked data only.
-- A research paper result at hundreds of millions or billions of parameters is a hypothesis for this 0.76M model, not evidence that the same result transfers.
+- A research result on much larger models is a hypothesis for this 0.76M model, not evidence that the same gain transfers.
 
 ## What the current Add/Sub implementation already has
 
 The reference architecture already includes causal depthwise convolution, an input-dependent gated diagonal state-space recurrence, sparse Top-1 SwiGLU experts, RMSNorm, small residual branch initialization, router load-balancing plus z-loss, and five-symbol QAT weights `{-1.5, -0.5, 0, +0.5, +1.5}`.
 
 Do not add a second copy of these components. The five-symbol alphabet needs three fixed bits per weight; it is not a 1.58-bit ternary model. Current integer runtime coverage is limited to an additive projection primitive and bounded residual addition. Full convolution, recurrent state, gates, experts, normalization, activation LUTs and output decoding remain incomplete. No Add/Sub model has yet been trained on the reviewed English corpus.
+
+## Colab learning algorithm — new experiment
+
+The SFT stage now includes `qmini-self-paced-curriculum-v1`: uniform warm-up, per-example EMA response-loss difficulty ranking, gradual focus from the 55th to 80th difficulty percentile, and at least 35% uniform replay. Its state and schedule are checkpointed for exact resume. See [Learning Algorithm Design](LEARNING_ALGORITHM_DESIGN_2026.md).
+
+This is inspired by SPaCe (Findings of ACL 2026), but is not a reproduction. It remains an experiment until compared against a uniform-sampling control under matched seeds, records, supervised tokens and optimizer steps. The sampler reads only train split losses and does not introduce model-generated training examples.
 
 ## Candidate technologies and fit
 
@@ -67,20 +75,21 @@ Microsoft BitNet demonstrates ternary 1.58-bit models and optimized CPU kernels,
 
 Keep the required five-symbol Add/Sub format as the baseline. A ternary comparison may be run as a separately versioned quantization ablation only after the baseline has real trained weights. It must not silently change the five-symbol checkpoint format or be marketed as equivalent. Compare model quality, packed size, integer-only operator coverage and actual ARM CPU latency.
 
-## Recommended implementation order
+## Recommended implementation order — Colab track
 
-1. **Freeze and measure the real baseline:** finish one reproducible CPU training run on the reviewed English corpus; save data/tokenizer/run hashes; evaluate held-out language loss, task categories, multi-turn continuity, repetition, factuality and phone-independent CPU latency.
-2. **Build the external-memory and retrieval sidecars:** these improve effective context and access to user-approved facts without changing the neural parameter budget. Keep memory opt-in and auditable.
-3. **Run a selective-delta SSM ablation:** compare a small channel-wise erase/write-gate variant inspired by Gated DeltaNet-2 against the current diagonal SSM; replace the SSM for the experiment, do not stack another block on top. Keep the reference config untouched. Evaluate the same tokens and prompts.
-4. **Add bounded adaptive compute:** only after confidence/verifier calibration and objective task tests exist.
-5. **Compare optimizer and quantization variants:** training-only experiments, never default switches without measured wins.
-6. **Finish the complete integer-only runtime:** every operation in the actual deployed graph must be audited and covered by parity, overflow, saturation, cache, adversarial and ARM64 tests before claiming a multiply-free phone runtime.
+1. **Establish the real-data baseline:** complete one reproducible Colab CPU pretraining and SFT run; preserve data/tokenizer/run hashes and report held-out English loss, instruction performance, multi-turn continuity, repetition, factuality and reasoning slices.
+2. **Ablate self-paced SFT:** compare the difficulty-aware sampler against `--curriculum-uniform-fraction 1.0` under matched seeds, data, supervised tokens and optimizer steps. Promote it only after repeatable held-out gains or matched quality at lower compute.
+3. **Improve data efficiency:** assess source/topic balance, duplication and error buckets. A future topic-aware curriculum may be added only with a permanent uniform coverage floor.
+4. **Run a selective-delta SSM ablation:** compare a small channel-wise erase/write-gate variant inspired by Gated DeltaNet-2 against the current diagonal SSM; replace the SSM for the experiment, do not stack another block on top. Keep the reference config untouched and compare identical data/tokens.
+5. **Add bounded adaptive compute or audited memory:** only after the base model passes real task tests. Any added memory must be controlled, source-aware and not treated as trusted instructions.
+6. **Compare optimizer and quantization variants:** keep AdamW and five-symbol QAT as controls. Test alternatives with matched seeds, tokens, step time and validation trajectories; do not change defaults based on research headlines.
+7. **Phone deployment stays parked:** all phone-specific source and notes remain in `experiments/phone/realme_c17/`; they do not affect this Colab-only learning roadmap.
 
 ## Promotion gates
 
-An experiment is not accepted because its paper is new or its unit tests pass. It must beat the current Add/Sub baseline on a pre-registered held-out evaluation, preserve multi-turn and language quality, report sample counts and confidence intervals, and disclose changes in parameter count, packed size, RAM and CPU latency. A candidate that improves validation loss but causes repetitive answers, worse factuality or unacceptable mobile latency is rejected.
+An experiment is not accepted because its paper is new or its unit tests pass. It must beat the current Add/Sub baseline on a pre-registered held-out evaluation, preserve multi-turn and language quality, report sample counts and confidence intervals, and disclose changes in parameter count, training tokens, optimizer steps and Colab wall-clock time. A candidate that improves validation loss but causes repetitive answers, worse factuality or loss of generality is rejected.
 
-Until the first real-data Add/Sub run completes, architecture changes should be treated as hypotheses. The existing CI smoke model is not a natural-language quality benchmark, and passing CI does not establish assistant capability.
+Until the first real-data Add/Sub run completes, architecture and curriculum changes should be treated as hypotheses. The existing CI smoke model is not a natural-language quality benchmark, and passing CI does not establish assistant capability.
 
 ## References
 
@@ -92,3 +101,6 @@ Until the first real-data Add/Sub run completes, architecture changes should be 
 - ICLR 2025, *Scaling LLM Test-Time Compute Optimally*: https://proceedings.iclr.cc/paper_files/paper/2025/hash/1b623663fd9b874366f3ce019fdfdd44-Abstract-Conference.html
 - Zhang et al., *Adam Improves Muon* (2026): https://arxiv.org/abs/2602.17080
 - Microsoft, BitNet inference framework: https://github.com/microsoft/BitNet
+- Do et al., *SPaCe: Unlocking Sample-Efficient LLM Training With Self-Pace Curriculum Learning* (Findings ACL 2026): https://aclanthology.org/2026.findings-acl.171/
+- Liu et al., *Ladders of Thought: A Self-Evolving Curriculum* (2026): https://arxiv.org/abs/2609.25643
+- Akhtar et al., *When Does Muon Actually Win?* (2026): https://arxiv.org/abs/2610.21555
