@@ -39,8 +39,8 @@ class SelfPacedCurriculumSampler:
         for name, value in (("uniform_fraction", uniform_fraction), ("start_quantile", start_quantile), ("end_quantile", end_quantile), ("bandwidth", bandwidth), ("ema_decay", ema_decay)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise TypeError(f"{name} must be a finite number.")
-        if not 0.10 <= uniform_fraction <= 1.0:
-            raise ValueError("uniform_fraction must be between 0.10 and 1.0.")
+        if not 0.35 <= uniform_fraction <= 1.0:
+            raise ValueError("uniform_fraction must be between 0.35 and 1.0.")
         if not 0.0 < start_quantile <= end_quantile < 1.0:
             raise ValueError("difficulty quantiles must satisfy 0 < start <= end < 1.")
         if bandwidth <= 0.0 or not 0.0 < ema_decay < 1.0:
