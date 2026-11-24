@@ -25,7 +25,7 @@ These changes are algorithmic stability measures, not a claim of improved langua
 - Five-symbol QAT weight alphabet: {-1.5, -0.5, 0, +0.5, +1.5}.
 - Three-bit packing/unpacking with invalid-code and non-canonical padding rejection.
 - Checkpoint-to-archive export of every five-symbol model weight, a separate auxiliary tensor sidecar, SHA-256 manifest validation and a strict reconstruction loader with parity/tamper tests.
-- Integer additive projection reference primitive; its AST regression test prohibits multiply, divide and matmul operators.
+- Integer additive projection reference primitive plus a native C++ scalar/ARM-NEON projection kernel. The native harness exhaustively checks the supported activation/code pairs and invalid inputs; weights are consumed in feature-major transposed layout. This is one kernel, not a complete deployed model runtime.
 - Pinned non-synthetic English data preparation.
 - Independent byte-level BPE tokenizer and token-stream preparation scripts.
 - Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
