@@ -23,7 +23,7 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v7"
+SFT_FORMAT = "qmini-addsub-sft-v8"
 SYSTEM_TEXT = "You are Q-Mini."
 
 
