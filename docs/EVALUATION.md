@@ -135,6 +135,33 @@ Generated assistant replies are fed back into the prompt for the next turn. The 
 The benchmark set must remain held out from tokenizer fitting, pretraining and SFT. Use numeric/JSON scorers for objectively structured answers where possible; lexical exact match and token F1 remain diagnostics. Human review and externally checked answers are still needed for open-ended factuality, science, reasoning and code behavior.
 
 
+## Fail-closed readiness gate
+
+Do not call a run "trained", "ready" or "assistant-capable" just because the optimizer reached its requested step count or the training loss decreased. After training, generate fresh task and multi-turn conversation reports using separate, human-authored English holdouts that were excluded from tokenizer fitting, pretraining and SFT:
+
+```bash
+python -m qmini.cli eval-tasks \
+  --model-dir /path/to/final_model \
+  --dataset /path/to/held-out/tasks.jsonl \
+  --max-new-tokens 96 --output reports/tasks.json
+
+python -m qmini.cli eval-conversations \
+  --model-dir /path/to/final_model \
+  --dataset /path/to/held-out/conversations.jsonl \
+  --max-new-tokens 96 --output reports/conversations.json
+
+python -m qmini.release_gate \
+  --metrics /path/to/run/metrics.jsonl \
+  --tasks-report reports/tasks.json \
+  --conversations-report reports/conversations.json \
+  --output reports/readiness.json
+```
+
+The gate fails closed unless at least two validation evaluations in the active dataset/scheduler phase show the configured relative NLL improvement, both held-out files have the configured minimum sample counts and pass rates, task and conversation files have different SHA-256 fingerprints, and neither output set shows empty-answer or excessive identical-answer collapse. Default floors are 1% validation-loss improvement, 20 task prompts, 20 conversation turns, 25% task/conversation pass rate, at least 50% unique normalized answers, and no single normalized answer above 35%. Adjust these floors only for a documented benchmark reason; do not lower them to make a failing model pass.
+
+A passing report is labelled `ready_for_review`, not "human-level". The checks are engineering gates: they can catch training stagnation and constant-answer loops, but they cannot prove semantic understanding, truthfulness, safety or human-like conversation. Human review remains mandatory for open-ended answers. A run with only one new validation evaluation after a dataset switch remains not ready.
+
+
 ## Q2-v2 production format and legacy archive compatibility
 
 All new exports use Q2-v2 normalized symbols {-1,-0.5,+0.5,+1}, with FP32 row scale 2 * mean(abs(original row)); an all-zero matrix row has scale zero. The packed runtime, Python fallback, depthwise convolution and native C++ ABI carry an explicit format version. Legacy Q2-v1 exports continue to decode under their original {-2,-1,+1,+2} table. The exact normative codebook, metadata and scale invariants are in docs/Q2_QUANTIZATION_SPEC.md.
