@@ -556,6 +556,76 @@ def test_addsub_repetition_penalty_applies_before_greedy_choice():
     assert _choose_next_token(logits,0.7,0,1.0,True,generated=[0],repetition_penalty=1.2)==2
 
 
+@pytest.mark.parametrize(
+    "legacy_format",
+    [
+        "qmini-addsub-training-v4",
+        "qmini-addsub-sft-v5",
+        "qmini-addsub-training-v3",
+        "qmini-addsub-sft-v4",
+        "qmini-addsub-sft-v3",
+        "qmini-addsub-sft-v2",
+    ],
+)
+def test_legacy_unscaled_checkpoints_keep_unit_quantization_scale(tmp_path, legacy_format):
+    from qmini_addsub.generate import load_addsub_model
+    from qmini_addsub.quantization import quantize_weight_ste, weight_scale
+
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=32,
+        d_hidden=48,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=32,
+        dropout=0.0,
+        seed=813,
+    )
+    torch.manual_seed(813)
+    original = AddSubLanguageModel(config)
+    checkpoint_path = tmp_path / f"{legacy_format}.pt"
+    torch.save(
+        {
+            "format": legacy_format,
+            "step": 10,
+            "config": config.to_dict(),
+            "model": original.state_dict(),
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_addsub_model(checkpoint_path, device_name="cpu")
+    matrix_parameters = [
+        parameter for parameter in loaded.parameters() if parameter.ndim >= 2
+    ]
+    assert matrix_parameters
+    for parameter in matrix_parameters:
+        assert float(weight_scale(parameter).item()) == pytest.approx(1.0)
+
+        # This is the legacy unscaled five-symbol threshold rule.
+        values = parameter.detach()
+        expected = torch.where(
+            values <= -1.0,
+            -1.5,
+            torch.where(
+                values <= -0.25,
+                -0.5,
+                torch.where(
+                    values <= 0.25,
+                    0.0,
+                    torch.where(values <= 1.0, 0.5, 1.5),
+                ),
+            ),
+        )
+        torch.testing.assert_close(
+            quantize_weight_ste(parameter).detach(),
+            expected,
+            rtol=0.0,
+            atol=0.0,
+        )
+
+
 def test_default_addsub_model_parameter_count_is_stable():
     model = AddSubLanguageModel(AddSubConfig())
     assert model.parameter_count() == 760340
