@@ -1976,3 +1976,21 @@ def test_self_paced_curriculum_resume_rejects_different_schedule():
     with pytest.raises(ValueError, match="uniform_fraction"):
         incompatible.load_state_dict(state)
 
+def test_self_paced_curriculum_supports_pure_uniform_control():
+    import random
+
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=12,
+        total_steps=8,
+        warmup_steps=1,
+        uniform_fraction=1.0,
+    )
+    rng = random.Random(123)
+    first, first_info = sampler.sample(4, rng)
+    sampler.update(first, [0.1, 0.3, 0.7, 1.1])
+    second, second_info = sampler.sample(4, rng)
+    assert first_info["mode"] == "uniform_control"
+    assert second_info["mode"] == "uniform_control"
+    assert len(set(second)) == 4
+    assert second_info["uniform_fraction"] == 1.0
+
