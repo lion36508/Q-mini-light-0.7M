@@ -13,7 +13,19 @@ from .sft import SFT_FORMAT, SYSTEM_TEXT
 from .train import CHECKPOINT_FORMAT, sha256_file
 
 
-RECOGNIZED_SFT_FORMATS = {SFT_FORMAT, "qmini-addsub-training-v4", "qmini-addsub-sft-v5", "qmini-addsub-sft-v4", "qmini-addsub-sft-v3", "qmini-addsub-sft-v2", "qmini-addsub-training-v3"}
+LEGACY_UNSCALED_CHECKPOINT_FORMATS = {
+    "qmini-addsub-training-v4",
+    "qmini-addsub-sft-v5",
+    "qmini-addsub-training-v3",
+    "qmini-addsub-sft-v4",
+    "qmini-addsub-sft-v3",
+    "qmini-addsub-sft-v2",
+}
+ACCEPTED_CHECKPOINT_FORMATS = {
+    CHECKPOINT_FORMAT,
+    SFT_FORMAT,
+    *LEGACY_UNSCALED_CHECKPOINT_FORMATS,
+}
 
 
 def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
@@ -223,12 +235,9 @@ def load_addsub_model(
     device = torch.device(device_name)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     checkpoint_format = checkpoint.get("format")
-    if (
-        checkpoint_format != CHECKPOINT_FORMAT
-        and checkpoint_format not in RECOGNIZED_SFT_FORMATS
-    ):
+    if checkpoint_format not in ACCEPTED_CHECKPOINT_FORMATS:
         raise ValueError(
-            "Only Q-Mini Add/Sub v1 pretraining or SFT checkpoints are accepted."
+            "Only recognized Q-Mini Add/Sub pretraining or SFT checkpoints are accepted."
         )
     if tokenizer_path is not None:
         tokenizer_file = Path(tokenizer_path)
@@ -243,6 +252,15 @@ def load_addsub_model(
     config = AddSubConfig.from_dict(checkpoint["config"])
     model = AddSubLanguageModel(config).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
+
+    # The pre-scaled v1/v2 checkpoints used fixed, unscaled codebook thresholds.
+    # Keep their reference behavior identical instead of silently applying the
+    # new per-tensor dynamic scale to their old FP32 master weights.
+    if checkpoint_format in LEGACY_UNSCALED_CHECKPOINT_FORMATS:
+        for parameter in model.parameters():
+            if parameter.ndim >= 2:
+                parameter._qmini_fixed_scale = 1.0
+
     model.eval()
     return model
 
