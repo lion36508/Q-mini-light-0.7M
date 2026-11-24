@@ -13,6 +13,7 @@ from qmini_addsub.data import (
     stable_split,
 )
 from qmini_addsub.model import AddSubLanguageModel, AddSubLinear, SparseTop1Experts
+from qmini_addsub.generate import _would_exceed_fourgram_repeat
 from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
@@ -27,6 +28,15 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from qmini_addsub.sft import ConversationDataset, _load_conversations
+
+
+
+def test_generation_stops_a_fourgram_phrase_before_a_fifth_repeat():
+    three_repeats = [1, 2, 3, 4] * 3
+    four_repeats = [1, 2, 3, 4] * 4
+    assert _would_exceed_fourgram_repeat(three_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(four_repeats, 1) is True
+    assert _would_exceed_fourgram_repeat([1, 2, 3], 9) is False
 
 
 def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
