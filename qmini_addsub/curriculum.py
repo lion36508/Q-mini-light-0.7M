@@ -57,6 +57,7 @@ class SelfPacedCurriculumSampler:
         self.ema_loss: list[float | None] = [None] * dataset_size
         self.update_count = [0] * dataset_size
         self.last_focus_quantile = self.start_quantile
+        self.uniform_remainder = 0.0
 
     def _focus_quantile(self) -> float:
         progress = (self.step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
@@ -72,25 +73,69 @@ class SelfPacedCurriculumSampler:
             raise TypeError("rng must be an instance of random.Random for exact resume.")
         self.step += 1
         seen = [index for index, value in enumerate(self.ema_loss) if value is not None]
-        if self.uniform_fraction >= 1.0:
-            selected = rng.sample(range(self.dataset_size), k=batch_size)
-            self.last_focus_quantile = self.start_quantile
-            return selected, {"mode": "uniform_control", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
-        if self.step <= self.warmup_steps:
-            selected = rng.sample(range(self.dataset_size), k=batch_size)
-            self.last_focus_quantile = self.start_quantile
-            return selected, {"mode": "uniform_warmup", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
-        if len(seen) < 2:
-            selected = rng.sample(range(self.dataset_size), k=batch_size)
-            self.last_focus_quantile = self.start_quantile
-            return selected, {"mode": "uniform_fallback", "focus_quantile": self.last_focus_quantile, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
 
-        ordered = sorted(seen, key=lambda index: self.ema_loss[index])
-        ranks = [0.5] * self.dataset_size
+        def uniform_batch(mode: str, focus_quantile: float | None = None) -> tuple[list[int], dict[str, Any]]:
+            self.last_focus_quantile = self.start_quantile if focus_quantile is None else focus_quantile
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            return selected, {
+                "mode": mode,
+                "focus_quantile": self.last_focus_quantile,
+                "uniform_fraction": 1.0,
+                "requested_uniform_fraction": self.uniform_fraction,
+                "uniform_samples": batch_size,
+                "focused_samples": 0,
+                "seen_fraction": len(seen) / self.dataset_size,
+            }
+
+        if self.uniform_fraction >= 1.0:
+            return uniform_batch("uniform_control")
+        if self.step <= self.warmup_steps:
+            return uniform_batch("uniform_warmup")
+
+        # Carry fractional replay quota across steps. This preserves the requested
+        # long-run fraction even for batch_size=1, without stochastic rounding drift.
+        replay_budget = self.uniform_remainder + batch_size * self.uniform_fraction
+        uniform_count = min(batch_size, int(math.floor(replay_budget + 1e-12)))
+        self.uniform_remainder = replay_budget - uniform_count
+        uniform_indices = rng.sample(range(self.dataset_size), k=uniform_count)
+        selected_set = set(uniform_indices)
+        focused_count = batch_size - uniform_count
+
+        if focused_count == 0:
+            self.last_focus_quantile = self._focus_quantile()
+            return uniform_indices, {
+                "mode": "self_paced_replay_only",
+                "focus_quantile": self.last_focus_quantile,
+                "uniform_fraction": uniform_count / batch_size,
+                "requested_uniform_fraction": self.uniform_fraction,
+                "uniform_samples": uniform_count,
+                "focused_samples": 0,
+                "seen_fraction": len(seen) / self.dataset_size,
+            }
+
+        # Never assign an artificial median difficulty to examples not evaluated yet.
+        # Focus only on records with real EMA response-loss measurements.
+        candidates = [index for index in seen if index not in selected_set]
+        if len(candidates) < focused_count:
+            remaining = [index for index in range(self.dataset_size) if index not in selected_set]
+            fill = rng.sample(remaining, k=focused_count)
+            selected = uniform_indices + fill
+            self.last_focus_quantile = self.start_quantile
+            return selected, {
+                "mode": "uniform_fallback",
+                "focus_quantile": self.last_focus_quantile,
+                "uniform_fraction": 1.0,
+                "requested_uniform_fraction": self.uniform_fraction,
+                "uniform_samples": batch_size,
+                "focused_samples": 0,
+                "seen_fraction": len(seen) / self.dataset_size,
+            }
+
+        ordered = sorted(candidates, key=lambda index: self.ema_loss[index])
+        ranks: dict[int, float] = {}
         denominator = max(1, len(ordered) - 1)
         cursor = 0
-        # Give ties their average rank so record index never becomes a fake
-        # difficulty signal when multiple examples have exactly equal EMA loss.
+        # Give ties their average rank so record order is not a fake difficulty signal.
         while cursor < len(ordered):
             end = cursor + 1
             current_loss = self.ema_loss[ordered[cursor]]
@@ -100,28 +145,43 @@ class SelfPacedCurriculumSampler:
             for position in range(cursor, end):
                 ranks[ordered[position]] = average_rank
             cursor = end
+
         target = self._focus_quantile()
         self.last_focus_quantile = target
         scores = [
-            math.exp(-0.5 * ((rank - target) / self.bandwidth) ** 2)
-            for rank in ranks
+            math.exp(-0.5 * ((ranks[index] - target) / self.bandwidth) ** 2)
+            for index in ordered
         ]
         score_total = sum(scores)
         if not math.isfinite(score_total) or score_total <= 0.0:
-            selected = rng.sample(range(self.dataset_size), k=batch_size)
-            return selected, {"mode": "uniform_fallback", "focus_quantile": target, "uniform_fraction": 1.0, "seen_fraction": len(seen) / self.dataset_size}
-        probabilities = [
-            self.uniform_fraction / self.dataset_size
-            + (1.0 - self.uniform_fraction) * score / score_total
-            for score in scores
-        ]
+            remaining = [index for index in range(self.dataset_size) if index not in selected_set]
+            fill = rng.sample(remaining, k=focused_count)
+            selected = uniform_indices + fill
+            return selected, {
+                "mode": "uniform_fallback",
+                "focus_quantile": target,
+                "uniform_fraction": 1.0,
+                "requested_uniform_fraction": self.uniform_fraction,
+                "uniform_samples": batch_size,
+                "focused_samples": 0,
+                "seen_fraction": len(seen) / self.dataset_size,
+            }
+
         generator = torch.Generator(device="cpu")
         generator.manual_seed(rng.randrange(0, 2**63 - 1))
-        weights = torch.tensor(probabilities, dtype=torch.float64)
-        indices = torch.multinomial(weights, batch_size, replacement=False, generator=generator)
-        selected = [int(index) for index in indices.tolist()]
-        return selected, {"mode": "self_paced", "focus_quantile": target, "uniform_fraction": self.uniform_fraction, "seen_fraction": len(seen) / self.dataset_size}
-
+        weights = torch.tensor(scores, dtype=torch.float64)
+        chosen_positions = torch.multinomial(weights, focused_count, replacement=False, generator=generator)
+        focused_indices = [ordered[int(position)] for position in chosen_positions.tolist()]
+        selected = uniform_indices + focused_indices
+        return selected, {
+            "mode": "self_paced",
+            "focus_quantile": target,
+            "uniform_fraction": uniform_count / batch_size,
+            "requested_uniform_fraction": self.uniform_fraction,
+            "uniform_samples": uniform_count,
+            "focused_samples": focused_count,
+            "seen_fraction": len(seen) / self.dataset_size,
+        }
     def update(self, indices: list[int], losses: list[float]) -> None:
         if len(indices) != len(losses):
             raise ValueError("indices and losses must have the same length.")
@@ -153,6 +213,7 @@ class SelfPacedCurriculumSampler:
             "ema_loss": self.ema_loss,
             "update_count": self.update_count,
             "last_focus_quantile": self.last_focus_quantile,
+            "uniform_remainder": self.uniform_remainder,
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -188,3 +249,12 @@ class SelfPacedCurriculumSampler:
         ):
             raise ValueError("Curriculum checkpoint contains an invalid focus quantile.")
         self.last_focus_quantile = float(last_focus_quantile)
+        uniform_remainder = state.get("uniform_remainder", 0.0)
+        if (
+            isinstance(uniform_remainder, bool)
+            or not isinstance(uniform_remainder, (int, float))
+            or not math.isfinite(uniform_remainder)
+            or not 0.0 <= uniform_remainder < 1.0
+        ):
+            raise ValueError("Curriculum checkpoint contains an invalid uniform replay remainder.")
+        self.uniform_remainder = float(uniform_remainder)
