@@ -31,6 +31,6 @@ Optional WaveBit-HSRA is an opt-in experimental mode inside Add/Sub, disabled by
 - Preserve legacy artifacts during any repository migration.
 - Treat test fixtures and random-initialization smoke runs as software verification, not trained-model evidence.
 
-## Explicit non-goals for this Light repository
+## Runtime boundary
 
-There are no active 5M, 134M, 152M, 853M, 5B or 20B training targets here. There is no implemented distributed 5B trainer, no complete integer-only Add/Sub runtime and no verified Android performance claim. Capacity estimates are not models and model size is not evidence of capability.
+The legacy packed runtime and the Add/Sub reference runtime have different arithmetic contracts. Neither the current Add/Sub archive nor ARM64 cross-compilation proves a complete integer-only Android model. Real-device memory, speed and thermal behavior require measurements on the actual device.
