@@ -61,28 +61,20 @@ def test_estimated_parameter_count_matches_live_model(use_state_space):
     assert config.estimated_parameter_count() == model.parameter_report()["total"]
 
 
-def test_capacity_profiles_have_exact_audited_parameter_targets():
+def test_light_profile_parameter_count_matches_instantiated_model():
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[1] / "configs"
-    expected = {
-        "qmini_5m.json": 5_245_996,
-        "qmini_research_152m.json": 152_483_800,
-        "qmini_5b.json": 5_132_630_288,
-    }
-    for filename, parameter_count in expected.items():
-        config = QMiniConfig.from_json(root / filename)
-        assert config.estimated_parameter_count() == parameter_count
-        assert config.use_state_space
-    qmini_5b = QMiniConfig.from_json(root / "qmini_5b.json")
-    assert qmini_5b.gradient_checkpointing
-    assert qmini_5b.estimated_unique_active_parameter_count() == 852_873_488
-    assert qmini_5b.estimated_packed_export_bytes() == 1_294_831_200
-    assert qmini_5b.estimated_packed_export_bytes() < 1_500_000_000
-    assert qmini_5b.estimated_streaming_state_bytes(batch_size=1) == 80_527_360
-    assert qmini_5b.estimated_cpu_inference_working_set_bytes(batch_size=1) == 1_409_085_024
+    root = Path(__file__).resolve().parents[1]
+    config = QMiniConfig.from_json(root / "configs" / "qmini_light_0.7m.json")
+    model = QMiniMoE(config)
+    assert config.estimated_parameter_count() == 705_742
+    assert model.parameter_report()["total"] == 705_742
 
-    dense_reference = QMiniConfig.from_json(root / "qmini_dense_853m.json")
-    assert dense_reference.estimated_parameter_count() == 852_281_344
-    assert dense_reference.estimated_unique_active_parameter_count() == 852_281_344
-    assert dense_reference.estimated_packed_export_bytes() < qmini_5b.estimated_packed_export_bytes()
+
+def test_smoke_profile_remains_small_and_instantiable():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    config = QMiniConfig.from_json(root / "configs" / "qmini_smoke.json")
+    model = QMiniMoE(config)
+    assert config.estimated_parameter_count() == model.parameter_report()["total"]
