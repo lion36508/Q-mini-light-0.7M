@@ -307,13 +307,58 @@ class SparseTop1Experts(nn.Module):
         super().__init__()
         self.n_experts = config.n_experts
         self.router_z_loss_coef = config.router_z_loss_coef
+        self.loss_free_bias_update_rate = float(config.moe_bias_update_rate)
+        self.loss_free_bias_max_abs = float(config.moe_bias_max_abs)
         self.wavebit_options = validate_wavebit_options(wavebit_options)
+        if config.moe_loss_free_bias:
+            self.register_buffer(
+                "loss_free_router_bias", torch.zeros(config.n_experts)
+            )
+        else:
+            self.register_buffer("loss_free_router_bias", None)
         self.router = AddSubLinear(
             config.d_model, config.n_experts, wavebit_options=wavebit_options
         )
         self.experts = nn.ModuleList(
             [SwiGLUExpert(config, wavebit_options=wavebit_options) for _ in range(config.n_experts)]
         )
+
+    @torch.no_grad()
+    def update_loss_free_bias(self, observed_load: torch.Tensor) -> bool:
+        """Move non-gradient routing bias toward under-used experts.
+
+        Call once after the optimizer step with this layer's valid-token load
+        fractions. The bias affects top-1 selection only; router probabilities
+        used to weight expert outputs remain un-biased.
+        """
+        if self.loss_free_router_bias is None:
+            return False
+        if not self.training:
+            raise RuntimeError("Loss-free router bias may only update in training mode.")
+        if not isinstance(observed_load, torch.Tensor):
+            raise TypeError("observed_load must be a tensor.")
+        if observed_load.shape != (self.n_experts,):
+            raise ValueError("observed_load must have one value per expert.")
+        load = observed_load.detach().to(
+            device=self.loss_free_router_bias.device, dtype=torch.float32
+        )
+        if not bool(torch.isfinite(load).all()) or bool((load < 0).any()):
+            raise ValueError("observed_load must be finite and non-negative.")
+        total = load.sum()
+        if not bool(total > 0):
+            raise ValueError("observed_load must contain at least one routed token.")
+        load = load / total
+        target = 1.0 / self.n_experts
+        direction = torch.where(
+            load < target, torch.ones_like(load),
+            torch.where(load > target, -torch.ones_like(load), torch.zeros_like(load)),
+        )
+        self.loss_free_router_bias.add_(direction * self.loss_free_bias_update_rate)
+        self.loss_free_router_bias.clamp_(
+            min=-self.loss_free_bias_max_abs,
+            max=self.loss_free_bias_max_abs,
+        )
+        return bool(torch.count_nonzero(direction).item())
 
     def forward(
         self,
@@ -322,8 +367,11 @@ class SparseTop1Experts(nn.Module):
         context: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         logits = self.router(inputs, context=context).float()
+        routing_logits = logits
+        if self.loss_free_router_bias is not None:
+            routing_logits = logits + self.loss_free_router_bias.to(logits.dtype)
         probabilities = torch.softmax(logits, dim=-1)
-        selected = torch.argmax(logits, dim=-1)
+        selected = torch.argmax(routing_logits, dim=-1)
         selected_probability = probabilities.gather(-1, selected.unsqueeze(-1))
 
         flat_logits = logits.reshape(-1, self.n_experts)
@@ -584,6 +632,18 @@ class AddSubLanguageModel(nn.Module):
             # [layer, expert], with each row summing to one. Diagnostic only.
             "router_load": torch.stack(router_loads),
         }
+
+    @torch.no_grad()
+    def update_loss_free_router_bias(self, router_load: torch.Tensor) -> bool:
+        """Apply one post-optimizer-step bias update to each layer."""
+        if router_load.shape != (self.config.n_layers, self.config.n_experts):
+            raise ValueError("router_load must have shape [n_layers, n_experts].")
+        if not bool(torch.isfinite(router_load).all()) or bool((router_load < 0).any()):
+            raise ValueError("router_load must be finite and non-negative.")
+        changed = False
+        for layer_index, block in enumerate(self.blocks):
+            changed = block.experts.update_loss_free_bias(router_load[layer_index]) or changed
+        return changed
 
     def init_cache(
         self,
