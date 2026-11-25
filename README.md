@@ -35,9 +35,9 @@ See [Colab entry points](colab/README.md) and [Add/Sub implementation notes](qmi
 
 ## Scope and non-claims
 
-This repository does not contain a verified trained 5M, 134M, 152M, 853M, 5B or 20B model. Capacity-only profiles for those sizes are intentionally not part of the Light project. CI uses tiny synthetic fixtures to verify code paths; CI success is not evidence of assistant quality.
+The active configuration set is limited to the legacy Light profile and the small CI smoke profile. Parameter count alone does not establish training progress or assistant capability.
 
-Do not claim general reasoning, factuality, Android deployment, complete integer-only inference, or speed gains without matched, held-out evaluation and measurements on the target device. No training runs are launched by CI.
+Do not claim general reasoning, factuality, Android deployment, complete integer-only inference or speed gains without independent held-out evaluation and measurements on the target device. CI does not launch full training.
 
 ## Development
 
