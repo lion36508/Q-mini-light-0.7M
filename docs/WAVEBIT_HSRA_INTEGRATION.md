@@ -113,8 +113,11 @@ The older qmini_octave_linear_i8_v1/v2 half-unit ABI remains unchanged.
 The dot-product accumulation itself uses integer add/sub/left-shift operations;
 however, the final group-scale and activation-scale composition is FP32 and
 uses multiplication. The new API is therefore scale-aware, not a claim of a
-fully multiplication-free inference runtime. It is also not yet connected to
-all Add/Sub model layers or the generation loop.
+fully multiplication-free inference runtime. Its current grouped accumulator
+is scalar C++; ARM64 cross-compilation verifies build compatibility, not
+NEON execution or target-device speed. A groupwise NEON optimization remains
+future work. The API is also not yet connected to all Add/Sub model layers or
+the generation loop.
 
 ## Explicit limitations
 
