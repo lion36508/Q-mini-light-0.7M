@@ -76,6 +76,8 @@ class NativeKernel:
             raise TypeError("activations_i8 must be a non-empty 2-D int8 array.")
         if raw_stream.dtype != np.uint8 or raw_stream.ndim != 1:
             raise TypeError("packed_stream must already be a 1-D uint8 array.")
+        if raw_stream.size > np.iinfo(np.int32).max:
+            raise ValueError("packed_stream exceeds the native ABI size limit.")
         if raw_offsets.dtype.kind not in "iu" or raw_offsets.ndim != 1:
             raise TypeError("row_offsets must be a 1-D integer array.")
         if raw_offsets.size < 2:

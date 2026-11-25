@@ -62,13 +62,16 @@ original path. A baseline run remains available by omitting `--wavebit-hsra`.
 - PyTorch training still uses floating-point autograd and dense operators.
   This integration is not a zero-float runtime and makes no 3x speed claim.
 - The 256-entry Octave LUT decodes a byte into three signed half-unit
-  coefficients. The integer reference uses lookup, add, subtract and left
-  shifts, returning half-unit accumulators before separately stored scales.
-- This is an L1-resident software lookup table, not a single ARM NEON TBL
+  coefficients. Both the Python integer reference and the
+  `qmini_octave_linear_i8_v1` C++ ABI use lookup, add, subtract and shifts,
+  returning half-unit accumulators before separately stored scales are applied.
+- The C++ ABI includes an 8-lane ARM NEON shift/add path and a scalar fallback.
+  Its output is not yet wired into the complete Add/Sub generation runtime;
+  native-versus-Python projection parity is tested separately.
+- This is a small L1-friendly software lookup table, not a single ARM NEON TBL
   instruction; the NEON TBL table operand is limited to four 16-byte vectors.
-- The integer projection and rotation functions are reference primitives,
-  not the complete native model. ARM64/x86 kernels and end-to-end fixed-point
-  parity still need separate implementation and benchmarks.
+- End-to-end fixed-point scale application, normalization, gates, SSM and
+  output requantization still require integration and target-device benchmarks.
 - The current packed archive is per-tensor scaled. WaveBit uses group-wise
   scales, so the legacy exporter rejects WaveBit checkpoints rather than
   silently writing incorrect packed weights. A versioned group-wise archive

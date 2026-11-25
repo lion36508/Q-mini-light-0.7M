@@ -368,7 +368,7 @@ def test_native_octave_projection_accepts_integer_bias_and_rejects_bad_types(
     )
     np.testing.assert_array_equal(actual, expected)
 
-    with pytest.raises(TypeError, match="already a 1-D uint8"):
+    with pytest.raises(TypeError, match="already be a 1-D uint8"):
         native.octave_linear(activations, packed.astype(np.int16), offsets)
 
 

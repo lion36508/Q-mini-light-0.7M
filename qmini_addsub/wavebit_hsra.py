@@ -462,35 +462,6 @@ class _EWGSQuantize(torch.autograd.Function):
         return grad_output * factor, None, None, None, None
 
 
-def wavebit_quantize(
-    weight: torch.Tensor,
-    group_size: int = 32,
-    ewgs_strength: float = 0.5,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Decode the existing five stored symbols as polarity p and phase bit g.
-
-    One master parameter per connection is retained. No model parameters are
-    added for the phase bit, group scales or the holographic state.
-    """
-    if not 0.0 <= ewgs_strength <= 2.0 or not math.isfinite(ewgs_strength):
-        raise ValueError("ewgs_strength must be finite and in [0, 2].")
-    scale = groupwise_scale(weight, group_size=group_size)
-    normalized = weight / scale
-    hard_normalized = _hard_five_symbol(normalized)
-    hard_value = hard_normalized * scale
-    quantized = _EWGSQuantize.apply(
-        weight, hard_value, normalized.detach(), hard_normalized.detach(), ewgs_strength
-    )
-    normalized_surrogate = quantized / scale
-    polarity_hard = torch.sign(hard_normalized)
-    polarity_soft = torch.tanh(normalized_surrogate)
-    polarity = polarity_hard.detach() + polarity_soft - polarity_soft.detach()
-    phase_hard = (hard_normalized.abs() > 1.0).to(weight.dtype)
-    phase_soft = torch.sigmoid((normalized_surrogate.abs() - 1.0) * 4.0)
-    phase = phase_hard.detach() + phase_soft - phase_soft.detach()
-    return quantized, polarity, phase, scale
-
-
 def wavebit_context_gain(context: torch.Tensor) -> torch.Tensor:
     """Hard forward gains {0.5, 1, 2} with a smooth differentiable surrogate."""
     hard = torch.where(
