@@ -38,7 +38,10 @@ def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
     missing = [token for token, token_id in values.items() if token_id is None]
     if missing:
         raise ValueError(f"Tokenizer is missing required control tokens: {missing}")
-    return {token: int(token_id) for token, token_id in values.items()}
+    normalized = {token: int(token_id) for token, token_id in values.items()}
+    if len(set(normalized.values())) != len(normalized):
+        raise ValueError("Tokenizer control token IDs must be unique.")
+    return normalized
 
 
 def build_chat_prompt(
@@ -48,9 +51,15 @@ def build_chat_prompt(
     system_text: str = SYSTEM_TEXT,
 ) -> list[int]:
     """Encode chat turns, dropping old exchanges before trimming the current prompt."""
+    if isinstance(max_context, bool) or not isinstance(max_context, int):
+        raise TypeError("max_context must be an integer.")
     if max_context < 8:
         raise ValueError("max_context must be at least 8 tokens.")
-    if not messages or messages[-1].get("role") != "user":
+    if not isinstance(system_text, str):
+        raise TypeError("system_text must be a string.")
+    if not isinstance(messages, (list, tuple)) or not messages:
+        raise ValueError("messages must be a non-empty list or tuple.")
+    if messages[-1].get("role") != "user":
         raise ValueError("Chat history must end with a user message.")
     if messages[0].get("role") != "user":
         raise ValueError("Chat history must start with a user message.")
@@ -59,6 +68,8 @@ def build_chat_prompt(
     segments: list[list[int]] = []
     previous_role = None
     for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise ValueError(f"Invalid chat message at index {index}: expected an object.")
         role = message.get("role")
         content = message.get("content")
         if role not in {"user", "assistant"} or not isinstance(content, str):

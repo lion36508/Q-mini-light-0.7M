@@ -74,3 +74,42 @@ def test_top_k_keeps_exact_number_of_tokens_when_scores_tie(monkeypatch):
     _choose_next_token(torch.ones(8), 1.0, top_k=3, top_p=1.0, greedy=False)
 
     assert int(torch.count_nonzero(captured["probabilities"])) == 3
+
+
+def test_chat_prompt_rejects_duplicate_control_token_ids():
+    class DuplicateControlTokenizer(_TinyPromptTokenizer):
+        def token_to_id(self, token):
+            if token == "<|end|>":
+                return self._ids["<eos>"]
+            return super().token_to_id(token)
+
+    with pytest.raises(ValueError, match="control token IDs must be unique"):
+        build_chat_prompt(
+            DuplicateControlTokenizer(),
+            [{"role": "user", "content": "Hi"}],
+            max_context=64,
+        )
+
+
+def test_chat_prompt_validates_container_and_context_types():
+    tokenizer = _TinyPromptTokenizer()
+    with pytest.raises(ValueError, match="non-empty list or tuple"):
+        build_chat_prompt(tokenizer, None, max_context=64)
+    with pytest.raises(TypeError, match="max_context must be an integer"):
+        build_chat_prompt(
+            tokenizer, [{"role": "user", "content": "Hi"}], max_context=64.0
+        )
+    with pytest.raises(TypeError, match="system_text must be a string"):
+        build_chat_prompt(
+            tokenizer, [{"role": "user", "content": "Hi"}],
+            max_context=64, system_text=None,
+        )
+
+
+def test_chat_prompt_rejects_non_object_messages():
+    with pytest.raises(ValueError, match="expected an object"):
+        build_chat_prompt(
+            _TinyPromptTokenizer(),
+            ["not a message object"],
+            max_context=64,
+        )
