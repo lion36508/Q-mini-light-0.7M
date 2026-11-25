@@ -1817,3 +1817,66 @@ def test_addsub_v2_router_and_residual_coefficients_are_validated():
         AddSubConfig(moe_balance_coef=-0.1).validate()
     with pytest.raises(ValueError, match="router_z_loss_coef"):
         AddSubConfig(router_z_loss_coef=float("inf")).validate()
+
+
+def test_addsub_checkpoint_discovery_uses_numeric_order_and_rejects_ambiguous_names(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    older = tmp_path / "checkpoint-step-9.pt"
+    newer = tmp_path / "checkpoint-step-10.pt"
+    older.touch()
+    newer.touch()
+    assert latest_checkpoint(tmp_path, "checkpoint") == (newer, 10)
+
+    duplicate = tmp_path / "checkpoint-step-000000010.pt"
+    duplicate.touch()
+    with pytest.raises(ValueError, match="duplicate numeric checkpoint step"):
+        latest_checkpoint(tmp_path, "checkpoint")
+
+
+def test_addsub_checkpoint_discovery_fails_closed_on_malformed_or_metrics_only_output(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    malformed = tmp_path / "checkpoint-step-final.pt"
+    malformed.touch()
+    with pytest.raises(ValueError, match="malformed checkpoint filename"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl")
+
+    malformed.unlink()
+    (tmp_path / "metrics.jsonl").write_text('{"step": 1}\\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="metrics file exists but no checkpoint"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl")
+
+
+def test_addsub_checkpoint_resume_selects_latest_and_rejects_older_explicit_checkpoint(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    first = tmp_path / "checkpoint-step-000000001.pt"
+    latest = tmp_path / "checkpoint-step-000000012.pt"
+    first.touch()
+    latest.touch()
+    assert resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl") == (latest, 12)
+    with pytest.raises(ValueError, match="newer checkpoint"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl", explicit=first)
+
+
+def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
+    import json
+
+    notebook_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab"
+        / "QMini_AddSub_V1_From_Scratch.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = "\\n".join(
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    assert "from qmini_addsub.checkpoints import resolve_checkpoint" in code
+    assert "Automatically resuming pretraining" in code
+    assert "Automatically resuming assistant SFT" in code
+    assert "metrics_filename='metrics.jsonl'" in code
+    assert "sorted(PRETRAIN_DIR.glob" not in code
+    assert "sorted(SFT_DIR.glob" not in code
