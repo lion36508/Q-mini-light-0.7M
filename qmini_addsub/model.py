@@ -54,6 +54,7 @@ class AddSubLinear(nn.Linear):
             context,
             group_size=options["group_size"],
             ewgs_strength=options["ewgs_strength"],
+            octave_temperature=options["octave_temperature"],
         )
 
 
@@ -99,6 +100,7 @@ class CausalConvMixer(nn.Module):
             dilation=self.dilation,
             group_size=options["group_size"],
             ewgs_strength=options["ewgs_strength"],
+            octave_temperature=options["octave_temperature"],
         )
 
     def forward(
@@ -535,6 +537,7 @@ class AddSubLanguageModel(nn.Module):
                 self.token_embedding.weight,
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
+                octave_temperature=self.wavebit_options["octave_temperature"],
             )[0]
         hidden = F.embedding(input_ids, embedding_weight)
         balance_losses = []
@@ -562,6 +565,7 @@ class AddSubLanguageModel(nn.Module):
                 final_context,
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
+                octave_temperature=self.wavebit_options["octave_temperature"],
             )
         return {
             "logits": logits,
@@ -639,6 +643,7 @@ class AddSubLanguageModel(nn.Module):
                 self.token_embedding.weight,
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
+                octave_temperature=self.wavebit_options["octave_temperature"],
             )[0]
         hidden = F.embedding(input_ids, embedding_weight).unsqueeze(1)
         updated_caches = []
@@ -661,6 +666,7 @@ class AddSubLanguageModel(nn.Module):
                 final_context[:, 0, :],
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
+                octave_temperature=self.wavebit_options["octave_temperature"],
             )
         return logits, updated_caches
 

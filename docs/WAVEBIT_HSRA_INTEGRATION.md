@@ -7,11 +7,14 @@ track and its files are not modified.
 
 ## What is integrated
 
-- Group-wise scales are computed from existing master weights in blocks of 32;
-  no trainable scale parameters are added.
-- The five existing stored weight symbols are decoded into static polarity
-  and a phase-sensitivity bit. The phase bit is decoded from the same master
-  parameter, not stored as a second tensor.
+- Group-wise scales are computed in aligned blocks of 30 weights; no trainable
+  scale parameters are added.
+- Octave-Shift uses base levels `{-1, -0.5, 0, +0.5, +1}`. Each triplet shares
+  one mode bit that boosts all three weights by four.
+- The packed payload costs 8 bits per three weights (2.667 bits/weight),
+  before scale metadata, headers, row offsets or alignment.
+- Codes 250..254 skip 4/8/16/32/64 all-zero triplet-groups; 255 is followed by
+  an extended skip count. The skip units are groups of three weights.
 - Bounded EWGS-style gradients are used by the WaveBit training surrogate.
 - Each existing Add/Sub block gets a parameter-free fixed-width holographic
   rotation state. Its per-token context modulates its linear projections,
@@ -44,10 +47,11 @@ python -m qmini_addsub.train \
   --output runs/qmini_addsub_wavebit \
   --device cpu \
   --wavebit-hsra \
-  --wavebit-group-size 32 \
+  --wavebit-group-size 30 \
   --wavebit-rotation 1 \
   --wavebit-gamma 4 \
-  --wavebit-ewgs-strength 0.5
+  --wavebit-ewgs-strength 0.5 \
+  --wavebit-octave-temperature 0.25
 ```
 
 The mode remains opt-in while it is being scientifically compared with the
@@ -57,6 +61,11 @@ original path. A baseline run remains available by omitting `--wavebit-hsra`.
 
 - PyTorch training still uses floating-point autograd and dense operators.
   This integration is not a zero-float runtime and makes no 3x speed claim.
+- The 256-entry Octave LUT decodes a byte into three signed half-unit
+  coefficients. The integer reference uses lookup, add, subtract and left
+  shifts, returning half-unit accumulators before separately stored scales.
+- This is an L1-resident software lookup table, not a single ARM NEON TBL
+  instruction; the NEON TBL table operand is limited to four 16-byte vectors.
 - The integer projection and rotation functions are reference primitives,
   not the complete native model. ARM64/x86 kernels and end-to-end fixed-point
   parity still need separate implementation and benchmarks.
@@ -66,8 +75,12 @@ original path. A baseline run remains available by omitting `--wavebit-hsra`.
   and full integer runtime are a later gate.
 - The capacitor-charge helper is not active in AdamW training; it must be
   evaluated as a separate optimizer ablation before activation.
+- One shared mode bit cannot independently boost one weight within a triplet;
+  independent nine-level choices for three weights require at least 10 bits.
+- Skip savings occur only for clustered all-zero triplet-groups and are not
+  guaranteed for dense/non-zero weight distributions.
 - Validation-loss, held-out English quality, latency, energy and memory
-  comparisons against baseline have not yet been run.
+  comparisons against ternary and previous Add/Sub baselines have not yet run.
 
 The existing Add/Sub model remains the single zero-inclusive evolving model.
 All WaveBit additions are implemented inside that model path, not alongside it.

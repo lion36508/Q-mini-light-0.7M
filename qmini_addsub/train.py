@@ -477,10 +477,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261119)
     parser.add_argument("--wavebit-hsra", action="store_true",
                         help="Enable WaveBit-HSRA in the existing Add/Sub model (experimental).")
-    parser.add_argument("--wavebit-group-size", type=int, default=32)
+    parser.add_argument("--wavebit-group-size", type=int, default=30)
     parser.add_argument("--wavebit-rotation", type=int, default=1)
     parser.add_argument("--wavebit-gamma", type=int, default=4)
     parser.add_argument("--wavebit-ewgs-strength", type=float, default=0.5)
+    parser.add_argument("--wavebit-octave-temperature", type=float, default=0.25)
     args = parser.parse_args()
     config = None
     if args.config is not None:
@@ -509,6 +510,7 @@ def main() -> None:
                 "rotation": args.wavebit_rotation,
                 "gamma": args.wavebit_gamma,
                 "ewgs_strength": args.wavebit_ewgs_strength,
+                "octave_temperature": args.wavebit_octave_temperature,
             }
             if args.wavebit_hsra else None
         ),

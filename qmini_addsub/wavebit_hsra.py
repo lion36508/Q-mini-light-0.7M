@@ -14,15 +14,20 @@ import torch
 import torch.nn.functional as F
 
 
-WEIGHT_LEVELS = (-1.5, -0.5, 0.0, 0.5, 1.5)
+OCTAVE_BASE_LEVELS = (-1.0, -0.5, 0.0, 0.5, 1.0)
+OCTAVE_SKIP_TRIPLES = {250: 4, 251: 8, 252: 16, 253: 32, 254: 64}
+OCTAVE_ESCAPE_CODE = 255
+
+# Compatibility constants for the earlier isolated WaveBit integer reference.
 POLARITY_BY_CODE = (-1, -1, 0, 1, 1)
 PHASE_BY_CODE = (1, 0, 0, 0, 1)
 
 DEFAULT_WAVEBIT_OPTIONS = {
-    "group_size": 32,
+    "group_size": 30,
     "rotation": 1,
     "gamma": 4,
     "ewgs_strength": 0.5,
+    "octave_temperature": 0.25,
     "context_threshold": 0.5,
     "context_temperature": 0.75,
     "state_limit": 16.0,
@@ -38,14 +43,17 @@ def validate_wavebit_options(options: dict[str, Any] | None) -> dict[str, Any] |
     if unknown:
         raise ValueError(f"Unknown WaveBit-HSRA options: {sorted(unknown)}")
     result = {**DEFAULT_WAVEBIT_OPTIONS, **options}
-    if isinstance(result["group_size"], bool) or not isinstance(result["group_size"], int) or result["group_size"] < 1:
-        raise ValueError("WaveBit group_size must be a positive integer.")
+    if isinstance(result["group_size"], bool) or not isinstance(result["group_size"], int) or result["group_size"] < 3 or result["group_size"] % 3:
+        raise ValueError("Octave-Shift group_size must be a positive multiple of three.")
     if isinstance(result["gamma"], bool) or not isinstance(result["gamma"], int) or not 1 <= result["gamma"] <= 15:
         raise ValueError("WaveBit gamma must be an integer in [1, 15].")
     if isinstance(result["rotation"], bool) or not isinstance(result["rotation"], int):
         raise ValueError("WaveBit rotation must be an integer.")
     if not math.isfinite(float(result["ewgs_strength"])) or not 0.0 <= float(result["ewgs_strength"]) <= 2.0:
         raise ValueError("WaveBit ewgs_strength must be finite and in [0, 2].")
+    if not math.isfinite(float(result["octave_temperature"])) or float(result["octave_temperature"]) <= 0.0:
+        raise ValueError("Octave-Shift temperature must be finite and positive.")
+    result["octave_temperature"] = float(result["octave_temperature"])
     for key in ("context_threshold", "context_temperature", "state_limit"):
         value = float(result[key])
         if not math.isfinite(value) or value <= 0.0:
@@ -77,14 +85,365 @@ def groupwise_scale(weight: torch.Tensor, group_size: int = 32, multiplier: floa
     return scaled.reshape_as(weight).detach()
 
 
-def _hard_five_symbol(normalized: torch.Tensor) -> torch.Tensor:
-    x = normalized.clamp(-1.5, 1.5)
+def _hard_octave_symbol(normalized: torch.Tensor) -> torch.Tensor:
+    """Five base levels with symmetric nearest-neighbour decision boundaries."""
+    x = normalized.clamp(-1.0, 1.0)
     return torch.where(
-        x <= -1.0, -1.5,
-        torch.where(x <= -0.25, -0.5,
+        x <= -0.75, -1.0,
+        torch.where(x < -0.25, -0.5,
                     torch.where(x <= 0.25, 0.0,
-                                torch.where(x <= 1.0, 0.5, 1.5))),
+                                torch.where(x < 0.75, 0.5, 1.0))),
     )
+
+
+def octave_shift_quantize(
+    weight: torch.Tensor,
+    group_size: int = 30,
+    ewgs_strength: float = 0.5,
+    octave_temperature: float = 0.25,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Five base symbols plus one shared x4 mode bit per three-weight group."""
+    if not isinstance(weight, torch.Tensor) or not weight.is_floating_point():
+        raise TypeError("Octave-Shift weights must be floating-point tensors.")
+    if weight.ndim < 2 or weight.numel() == 0:
+        raise ValueError("Octave-Shift weights must have at least two non-empty dimensions.")
+    if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 3 or group_size % 3:
+        raise ValueError("Octave-Shift group_size must be a positive multiple of three.")
+    if not math.isfinite(ewgs_strength) or not 0.0 <= ewgs_strength <= 2.0:
+        raise ValueError("ewgs_strength must be finite and in [0, 2].")
+    if not math.isfinite(octave_temperature) or octave_temperature <= 0.0:
+        raise ValueError("octave_temperature must be finite and positive.")
+    if not bool(torch.isfinite(weight).all()):
+        raise ValueError("Octave-Shift weights contain non-finite values.")
+
+    scale = groupwise_scale(weight, group_size=group_size)
+    rows = weight.shape[0]
+    flat_weight = weight.reshape(rows, -1)
+    flat_scale = scale.reshape(rows, -1)
+    features = flat_weight.shape[1]
+    padding = (-features) % 3
+    if padding:
+        flat_weight = torch.cat(
+            (flat_weight, flat_weight.new_zeros((rows, padding))), dim=1
+        )
+        flat_scale = torch.cat(
+            (flat_scale, flat_scale[:, -1:].expand(-1, padding)), dim=1
+        )
+
+    normalized = flat_weight / flat_scale
+    grouped = normalized.reshape(rows, -1, 3)
+    normal_hard = _hard_octave_symbol(grouped)
+    boost_base_hard = _hard_octave_symbol(grouped / 4.0)
+    boost_hard = boost_base_hard * 4.0
+
+    normal_error = (grouped - normal_hard).square().sum(dim=-1)
+    boost_error = (grouped - boost_hard).square().sum(dim=-1)
+    boost_hard_mode = boost_error < normal_error
+    boost_soft_mode = torch.sigmoid(
+        (normal_error - boost_error) / float(octave_temperature)
+    )
+    boost_mode_ste = (
+        boost_hard_mode.to(weight.dtype).detach()
+        + boost_soft_mode
+        - boost_soft_mode.detach()
+    )
+
+    normal_q = _EWGSQuantize.apply(
+        flat_weight,
+        normal_hard.reshape(rows, -1) * flat_scale,
+        normalized.detach(),
+        normal_hard.reshape(rows, -1).detach(),
+        ewgs_strength,
+    )
+    boost_q = _EWGSQuantize.apply(
+        flat_weight,
+        boost_hard.reshape(rows, -1) * flat_scale,
+        normalized.detach(),
+        boost_hard.reshape(rows, -1).detach(),
+        ewgs_strength,
+    )
+    normal_q = normal_q.reshape(rows, -1, 3)
+    boost_q = boost_q.reshape(rows, -1, 3)
+    selected = normal_q + boost_mode_ste.unsqueeze(-1) * (boost_q - normal_q)
+    quantized = selected.reshape(rows, -1)[:, :features].reshape_as(weight)
+
+    selected_base = torch.where(
+        boost_hard_mode.unsqueeze(-1), boost_base_hard, normal_hard
+    )
+    levels = weight.new_tensor(OCTAVE_BASE_LEVELS)
+    symbol_codes = (selected_base.unsqueeze(-1) - levels).abs().argmin(dim=-1)
+    symbol_codes = symbol_codes.reshape(rows, -1)[:, :features].to(torch.uint8)
+    return quantized, symbol_codes, boost_hard_mode, scale
+
+
+def wavebit_quantize(
+    weight: torch.Tensor,
+    group_size: int = 30,
+    ewgs_strength: float = 0.5,
+    octave_temperature: float = 0.25,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compatibility entry point; the active weight quantizer is Octave-Shift."""
+    return octave_shift_quantize(
+        weight, group_size=group_size,
+        ewgs_strength=ewgs_strength,
+        octave_temperature=octave_temperature,
+    )
+
+
+def pack_octave_triplets(
+    symbol_codes: np.ndarray,
+    boost_modes: np.ndarray,
+) -> tuple[np.ndarray, tuple[int, int]]:
+    """Three base-5 symbol codes plus one shared mode bit fit in one byte."""
+    codes = np.asarray(symbol_codes)
+    modes = np.asarray(boost_modes)
+    if codes.dtype.kind not in "iu" or codes.ndim != 2 or min(codes.shape) < 1:
+        raise TypeError("Octave symbol_codes must be a non-empty 2-D integer array.")
+    if modes.dtype.kind not in "biu" or modes.ndim != 2:
+        raise TypeError("Octave boost_modes must be a 2-D boolean/integer array.")
+    if np.any(codes < 0) or np.any(codes > 4) or np.any(modes < 0) or np.any(modes > 1):
+        raise ValueError("Octave symbols must be [0,4] and boost modes must be [0,1].")
+    rows, features = codes.shape
+    triples = (features + 2) // 3
+    if modes.shape != (rows, triples):
+        raise ValueError("Octave boost_modes must contain one flag per three-weight group.")
+    padded = np.full((rows, triples * 3), 2, dtype=np.uint8)
+    padded[:, :features] = codes.astype(np.uint8)
+    packed = (
+        padded[:, 0::3].astype(np.uint16)
+        + 5 * padded[:, 1::3].astype(np.uint16)
+        + 25 * padded[:, 2::3].astype(np.uint16)
+        + 125 * modes.astype(np.uint16)
+    )
+    if np.any(packed > 249):
+        raise AssertionError("Octave payload collided with a reserved control code.")
+    return packed.astype(np.uint8), (rows, features)
+
+
+def unpack_octave_triplets(
+    packed: np.ndarray,
+    original_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode fixed-width triplets; reserved control bytes need the stream decoder."""
+    payload = np.asarray(packed)
+    if payload.dtype.kind not in "iu" or payload.ndim != 2:
+        raise TypeError("Packed Octave payload must be a 2-D integer array.")
+    if len(original_shape) != 2 or min(original_shape) < 1:
+        raise ValueError("original_shape must contain positive dimensions.")
+    rows, features = map(int, original_shape)
+    triples = (features + 2) // 3
+    if payload.shape != (rows, triples) or np.any(payload < 0) or np.any(payload > 249):
+        raise ValueError("Packed payload shape is wrong or contains reserved control bytes.")
+    base = payload.astype(np.uint16) % 125
+    modes = (payload >= 125).astype(np.bool_)
+    codes = np.stack(
+        (base % 5, (base // 5) % 5, base // 25), axis=-1
+    ).astype(np.uint8).reshape(rows, triples * 3)
+    return codes[:, :features], modes
+
+
+def pack_octave_stream(
+    symbol_codes: np.ndarray,
+    boost_modes: np.ndarray,
+    *,
+    use_zero_skips: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Skip tokens count whole all-zero triplet-groups, preserving pack alignment.
+
+    250..254 skip 4/8/16/32/64 triplet-groups. 255 is followed by one byte
+    containing an extended count (1..255 triplet-groups).
+    """
+    fixed, shape = pack_octave_triplets(symbol_codes, boost_modes)
+    rows, _ = shape
+    row_streams = []
+    for row in range(rows):
+        values = fixed[row]
+        codes_row = np.asarray(symbol_codes[row], dtype=np.uint8)
+        mode_row = np.asarray(boost_modes[row], dtype=np.bool_)
+        groups = len(values)
+        zero_group = np.zeros(groups, dtype=np.bool_)
+        for group in range(groups):
+            start = group * 3
+            active = codes_row[start:min(start + 3, len(codes_row))]
+            zero_group[group] = bool(np.all(active == 2) and not mode_row[group])
+        stream_row = []
+        index = 0
+        while index < groups:
+            if use_zero_skips and zero_group[index]:
+                end = index
+                while end < groups and zero_group[end]:
+                    end += 1
+                run = end - index
+                if run >= 4:
+                    while run >= 4:
+                        skip = 64 if run >= 64 else 32 if run >= 32 else 16 if run >= 16 else 8 if run >= 8 else 4
+                        stream_row.append({4: 250, 8: 251, 16: 252, 32: 253, 64: 254}[skip])
+                        index += skip
+                        run -= skip
+                    for _ in range(run):
+                        stream_row.append(int(values[index]))
+                        index += 1
+                    continue
+            stream_row.append(int(values[index]))
+            index += 1
+        row_streams.append(stream_row)
+    offsets = np.zeros(rows + 1, dtype=np.int64)
+    for index, values in enumerate(row_streams):
+        offsets[index + 1] = offsets[index] + len(values)
+    packed_stream = np.asarray(
+        [value for values in row_streams for value in values], dtype=np.uint8
+    )
+    return packed_stream, offsets
+
+
+def unpack_octave_stream(
+    packed_stream: np.ndarray,
+    row_offsets: np.ndarray,
+    original_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Restore triplets and all-zero groups from the variable-length stream."""
+    stream = np.asarray(packed_stream)
+    offsets = np.asarray(row_offsets)
+    if stream.dtype.kind not in "iu" or stream.ndim != 1 or np.any(stream < 0) or np.any(stream > 255):
+        raise ValueError("Octave packed_stream must be a 1-D byte array.")
+    if offsets.dtype.kind not in "iu" or offsets.ndim != 1:
+        raise TypeError("Octave row_offsets must be a 1-D integer array.")
+    if len(original_shape) != 2 or min(original_shape) < 1:
+        raise ValueError("original_shape must contain positive dimensions.")
+    rows, features = map(int, original_shape)
+    groups = (features + 2) // 3
+    if offsets.shape != (rows + 1,) or offsets[0] != 0 or offsets[-1] != len(stream):
+        raise ValueError("Octave row_offsets do not match stream length/row count.")
+    if np.any(offsets[1:] < offsets[:-1]):
+        raise ValueError("Octave row_offsets must be monotonically increasing.")
+
+    decoded_codes = np.full((rows, groups * 3), 2, dtype=np.uint8)
+    decoded_modes = np.zeros((rows, groups), dtype=np.bool_)
+    for row in range(rows):
+        cursor = int(offsets[row])
+        end = int(offsets[row + 1])
+        group = 0
+        while cursor < end and group < groups:
+            token = int(stream[cursor])
+            cursor += 1
+            if token < 250:
+                base = token % 125
+                decoded_codes[row, group * 3 : group * 3 + 3] = (
+                    base % 5, (base // 5) % 5, base // 25
+                )
+                decoded_modes[row, group] = token >= 125
+                group += 1
+                continue
+            if token == OCTAVE_ESCAPE_CODE:
+                if cursor >= end:
+                    raise ValueError("Octave escape byte is missing its skip-count payload.")
+                skip = int(stream[cursor])
+                cursor += 1
+                if skip < 1:
+                    raise ValueError("Octave extended skip count must be in [1,255].")
+            else:
+                skip = OCTAVE_SKIP_TRIPLES[token]
+            if group + skip > groups:
+                raise ValueError("Octave zero-run skip overruns the declared row shape.")
+            group += skip
+        if group != groups or cursor != end:
+            raise ValueError("Octave packed row did not decode to its declared group count.")
+    return decoded_codes[:, :features], decoded_modes
+
+
+def build_octave_decode_lut() -> np.ndarray:
+    """256-entry decode table; valid outputs are signed half-unit coefficients."""
+    table = np.full((256, 4), -128, dtype=np.int8)
+    half_units = (-2, -1, 0, 1, 2)
+    for token in range(250):
+        base = token % 125
+        boost = token >= 125
+        symbol_codes = (base % 5, (base // 5) % 5, base // 25)
+        factor = 4 if boost else 1
+        table[token, :3] = [half_units[code] * factor for code in symbol_codes]
+        table[token, 3] = int(boost)
+    return table
+
+
+def integer_octave_projection(
+    activation_codes: np.ndarray,
+    packed_stream: np.ndarray,
+    row_offsets: np.ndarray,
+    input_features: int,
+    bias_half_units: np.ndarray | None = None,
+) -> np.ndarray:
+    """Integer reference: LUT decode plus add/sub/left-shift, result in half-units."""
+    activations = np.asarray(activation_codes)
+    stream = np.asarray(packed_stream)
+    offsets = np.asarray(row_offsets)
+    if activations.dtype.kind not in "iu" or activations.ndim != 2:
+        raise TypeError("Octave activations must be a 2-D integer array.")
+    if isinstance(input_features, bool) or not isinstance(input_features, int) or input_features < 1:
+        raise ValueError("input_features must be a positive integer.")
+    if activations.shape[1] != input_features:
+        raise ValueError("input_features does not match activation width.")
+    if stream.dtype.kind not in "iu" or stream.ndim != 1 or np.any(stream < 0) or np.any(stream > 255):
+        raise ValueError("Octave packed stream must be a 1-D byte array.")
+    if offsets.dtype.kind not in "iu" or offsets.ndim != 1:
+        raise TypeError("Octave row_offsets must be a 1-D integer array.")
+    out_features = len(offsets) - 1
+    if out_features < 1 or offsets[0] != 0 or offsets[-1] != len(stream):
+        raise ValueError("Octave row offsets do not match packed stream.")
+    if np.any(offsets[1:] < offsets[:-1]):
+        raise ValueError("Octave row offsets must be monotonically increasing.")
+
+    required_groups = (input_features + 2) // 3
+    lut = build_octave_decode_lut()
+    output = np.zeros((activations.shape[0], out_features), dtype=np.int64)
+    for batch in range(activations.shape[0]):
+        for out_index in range(out_features):
+            cursor = int(offsets[out_index])
+            end = int(offsets[out_index + 1])
+            group = 0
+            accumulator = 0
+            while cursor < end and group < required_groups:
+                token = int(stream[cursor])
+                cursor += 1
+                if token == OCTAVE_ESCAPE_CODE:
+                    if cursor >= end:
+                        raise ValueError("Octave escape byte has no skip-count payload.")
+                    skip = int(stream[cursor])
+                    cursor += 1
+                    if skip < 1:
+                        raise ValueError("Octave extended skip count must be in [1,255].")
+                    group += skip
+                    continue
+                if token in OCTAVE_SKIP_TRIPLES:
+                    group += OCTAVE_SKIP_TRIPLES[token]
+                    continue
+                coefficients = lut[token]
+                if int(coefficients[0]) == -128:
+                    raise ValueError("Reserved Octave byte used outside the skip grammar.")
+                for lane in range(3):
+                    feature = group * 3 + lane
+                    if feature >= input_features:
+                        break
+                    coefficient = int(coefficients[lane])
+                    if coefficient == 0:
+                        continue
+                    shift = {1: 0, 2: 1, 4: 2, 8: 3}.get(abs(coefficient))
+                    if shift is None:
+                        raise ValueError("Invalid Octave half-unit coefficient.")
+                    term = int(activations[batch, feature]) << shift
+                    if coefficient > 0:
+                        accumulator += term
+                    else:
+                        accumulator -= term
+                group += 1
+            if group != required_groups or cursor != end:
+                raise ValueError("Octave stream row does not match declared input width.")
+            output[batch, out_index] = accumulator
+    if bias_half_units is not None:
+        bias = np.asarray(bias_half_units)
+        if bias.dtype.kind not in "iu" or bias.shape != (out_features,):
+            raise ValueError("bias_half_units must be an integer output vector.")
+        output = np.add(output, bias.astype(np.int64, copy=False))
+    return output
 
 
 class _EWGSQuantize(torch.autograd.Function):
@@ -156,23 +515,18 @@ def wavebit_linear(
     bias: torch.Tensor | None,
     context: torch.Tensor,
     *,
-    group_size: int = 32,
+    group_size: int = 30,
     ewgs_strength: float = 0.5,
+    octave_temperature: float = 0.25,
 ) -> torch.Tensor:
-    """WaveBit training projection, split into static and context-sensitive paths."""
+    """Octave-Shift weights combined with WaveBit's dynamic context gain."""
     if inputs.shape != context.shape:
         raise ValueError("WaveBit linear context must match the input tensor shape.")
-    _, polarity, phase, scale = wavebit_quantize(
-        weight, group_size=group_size, ewgs_strength=ewgs_strength
+    quantized, _, _, _ = wavebit_quantize(
+        weight, group_size=group_size, ewgs_strength=ewgs_strength,
+        octave_temperature=octave_temperature,
     )
-    static_weight = polarity * scale * 0.5
-    dynamic_weight = polarity * phase * scale
-    gain_delta = wavebit_context_gain(context) - 0.5
-    output = F.linear(inputs, static_weight, None)
-    output = output + F.linear(inputs * gain_delta, dynamic_weight, None)
-    if bias is not None:
-        output = output + bias
-    return output
+    return F.linear(inputs * wavebit_context_gain(context), quantized, bias)
 
 
 def wavebit_depthwise_conv1d(
@@ -184,24 +538,22 @@ def wavebit_depthwise_conv1d(
     dilation: int,
     group_size: int,
     ewgs_strength: float,
+    octave_temperature: float = 0.25,
 ) -> torch.Tensor:
-    """Context-modulated depthwise convolution surrogate for WaveBit training."""
+    """Depthwise Octave-Shift projection with context-modulated inputs."""
     if padded_inputs.shape != padded_context.shape:
         raise ValueError("Padded WaveBit inputs and contexts must have identical shapes.")
-    _, polarity, phase, scale = wavebit_quantize(
-        weight, group_size=group_size, ewgs_strength=ewgs_strength
+    quantized, _, _, _ = wavebit_quantize(
+        weight, group_size=group_size, ewgs_strength=ewgs_strength,
+        octave_temperature=octave_temperature,
     )
-    static_weight = polarity * scale * 0.5
-    dynamic_weight = polarity * phase * scale
-    gain_delta = wavebit_context_gain(padded_context) - 0.5
-    static = F.conv1d(
-        padded_inputs, static_weight, None, dilation=dilation, groups=padded_inputs.shape[1]
+    return F.conv1d(
+        padded_inputs * wavebit_context_gain(padded_context),
+        quantized,
+        bias,
+        dilation=dilation,
+        groups=padded_inputs.shape[1],
     )
-    dynamic = F.conv1d(
-        padded_inputs * gain_delta, dynamic_weight, None,
-        dilation=dilation, groups=padded_inputs.shape[1]
-    )
-    return static + dynamic + bias.view(1, -1, 1)
 
 
 class HolographicRotationMemory(torch.nn.Module):

@@ -9,6 +9,8 @@ from qmini_addsub.model import AddSubLanguageModel
 from qmini_addsub.wavebit_hsra import (
     CapacitorCharge, HolographicRotationMemory, groupwise_scale,
     holographic_state_step_int, integer_wavebit_projection, wavebit_quantize,
+    pack_octave_stream, unpack_octave_stream, pack_octave_triplets,
+    unpack_octave_triplets, integer_octave_projection, build_octave_decode_lut,
 )
 
 
@@ -20,7 +22,7 @@ def tiny_config() -> AddSubConfig:
 
 
 def options() -> dict:
-    return {"group_size": 8, "rotation": 1, "gamma": 4, "ewgs_strength": 0.5}
+    return {"group_size": 30, "rotation": 1, "gamma": 4, "ewgs_strength": 0.5}
 
 
 def test_wavebit_has_no_additional_model_parameters_or_state_keys():
@@ -69,13 +71,15 @@ def test_groupwise_scale_is_independent_for_each_block():
 
 def test_wavebit_ewgs_preserves_nonzero_gradient_at_zero():
     weight = torch.zeros(3, 8, requires_grad=True)
-    quantized, polarity, phase, scale = wavebit_quantize(
-        weight, group_size=4, ewgs_strength=0.5
+    quantized, symbol_codes, boost_modes, scale = wavebit_quantize(
+        weight, group_size=6, ewgs_strength=0.5
     )
-    (quantized.sum() + polarity.sum() + phase.sum()).backward()
+    quantized.sum().backward()
     assert torch.isfinite(weight.grad).all()
     assert torch.count_nonzero(weight.grad).item() == weight.numel()
     assert torch.count_nonzero(quantized).item() == 0
+    assert symbol_codes.shape == weight.shape
+    assert boost_modes.shape == (3, 3)
     assert torch.all(scale > 0)
 
 
@@ -136,3 +140,78 @@ def test_capacitor_charge_changes_code_only_after_threshold_and_saturates():
 def test_invalid_wavebit_configuration_is_rejected():
     with pytest.raises(ValueError):
         AddSubLanguageModel(tiny_config(), wavebit_options={"gamma": 0})
+
+
+def test_octave_triplet_packing_roundtrips_shared_boost_modes():
+    rng = np.random.default_rng(31)
+    codes = rng.integers(0, 5, size=(4, 11), dtype=np.uint8)
+    modes = rng.integers(0, 2, size=(4, 4), dtype=np.uint8).astype(bool)
+    packed, shape = pack_octave_triplets(codes, modes)
+    decoded_codes, decoded_modes = unpack_octave_triplets(packed, shape)
+    np.testing.assert_array_equal(decoded_codes, codes)
+    np.testing.assert_array_equal(decoded_modes, modes)
+    assert int(packed.max()) <= 249
+
+
+def test_octave_zero_skip_codes_compress_and_restore_long_runs():
+    codes = np.full((2, 70 * 3), 2, dtype=np.uint8)
+    modes = np.zeros((2, 70), dtype=np.bool_)
+    codes[1, 3 * 65] = 4
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=True)
+    decoded_codes, decoded_modes = unpack_octave_stream(packed, offsets, codes.shape)
+    np.testing.assert_array_equal(decoded_codes, codes)
+    np.testing.assert_array_equal(decoded_modes, modes)
+    assert len(packed) < codes.shape[0] * modes.shape[1]
+    assert any(int(value) in (250, 251, 252, 253, 254) for value in packed)
+
+
+def test_octave_integer_projection_uses_lookup_add_sub_and_shifts():
+    codes = np.asarray(
+        [[4, 3, 2, 0, 1, 2], [2, 2, 2, 1, 4, 3]], dtype=np.uint8
+    )
+    modes = np.asarray([[False, True], [False, True]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    activations = np.asarray([[7, -5, 3, 2, -4, 6]], dtype=np.int16)
+    actual = integer_octave_projection(activations, packed, offsets, input_features=6)
+    half_units = (-2, -1, 0, 1, 2)
+    expected = np.zeros((1, 2), dtype=np.int64)
+    for out_index in range(2):
+        for feature in range(6):
+            coefficient = half_units[int(codes[out_index, feature])]
+            if modes[out_index, feature // 3]:
+                coefficient *= 4
+            expected[0, out_index] += int(activations[0, feature]) * coefficient
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_octave_zero_skip_projection_matches_dense_zero_contribution():
+    codes = np.full((1, 70 * 3), 2, dtype=np.uint8)
+    modes = np.zeros((1, 70), dtype=np.bool_)
+    codes[0, 3 * 66 : 3 * 66 + 3] = np.asarray([4, 0, 3], dtype=np.uint8)
+    modes[0, 66] = True
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=True)
+    activations = np.arange(1, 70 * 3 + 1, dtype=np.int16).reshape(1, -1)
+    actual = integer_octave_projection(
+        activations, packed, offsets, input_features=70 * 3
+    )
+    half_units = (-2, -1, 0, 1, 2)
+    expected = 0
+    for feature in range(codes.shape[1]):
+        coefficient = half_units[int(codes[0, feature])]
+        if modes[0, feature // 3]:
+            coefficient *= 4
+        expected += int(activations[0, feature]) * coefficient
+    np.testing.assert_array_equal(actual, np.asarray([[expected]], dtype=np.int64))
+
+
+def test_octave_decode_lut_has_256_entries_and_marks_reserved_codes():
+    lut = build_octave_decode_lut()
+    assert lut.shape == (256, 4)
+    assert np.all(lut[250:, :] == -128)
+    expected = {-8, -4, -2, -1, 0, 1, 2, 4, 8}
+    assert set(np.unique(lut[:250, :3])).issubset(expected)
+
+
+def test_octave_group_size_must_align_to_triplet_packing():
+    with pytest.raises(ValueError):
+        AddSubLanguageModel(tiny_config(), wavebit_options={"group_size": 32})
