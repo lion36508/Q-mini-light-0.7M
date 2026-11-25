@@ -207,14 +207,16 @@ static inline int64_t qmini_octave_shift_add_term(
 struct QMiniOctaveDecodeTable {
     int8_t coefficients[256][3];
 
-    QMiniOctaveDecodeTable() {
+    explicit QMiniOctaveDecodeTable(int boost_factor) {
         for (int token = 0; token < 256; ++token) {
             for (int lane = 0; lane < 3; ++lane) {
                 coefficients[token][lane] = static_cast<int8_t>(-128);
             }
         }
         static constexpr int8_t normal[5] = {-2, -1, 0, 1, 2};
-        static constexpr int8_t boosted[5] = {-8, -4, 0, 4, 8};
+        static constexpr int8_t boosted_x2[5] = {-4, -2, 0, 2, 4};
+        static constexpr int8_t boosted_x4[5] = {-8, -4, 0, 4, 8};
+        const int8_t* boosted = boost_factor == 2 ? boosted_x2 : boosted_x4;
         for (int token = 0; token < 250; ++token) {
             const int code = token >= 125 ? token - 125 : token;
             const int8_t* levels = token >= 125 ? boosted : normal;
@@ -225,9 +227,10 @@ struct QMiniOctaveDecodeTable {
     }
 };
 
-static inline const QMiniOctaveDecodeTable& qmini_octave_decode_table() {
-    static const QMiniOctaveDecodeTable table;
-    return table;
+static inline const QMiniOctaveDecodeTable& qmini_octave_decode_table(int boost_factor) {
+    static const QMiniOctaveDecodeTable x2_table(2);
+    static const QMiniOctaveDecodeTable x4_table(4);
+    return boost_factor == 2 ? x2_table : x4_table;
 }
 
 #if QMINI_HAS_NEON
@@ -294,7 +297,7 @@ static inline int64_t qmini_octave_accumulate_block(
 // triplet, with 250..254 skipping 4/8/16/32/64 all-zero triplet-groups and
 // 255 followed by an extended skip count. Output remains in half-units;
 // group/output scales are intentionally applied by a later requantization.
-QMINI_EXPORT int qmini_octave_linear_i8_v1(
+static int qmini_octave_linear_i8_impl(
     const int8_t* input,
     const uint8_t* packed_stream,
     const uint32_t* row_offsets,
@@ -303,13 +306,15 @@ QMINI_EXPORT int qmini_octave_linear_i8_v1(
     int rows,
     int in_features,
     int out_features,
-    int packed_size
+    int packed_size,
+    int boost_factor
 ) {
     if (!input || !packed_stream || !row_offsets || !output) {
         return 1;
     }
     if (rows <= 0 || in_features <= 0 || in_features > std::numeric_limits<int>::max() - 2 ||
-        out_features <= 0 || packed_size < 0) {
+        out_features <= 0 || packed_size < 0 ||
+        (boost_factor != 2 && boost_factor != 4)) {
         return 2;
     }
     if (row_offsets[0] != 0 || row_offsets[out_features] !=
@@ -324,7 +329,7 @@ QMINI_EXPORT int qmini_octave_linear_i8_v1(
     }
 
     const int required_groups = (in_features + 2) / 3;
-    const auto& table = qmini_octave_decode_table();
+    const auto& table = qmini_octave_decode_table(boost_factor);
     for (int row = 0; row < rows; ++row) {
         const int8_t* input_row = input +
             static_cast<std::size_t>(row) * static_cast<std::size_t>(in_features);
@@ -416,6 +421,44 @@ QMINI_EXPORT int qmini_octave_linear_i8_v1(
         }
     }
     return 0;
+}
+
+
+// Stable x4 ABI retained for existing callers and already packed checkpoints.
+QMINI_EXPORT int qmini_octave_linear_i8_v1(
+    const int8_t* input,
+    const uint8_t* packed_stream,
+    const uint32_t* row_offsets,
+    const int64_t* bias_half_units,
+    int64_t* output,
+    int rows,
+    int in_features,
+    int out_features,
+    int packed_size
+) {
+    return qmini_octave_linear_i8_impl(
+        input, packed_stream, row_offsets, bias_half_units, output,
+        rows, in_features, out_features, packed_size, 4
+    );
+}
+
+// Versioned ABI: the shared triplet boost factor is explicit (2 or 4).
+QMINI_EXPORT int qmini_octave_linear_i8_v2(
+    const int8_t* input,
+    const uint8_t* packed_stream,
+    const uint32_t* row_offsets,
+    const int64_t* bias_half_units,
+    int64_t* output,
+    int rows,
+    int in_features,
+    int out_features,
+    int packed_size,
+    int boost_factor
+) {
+    return qmini_octave_linear_i8_impl(
+        input, packed_stream, row_offsets, bias_half_units, output,
+        rows, in_features, out_features, packed_size, boost_factor
+    );
 }
 
 QMINI_EXPORT int qmini_kernel_has_neon() {

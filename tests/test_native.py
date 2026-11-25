@@ -381,3 +381,39 @@ def test_native_octave_projection_detects_missing_escape_payload(
     offsets = np.asarray([0, 1], dtype=np.uint32)
     with pytest.raises(RuntimeError, match="returned error"):
         native.octave_linear(activations, stream, offsets)
+
+
+
+def test_native_octave_x2_projection_matches_python_reference_with_zero_skips(
+    compiled_native_library,
+):
+    rng = np.random.default_rng(20261126)
+    symbol_codes = rng.integers(0, 5, size=(4, 225), dtype=np.uint8)
+    boost_modes = rng.integers(0, 2, size=(4, 75), dtype=np.uint8).astype(bool)
+    symbol_codes[:, 30:30 + 3 * 18] = 2
+    boost_modes[:, 10:28] = False
+    packed, offsets = pack_octave_stream(symbol_codes, boost_modes)
+    activations = rng.integers(-127, 128, size=(3, 225), dtype=np.int16).astype(np.int8)
+
+    native = NativeKernel(compiled_native_library)
+    actual = native.octave_linear(
+        activations, packed, offsets, boost_factor=2
+    )
+    expected = integer_octave_projection(
+        activations, packed, offsets, input_features=225, boost_factor=2
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_native_octave_x2_abi_validates_boost_factor(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.ones((1, 3), dtype=np.int8)
+    packed, offsets = pack_octave_stream(
+        np.asarray([[4, 3, 2]], dtype=np.uint8),
+        np.asarray([[True]], dtype=np.bool_),
+        use_zero_skips=False,
+    )
+    with pytest.raises(ValueError, match="2 or 4"):
+        native.octave_linear(
+            activations, packed, offsets, boost_factor=3
+        )

@@ -52,22 +52,36 @@ class NativeKernel:
         self.octave_function = getattr(
             self.library, "qmini_octave_linear_i8_v1", None
         )
+        self.octave_function_v2 = getattr(
+            self.library, "qmini_octave_linear_i8_v2", None
+        )
+        u32 = np.ctypeslib.ndpointer(dtype=np.uint32, flags="C_CONTIGUOUS")
+        i64 = np.ctypeslib.ndpointer(dtype=np.int64, flags="C_CONTIGUOUS")
+        octave_argtypes = [
+            i8, u8, u32, i64, i64,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ]
         if self.octave_function is not None:
-            u32 = np.ctypeslib.ndpointer(dtype=np.uint32, flags="C_CONTIGUOUS")
-            i64 = np.ctypeslib.ndpointer(dtype=np.int64, flags="C_CONTIGUOUS")
-            self.octave_function.argtypes = [
-                i8, u8, u32, i64, i64,
-                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-            ]
+            self.octave_function.argtypes = octave_argtypes
             self.octave_function.restype = ctypes.c_int
+        if self.octave_function_v2 is not None:
+            self.octave_function_v2.argtypes = octave_argtypes + [ctypes.c_int]
+            self.octave_function_v2.restype = ctypes.c_int
 
     def octave_linear(
-        self, activations_i8, packed_stream, row_offsets, bias_half_units=None
+        self, activations_i8, packed_stream, row_offsets, bias_half_units=None,
+        boost_factor: int = 4,
     ):
-        """Run the Octave-Shift integer reference kernel from the native library."""
-        if self.octave_function is None:
+        """Run the Octave-Shift native kernel; x2 requires the versioned v2 ABI."""
+        if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
+            raise ValueError("boost_factor must be the integer 2 or 4.")
+        function = self.octave_function
+        use_v2 = boost_factor == 2 or function is None
+        if use_v2:
+            function = self.octave_function_v2
+        if function is None:
             raise RuntimeError(
-                "Native library does not include the Octave-Shift ABI; rebuild it."
+                "Native library does not include the required Octave-Shift ABI; rebuild it."
             )
         raw_x = np.asarray(activations_i8)
         raw_stream = np.asarray(packed_stream)
@@ -100,10 +114,11 @@ class NativeKernel:
                 raise ValueError("bias_half_units must be an integer output vector.")
             bias = np.ascontiguousarray(raw_bias, dtype=np.int64)
         output = np.empty((x.shape[0], out_features), dtype=np.int64)
-        status = self.octave_function(
+        arguments = (
             x, stream, offsets, bias, output,
             x.shape[0], x.shape[1], out_features, stream.size,
         )
+        status = function(*(arguments + (boost_factor,)) if use_v2 else arguments)
         if status:
             raise RuntimeError(f"Octave-Shift native kernel returned error {status}.")
         return output

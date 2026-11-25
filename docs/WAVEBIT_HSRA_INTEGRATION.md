@@ -126,8 +126,14 @@ Example CPU command-line options:
       --wavebit-hadamard-block-size 8 \\
       --wavebit-activation-bits 4
 
-The current C++ qmini_octave_linear_i8_v1 decoder remains x4-specific;
-the x2 path is currently covered by the Python integer reference and the
-PyTorch training surrogate. Native x2 dispatch and a versioned group-wise
-archive must be added and tested before x2 can be described as a deployable
-packed runtime. The existing exporter continues to reject WaveBit checkpoints.
+The C++ qmini_octave_linear_i8_v1 ABI remains x4-compatible. A new
+qmini_octave_linear_i8_v2 ABI accepts an explicit shared x2 or x4 boost factor;
+the Python wrapper keeps routing x4 calls through v1 when available and uses
+v2 for x2. Both native paths use the same LUT + add/sub + shift accumulator,
+and native x2 is compared against the Python integer reference in CI.
+
+The Hadamard + activation fake-quant path remains in the PyTorch training
+surrogate. It is not yet integrated into the integer inference runtime, and a
+versioned group-wise packed archive is still required before complete WaveBit
+checkpoints can be exported. The existing exporter continues to reject
+WaveBit checkpoints.
