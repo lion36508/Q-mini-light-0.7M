@@ -447,11 +447,6 @@ def integer_octave_projection(
         raise ValueError("input_features must be a positive integer.")
     if activations.shape[1] != input_features:
         raise ValueError("input_features does not match activation width.")
-    if (
-        np.any(activations > 127)
-        or (activations.dtype.kind == "i" and np.any(activations < -128))
-    ):
-        raise ValueError("Octave activation codes must fit in signed int8 [-128, 127].")
     if stream.dtype.kind not in "iu" or stream.ndim != 1 or np.any(stream < 0) or np.any(stream > 255):
         raise ValueError("Octave packed stream must be a 1-D byte array.")
     if offsets.dtype.kind not in "iu" or offsets.ndim != 1:
@@ -507,6 +502,9 @@ def integer_octave_projection(
                 group += 1
             if group != required_groups or cursor != end:
                 raise ValueError("Octave stream row does not match declared input width.")
+            int64_info = np.iinfo(np.int64)
+            if accumulator < int64_info.min or accumulator > int64_info.max:
+                raise OverflowError("Octave projection accumulator exceeds int64 range.")
             output[batch, out_index] = accumulator
     if bias_half_units is not None:
         bias = np.asarray(bias_half_units)

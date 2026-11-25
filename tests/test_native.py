@@ -620,10 +620,17 @@ def test_native_octave_bias_accumulator_overflow_is_rejected(compiled_native_lib
         native.octave_linear(activations, packed, offsets, bias)
 
 
-def test_integer_octave_reference_rejects_activation_and_bias_overflow():
-    with pytest.raises(ValueError, match="fit in signed int8"):
+def test_integer_octave_reference_preserves_wide_int_inputs_and_guards_overflow():
+    wide = integer_octave_projection(
+        np.asarray([[200]], dtype=np.int16),
+        np.asarray([0], dtype=np.uint8),
+        np.asarray([0, 1], dtype=np.int64),
+        input_features=1,
+    )
+    assert wide.shape == (1, 1)
+    with pytest.raises(OverflowError, match="accumulator exceeds int64"):
         integer_octave_projection(
-            np.asarray([[128]], dtype=np.int16),
+            np.asarray([[np.iinfo(np.int64).max]], dtype=np.int64),
             np.asarray([0], dtype=np.uint8),
             np.asarray([0, 1], dtype=np.int64),
             input_features=1,
