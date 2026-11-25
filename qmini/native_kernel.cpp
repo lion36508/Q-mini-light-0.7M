@@ -464,6 +464,183 @@ QMINI_EXPORT int qmini_octave_linear_i8_v2(
 
 
 
+// Group-scale aware native Octave projection. Each input group is accumulated
+// independently in integer half-units. Its scale, the activation-row scale and
+// the floating bias are applied only after the integer add/sub accumulation.
+static int qmini_octave_groupwise_linear_i8_impl(
+    const int8_t* input,
+    const uint8_t* packed_stream,
+    const uint32_t* row_offsets,
+    const float* group_scales,
+    const float* input_scales,
+    const float* bias,
+    float* output,
+    int rows,
+    int in_features,
+    int out_features,
+    int packed_size,
+    int group_size,
+    int group_count,
+    int boost_factor
+) {
+    if (!input || !packed_stream || !row_offsets || !group_scales ||
+        !input_scales || !bias || !output) {
+        return 1;
+    }
+    if (rows <= 0 || in_features <= 0 ||
+        in_features > std::numeric_limits<int>::max() - 2 ||
+        out_features <= 0 || packed_size < 0 || group_size <= 0 ||
+        group_count <= 0 || (boost_factor != 2 && boost_factor != 4)) {
+        return 2;
+    }
+
+    const int64_t expected_group_count =
+        (static_cast<int64_t>(in_features) + group_size - 1) / group_size;
+    if (expected_group_count != group_count) {
+        return 3;
+    }
+    if (row_offsets[0] != 0 ||
+        row_offsets[out_features] != static_cast<uint32_t>(packed_size)) {
+        return 4;
+    }
+    for (int output_index = 0; output_index < out_features; ++output_index) {
+        if (row_offsets[output_index] > row_offsets[output_index + 1] ||
+            row_offsets[output_index + 1] > static_cast<uint32_t>(packed_size)) {
+            return 5;
+        }
+        if (!std::isfinite(bias[output_index])) {
+            return 6;
+        }
+    }
+    for (int row = 0; row < rows; ++row) {
+        if (!std::isfinite(input_scales[row]) || input_scales[row] <= 0.0f) {
+            return 7;
+        }
+    }
+    const std::size_t scale_count =
+        static_cast<std::size_t>(out_features) * static_cast<std::size_t>(group_count);
+    for (std::size_t index = 0; index < scale_count; ++index) {
+        if (!std::isfinite(group_scales[index]) || group_scales[index] <= 0.0f) {
+            return 8;
+        }
+    }
+
+    const int required_triplets = (in_features + 2) / 3;
+    const auto& table = qmini_octave_decode_table(boost_factor);
+    for (int row = 0; row < rows; ++row) {
+        const int8_t* input_row = input +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(in_features);
+        for (int output_index = 0; output_index < out_features; ++output_index) {
+            std::vector<int64_t> group_accumulators(
+                static_cast<std::size_t>(group_count), 0
+            );
+            std::size_t cursor = row_offsets[output_index];
+            const std::size_t end = row_offsets[output_index + 1];
+            int logical_triplet = 0;
+
+            while (cursor < end) {
+                const uint8_t token = packed_stream[cursor++];
+                if (token >= 250) {
+                    int skip = 0;
+                    if (token == 255) {
+                        if (cursor >= end) {
+                            return 9;
+                        }
+                        skip = static_cast<int>(packed_stream[cursor++]);
+                        if (skip < 1) {
+                            return 10;
+                        }
+                    } else {
+                        switch (token) {
+                            case 250: skip = 4; break;
+                            case 251: skip = 8; break;
+                            case 252: skip = 16; break;
+                            case 253: skip = 32; break;
+                            case 254: skip = 64; break;
+                            default: return 11;
+                        }
+                    }
+                    if (skip > required_triplets - logical_triplet) {
+                        return 12;
+                    }
+                    logical_triplet += skip;
+                    continue;
+                }
+
+                if (logical_triplet >= required_triplets) {
+                    return 13;
+                }
+                const int8_t* coefficients = table.coefficients[token];
+                for (int lane = 0; lane < 3; ++lane) {
+                    const int64_t feature64 =
+                        static_cast<int64_t>(logical_triplet) * 3 + lane;
+                    if (feature64 < in_features) {
+                        const int feature = static_cast<int>(feature64);
+                        const int group_index = feature / group_size;
+                        group_accumulators[static_cast<std::size_t>(group_index)] +=
+                            qmini_octave_shift_add_term(
+                                input_row[feature], coefficients[lane]
+                            );
+                    }
+                }
+                ++logical_triplet;
+            }
+
+            if (logical_triplet != required_triplets || cursor != end) {
+                return 14;
+            }
+
+            float total = bias[output_index];
+            const std::size_t scale_row =
+                static_cast<std::size_t>(output_index) *
+                static_cast<std::size_t>(group_count);
+            for (int group = 0; group < group_count; ++group) {
+                const float partial_half_units = static_cast<float>(
+                    group_accumulators[static_cast<std::size_t>(group)]
+                );
+                const float scale = group_scales[
+                    scale_row + static_cast<std::size_t>(group)
+                ];
+                total += partial_half_units * 0.5f *
+                    input_scales[row] * scale;
+            }
+            if (!std::isfinite(total)) {
+                return 15;
+            }
+            output[static_cast<std::size_t>(row) *
+                static_cast<std::size_t>(out_features) +
+                static_cast<std::size_t>(output_index)] = total;
+        }
+    }
+    return 0;
+}
+
+// Versioned ABI with per-output/per-input-group scales and per-row activation
+// scales. The older half-unit-only Octave ABI remains available unchanged.
+QMINI_EXPORT int qmini_octave_groupwise_linear_i8_v1(
+    const int8_t* input,
+    const uint8_t* packed_stream,
+    const uint32_t* row_offsets,
+    const float* group_scales,
+    const float* input_scales,
+    const float* bias,
+    float* output,
+    int rows,
+    int in_features,
+    int out_features,
+    int packed_size,
+    int group_size,
+    int group_count,
+    int boost_factor
+) {
+    return qmini_octave_groupwise_linear_i8_impl(
+        input, packed_stream, row_offsets, group_scales, input_scales,
+        bias, output, rows, in_features, out_features, packed_size,
+        group_size, group_count, boost_factor
+    );
+}
+
+
 // Integer Walsh-Hadamard transform followed by symmetric per-row activation
 // quantization. Each feature block is independently normalized by sqrt(width),
 // then one symmetric 2..8-bit scale is computed across the transformed row.

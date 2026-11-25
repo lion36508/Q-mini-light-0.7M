@@ -473,3 +473,84 @@ def test_native_hadamard_quantization_rejects_invalid_parameters(compiled_native
         native.hadamard_quantize_i8(activations, scales, activation_bits=9)
     with pytest.raises(TypeError, match="float32 vector"):
         native.hadamard_quantize_i8(activations, scales.astype(np.float64))
+
+
+@pytest.mark.parametrize("group_size", [17, 30])
+@pytest.mark.parametrize("boost_factor", [2, 4])
+def test_native_octave_groupwise_projection_matches_scaled_reference(
+    compiled_native_library, group_size, boost_factor,
+):
+    from qmini_addsub.wavebit_hsra import unpack_octave_stream
+
+    rng = np.random.default_rng(20261128 + group_size + boost_factor)
+    rows, out_features, in_features = 4, 3, 101
+    triplets = (in_features + 2) // 3
+    codes = rng.integers(0, 5, size=(out_features, in_features), dtype=np.uint8)
+    modes = rng.integers(0, 2, size=(out_features, triplets), dtype=np.uint8).astype(bool)
+    # Force a long all-zero run to exercise skip tokens in the group-wise parser.
+    codes[:, 24:84] = 2
+    modes[:, 8:28] = False
+    packed, offsets = pack_octave_stream(codes, modes)
+
+    activations = rng.integers(-127, 128, size=(rows, in_features), dtype=np.int16).astype(np.int8)
+    input_scales = rng.uniform(0.005, 0.2, size=rows).astype(np.float32)
+    group_count = (in_features + group_size - 1) // group_size
+    group_scales = rng.uniform(
+        0.01, 0.25, size=(out_features, group_count)
+    ).astype(np.float32)
+    bias = rng.normal(0.0, 0.15, size=out_features).astype(np.float32)
+
+    actual = NativeKernel(compiled_native_library).octave_groupwise_linear(
+        activations, packed, offsets, group_scales, input_scales,
+        bias=bias, group_size=group_size, boost_factor=boost_factor,
+    )
+
+    decoded_codes, decoded_modes = unpack_octave_stream(
+        packed, offsets, (out_features, in_features)
+    )
+    base_half_units = np.asarray([-2, -1, 0, 1, 2], dtype=np.float32)[decoded_codes]
+    boosted = np.repeat(decoded_modes, 3, axis=1)[:, :in_features]
+    mode_factor = np.where(boosted, boost_factor, 1).astype(np.float32)
+    group_index = np.arange(in_features) // group_size
+    dequantized_weights = (
+        base_half_units * mode_factor * 0.5 * group_scales[:, group_index]
+    )
+    expected = (
+        (activations.astype(np.float32) * input_scales[:, None])
+        @ dequantized_weights.T
+    ) + bias[None, :]
+
+    assert actual.shape == (rows, out_features)
+    np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+
+
+def test_native_octave_groupwise_projection_validates_group_metadata(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.ones((2, 11), dtype=np.int8)
+    codes = np.full((2, 11), 2, dtype=np.uint8)
+    modes = np.zeros((2, 4), dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes)
+    group_scales = np.ones((2, 2), dtype=np.float32)
+    input_scales = np.ones(2, dtype=np.float32)
+
+    with pytest.raises(TypeError, match="group_scales must be a float32 matrix"):
+        native.octave_groupwise_linear(
+            activations, packed, offsets, group_scales.astype(np.float64),
+            input_scales, group_size=8,
+        )
+    with pytest.raises(ValueError, match="group_scales must contain finite positive"):
+        native.octave_groupwise_linear(
+            activations, packed, offsets,
+            np.asarray([[1.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+            input_scales, group_size=8,
+        )
+    with pytest.raises(ValueError, match="group_size must be a positive"):
+        native.octave_groupwise_linear(
+            activations, packed, offsets, group_scales, input_scales,
+            group_size=0,
+        )
+    with pytest.raises(ValueError, match="boost_factor"):
+        native.octave_groupwise_linear(
+            activations, packed, offsets, group_scales, input_scales,
+            group_size=8, boost_factor=3,
+        )

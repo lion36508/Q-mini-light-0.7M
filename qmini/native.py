@@ -78,6 +78,17 @@ class NativeKernel:
             self.octave_function_v2.argtypes = octave_argtypes + [ctypes.c_int]
             self.octave_function_v2.restype = ctypes.c_int
 
+        self.groupwise_octave_function = getattr(
+            self.library, "qmini_octave_groupwise_linear_i8_v1", None
+        )
+        if self.groupwise_octave_function is not None:
+            self.groupwise_octave_function.argtypes = [
+                i8, u8, u32, f32, f32, f32, f32,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ]
+            self.groupwise_octave_function.restype = ctypes.c_int
+
 
 
     def hadamard_quantize_i8(
@@ -172,6 +183,99 @@ class NativeKernel:
         status = function(*(arguments + (boost_factor,)) if use_v2 else arguments)
         if status:
             raise RuntimeError(f"Octave-Shift native kernel returned error {status}.")
+        return output
+
+    def octave_groupwise_linear(
+        self, activations_i8, packed_stream, row_offsets, group_scales,
+        input_scales, bias=None, group_size: int = 30, boost_factor: int = 4,
+    ):
+        """Run group-scaled Octave projection; integer add/sub is followed by FP32 scaling."""
+        if self.groupwise_octave_function is None:
+            raise RuntimeError(
+                "Native library does not include the groupwise Octave ABI; rebuild it."
+            )
+        if (
+            isinstance(boost_factor, bool) or not isinstance(boost_factor, int)
+            or boost_factor not in (2, 4)
+        ):
+            raise ValueError("boost_factor must be the integer 2 or 4.")
+        if (
+            isinstance(group_size, bool) or not isinstance(group_size, int)
+            or group_size < 1 or group_size > np.iinfo(np.int32).max
+        ):
+            raise ValueError("group_size must be a positive int32-compatible integer.")
+
+        raw_x = np.asarray(activations_i8)
+        raw_stream = np.asarray(packed_stream)
+        raw_offsets = np.asarray(row_offsets)
+        raw_group_scales = np.asarray(group_scales)
+        raw_input_scales = np.asarray(input_scales)
+        if raw_x.dtype != np.int8 or raw_x.ndim != 2 or min(raw_x.shape) < 1:
+            raise TypeError("activations_i8 must be a non-empty 2-D int8 array.")
+        if raw_stream.dtype != np.uint8 or raw_stream.ndim != 1:
+            raise TypeError("packed_stream must already be a 1-D uint8 array.")
+        if raw_stream.size > np.iinfo(np.int32).max:
+            raise ValueError("packed_stream exceeds the native ABI size limit.")
+        if raw_offsets.dtype.kind not in "iu" or raw_offsets.ndim != 1:
+            raise TypeError("row_offsets must be a 1-D integer array.")
+        if raw_offsets.size < 2:
+            raise ValueError("row_offsets must include at least one output row.")
+        if np.any(raw_offsets < 0) or np.any(raw_offsets > np.iinfo(np.uint32).max):
+            raise ValueError("row_offsets must fit in uint32.")
+        if raw_offsets[0] != 0 or raw_offsets[-1] != raw_stream.size:
+            raise ValueError("row_offsets must span the packed stream exactly.")
+        if np.any(raw_offsets[1:] < raw_offsets[:-1]):
+            raise ValueError("row_offsets must be monotonically increasing.")
+
+        rows, in_features = raw_x.shape
+        out_features = raw_offsets.size - 1
+        int32_max = np.iinfo(np.int32).max
+        if max(rows, in_features, out_features) > int32_max:
+            raise ValueError("Native projection dimensions exceed the int32 ABI limit.")
+        group_count = (in_features + group_size - 1) // group_size
+        if (
+            raw_group_scales.dtype != np.float32
+            or raw_group_scales.shape != (out_features, group_count)
+        ):
+            raise TypeError(
+                "group_scales must be a float32 matrix shaped "
+                "[out_features, ceil(in_features/group_size)]."
+            )
+        if not np.isfinite(raw_group_scales).all() or np.any(raw_group_scales <= 0.0):
+            raise ValueError("group_scales must contain finite positive values.")
+        if (
+            raw_input_scales.dtype != np.float32
+            or raw_input_scales.shape != (rows,)
+        ):
+            raise TypeError("input_scales must be a float32 vector with one scale per row.")
+        if not np.isfinite(raw_input_scales).all() or np.any(raw_input_scales <= 0.0):
+            raise ValueError("input_scales must contain finite positive values.")
+
+        if bias is None:
+            bias_array = np.zeros(out_features, dtype=np.float32)
+        else:
+            raw_bias = np.asarray(bias)
+            if raw_bias.dtype != np.float32 or raw_bias.shape != (out_features,):
+                raise TypeError("bias must be a float32 vector with one value per output.")
+            if not np.isfinite(raw_bias).all():
+                raise ValueError("bias values must be finite.")
+            bias_array = np.ascontiguousarray(raw_bias)
+
+        x = np.ascontiguousarray(raw_x)
+        stream = np.ascontiguousarray(raw_stream)
+        offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint32)
+        scales = np.ascontiguousarray(raw_group_scales)
+        activation_scales = np.ascontiguousarray(raw_input_scales)
+        output = np.empty((rows, out_features), dtype=np.float32)
+        status = self.groupwise_octave_function(
+            x, stream, offsets, scales, activation_scales, bias_array, output,
+            rows, in_features, out_features, stream.size,
+            group_size, group_count, boost_factor,
+        )
+        if status:
+            raise RuntimeError(
+                f"Groupwise Octave native kernel returned error {status}."
+            )
         return output
 
     def linear(

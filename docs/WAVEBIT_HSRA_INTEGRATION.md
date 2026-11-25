@@ -95,6 +95,27 @@ model; it is not a complete integer-only inference archive.
   for the activation scale. Therefore it is not a claim of a fully
   multiplication-free end-to-end inference path.
 
+## Group-wise native Octave projection
+
+The optional qmini_octave_groupwise_linear_i8_v1 ABI and
+NativeKernel.octave_groupwise_linear wrapper consume the packed triplet
+stream, per-output-row/per-input-group float32 scales, one float32 activation
+scale per input row, and an optional float32 bias. They validate the scale
+matrix against ceil(in_features / group_size), including group sizes that do
+not align to a three-weight triplet.
+
+Each input group is accumulated separately in integer half-units using the
+Octave shift/add coefficient path. The final projection applies that group's
+weight scale and the input-row activation scale, then adds bias. This closes
+the earlier scale-layout gap for a standalone native linear projection.
+The older qmini_octave_linear_i8_v1/v2 half-unit ABI remains unchanged.
+
+The dot-product accumulation itself uses integer add/sub/left-shift operations;
+however, the final group-scale and activation-scale composition is FP32 and
+uses multiplication. The new API is therefore scale-aware, not a claim of a
+fully multiplication-free inference runtime. It is also not yet connected to
+all Add/Sub model layers or the generation loop.
+
 ## Explicit limitations
 
 - PyTorch training still uses floating-point autograd and dense operators.
@@ -102,9 +123,11 @@ model; it is not a complete integer-only inference archive.
 - The native Hadamard and Octave projection functions are separate primitives.
   The Hadamard output is not yet wired automatically into every model
   projection in qmini_addsub generation.
-- The Octave projection returns half-unit accumulators. Group scales,
-  activation scales, bias, normalization, gates, SSM, MoE routing and output
-  requantization still need to be composed into a complete generation runtime.
+- The legacy Octave projection ABI still returns raw half-unit accumulators.
+  The new group-wise ABI applies per-group weight scales, per-row activation
+  scales and bias for a standalone linear projection. Normalization, gates,
+  SSM, MoE routing, embedding/head integration and output requantization still
+  need to be composed into a complete generation runtime.
 - The archive loader reconstructs a PyTorch reference model; it does not
   execute the full model directly from packed bytes.
 - The C++ ABI includes an 8-lane ARM NEON shift/add path for the Octave
