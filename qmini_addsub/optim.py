@@ -12,10 +12,18 @@ def build_adamw(
     weight_decay: float = 0.01,
 ) -> torch.optim.AdamW:
     """AdamW with decay only on matrix/tensor weights, not biases or norm scales."""
-    if not math.isfinite(learning_rate) or learning_rate <= 0:
-        raise ValueError("learning_rate must be finite and positive.")
-    if not math.isfinite(weight_decay) or weight_decay < 0:
-        raise ValueError("weight_decay must be finite and non-negative.")
+    for name, value in (
+        ("learning_rate", learning_rate),
+        ("weight_decay", weight_decay),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a real number, not a boolean or string.")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite.")
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive.")
+    if weight_decay < 0:
+        raise ValueError("weight_decay must be non-negative.")
 
     decay: list[nn.Parameter] = []
     no_decay: list[nn.Parameter] = []
@@ -52,11 +60,20 @@ def cosine_warmup_lr(
         raise ValueError("total_steps must be a positive integer.")
     if step > total_steps:
         raise ValueError("step cannot exceed total_steps.")
-    if not math.isfinite(peak_learning_rate) or peak_learning_rate <= 0:
-        raise ValueError("peak_learning_rate must be finite and positive.")
-    if not math.isfinite(warmup_fraction) or not 0.0 < warmup_fraction < 1.0:
+    for name, value in (
+        ("peak_learning_rate", peak_learning_rate),
+        ("warmup_fraction", warmup_fraction),
+        ("minimum_ratio", minimum_ratio),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a real number, not a boolean or string.")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite.")
+    if peak_learning_rate <= 0:
+        raise ValueError("peak_learning_rate must be positive.")
+    if not 0.0 < warmup_fraction < 1.0:
         raise ValueError("warmup_fraction must be in (0, 1).")
-    if not math.isfinite(minimum_ratio) or not 0.0 <= minimum_ratio <= 1.0:
+    if not 0.0 <= minimum_ratio <= 1.0:
         raise ValueError("minimum_ratio must be in [0, 1].")
 
     warmup_steps = min(total_steps, max(1, int(total_steps * warmup_fraction)))
