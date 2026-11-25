@@ -1,105 +1,50 @@
 # Q-Mini Light 0.7M
 
-A from-scratch, text-only language-model research project. This repository contains a legacy 0.7M baseline and a separately specified next-generation Add/Sub model line. It is **not yet a validated general-purpose assistant or a complete Android runtime**.
+A small, text-only language-model research repository. It currently contains **two model implementations**, not a family of trained 5M/150M/853M/5B models.
 
-## Exactly two model lines
+## Models in this repository
 
-This repository intentionally maintains only two model implementations: the preserved legacy Q-Mini Light baseline and the independent Q-Mini Add/Sub v1. Other JSON files under `configs/` are capacity, planning or smoke profiles for the legacy codebase—not additional implemented model families. Historical notebooks are archived and are not active training routes.
-
-
-| Line | Location | Status |
+| Model implementation | Code | Current status |
 |---|---|---|
-| Q-Mini Light legacy | `qmini/` | Existing 705,742-parameter research baseline; preserve its code, Q2-v2 artifacts and checkpoints |
-| Q-Mini Add/Sub v1 | `qmini_addsub/` | Independent training/SFT, cached reference chat and verified packed weight archive; full integer-only inference runtime remains incomplete |
+| Q-Mini Light Legacy | `qmini/` | 705,742-parameter reference profile; Q2-v2 weights; preserve its existing checkpoints and tokenizer |
+| Q-Mini Add/Sub | `qmini_addsub/` | 760,340-parameter experimental profile; independent training/data/tokenizer/checkpoint format; real assistant quality remains unverified |
 
-Do not mix the two model lines. The Add/Sub loader must never read legacy Q2-v2 checkpoints, and the legacy package must remain unchanged by Add/Sub development.
+These are separate code paths and must not share checkpoints, tokenizers, datasets or training outputs. They are still stored in one GitHub repository; the repository split is not yet complete.
 
-## Q-Mini Add/Sub v1 — independent from-scratch model
+## Legacy Q-Mini Light
 
-The new line is implemented in qmini_addsub/. It reuses the legacy model's architectural ideas—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but uses new code, an independent 512-token byte-BPE tokenizer, separate checkpoints and its own training/data pipeline, plus a verified offline packed-weight export/loader. The Add/Sub Colab entry point checks out the repository's `main` branch.
+The Light profile is `configs/qmini_light_0.7m.json`. It uses causal depthwise convolution, gated diagonal state-space memory, sparse Top-1 experts and shared refinement. Its production Q2-v2 weight alphabet is `{-1.0, -0.5, +0.5, +1.0}` (four symbols, two bits per symbol). The inference path includes multiplication/dot-product operations; it is not Add/Sub-only.
 
-The current Add/Sub training algorithm also starts residual branches at 0.1 strength, adds an explicitly weighted router z-loss beside load balancing, and logs per-layer expert usage to expose routing collapse. These are stability improvements, not a claim of trained quality. The QAT weight alphabet is {-1.5, -0.5, 0, +0.5, +1.5}; fixed-width packing therefore needs 3 bits per weight. The new model also includes a per-token cached PyTorch reference-generation path, a hash-verified held-out assistant evaluation runner, and an offline `.qma` archive exporter/loader for all five-symbol weights plus an integrity-checked float32 auxiliary sidecar; none of these is the strict integer-only deployed runtime. The random-init pretraining model, local no-download dataset importer, optional pinned-source preparation and response-masked SFT stage are available. You can choose your own already-reviewed English dataset later; data import, tokenizer construction, pretraining and SFT are OFF by default in the Add/Sub Colab notebook. No legacy checkpoint is loaded, and no FP16 warm-up stage is required.
+Legacy code, checkpoints and Drive data must be preserved during cleanup and migration.
 
-Training uses three pinned, provenance-recorded English corpora: WikiText-103 raw for language pretraining, reviewed/non-synthetic English OASST1 conversations, and human-authored Databricks Dolly instruction pairs. TinyStories, Alpaca/UltraChat and model-generated teacher data are excluded. DailyDialog is excluded from the default mix because its license has non-commercial/share-alike terms. Review dataset licenses before use/redistribution.
+## Q-Mini Add/Sub
 
-See qmini_addsub/README.md for build instructions and docs/ADD_SUB_V1_SPEC.md for the architecture contract.
+The Add/Sub implementation is in `qmini_addsub/`. Its default configuration uses a 1,024-token vocabulary, width 96, four blocks, two Top-1 experts and a 512-token context. The model's five-symbol weight alphabet is `{-1.5, -0.5, 0, +0.5, +1.5}`, so fixed-width storage uses three bits per weight.
 
-**Important limitation:** the offline packed archive is a verified model-weight container, not a deployed inference engine. The current integer runtime implements the additive projection and bounded residual-add primitives only. Full model inference—convolution, recurrent-state, gates, experts, nonlinear LUTs, normalization, output projection and compiled device runtime—must pass its audit before Add/Sub v1 is described or used as a deployed multiply-free model. No Add/Sub weights have been trained yet.
+The training model uses PyTorch floating-point/autograd operations. The packed `.qma` archive is a verified weight container with float32 auxiliary tensors; it is **not** a complete integer-only inference engine. Optional WaveBit-HSRA is an experimental mode of this same Add/Sub model, disabled unless explicitly enabled. It is not a third model.
 
-## Current Colab entry points
+The Add/Sub data-preparation path uses hash-pinned Simple English Wikipedia text plus filtered OASST1 and human-authored Dolly instruction data. Review source licences before enabling downloads. User-selected local datasets can also be imported with provenance declarations.
 
-- **[Add/Sub v1 — from-scratch English model](colab/QMini_AddSub_V1_From_Scratch.ipynb)** — separate experimental model line with a new random initialization, independent data pipeline and checkpoints. Dataset import, tokenizer building, pretraining and SFT are all OFF by default. It supports importing user-selected local files without a dataset download; its full multiply-free inference runtime is still incomplete.
+## Supported Colab entry points
 
-- **[English CPU resume trainer V12](colab/QMini_English_CPU_One_Click_Resume.ipynb)** — the current English conversation-data training pipeline. It uses pinned DailyDialog and OpenAssistant OASST1 source files, verifies data hashes/manifests, and resumes only a compatible checkpoint. Running this notebook can start/resume training in Google Drive; CI does not run model training.
-- **[Existing Drive data CPU chat](colab/QMini_Existing_Drive_Data_CPU_Chat.ipynb)** — an existing-checkpoint chat experiment.
+- `colab/QMini_English_CPU_One_Click_Resume.ipynb`: legacy Q-Mini Light training/resume.
+- `colab/QMini_Existing_Drive_Data_CPU_Chat.ipynb`: chat using an existing legacy checkpoint.
+- `colab/QMini_AddSub_V1_From_Scratch.ipynb`: independent Add/Sub experimental pipeline; data preparation, tokenizer build, training and evaluation switches are off by default.
 
-See [the Colab notebook index](colab/README.md). Other notebook variants are historical experiments retained for reproducibility; do not treat TinyStories, Hindi/Hinglish, T4 V6–V8, V9 or teacher-distillation notebooks as the current training route.
+See [Colab entry points](colab/README.md) and [Add/Sub implementation notes](qmini_addsub/README.md).
 
-## Training-data policy
+## Scope and non-claims
 
-Production training inputs must have source provenance, a pinned revision, license information, exact source hashes, conversion manifests and reproducible train/validation separation.
+The active configuration set is limited to the legacy Light profile and the small CI smoke profile. Parameter count alone does not establish training progress or assistant capability.
 
-The current conversation-data pipeline uses:
+Do not claim general reasoning, factuality, Android deployment, complete integer-only inference or speed gains without independent held-out evaluation and measurements on the target device. CI does not launch full training.
 
-- **DailyDialog** — human dialogue data, pinned train/validation/test files. License: CC BY-NC-SA 4.0 (non-commercial terms apply).
-- **OpenAssistant OASST1** — English messages only, Apache-2.0. The conversion pipeline requires ready-for-export trees, positive review, non-deleted and explicitly non-synthetic messages; assistant alternatives with a nonzero rank are excluded.
-
-Synthetic/random examples are allowed only in clearly labeled development checks:
-- `scripts/learning_proof.py`: a controlled toy learning task, not language training.
-- `scripts/benchmark.py`: synthetic token IDs, not natural prompt quality or a real-device benchmark.
-- `qmini/preflight.py` and `tests/`: model-graph preflight and regression fixtures, not production corpus data.
-
-Never label model-generated synthetic replies as human-written data. The OASST1 field-level filters and tests are documented in [the project cleanup audit](docs/PROJECT_HISTORY_AND_CLEANUP_AUDIT_HI.md).
-
-## Legacy Q-Mini Light baseline
-
-The legacy architecture is attention-free and includes causal depthwise convolution, a gated diagonal state-space path, sparse Top-1 experts, shared refinement and Q2-v2 matrix-weight export.
-
-Its current production Q2-v2 codebook is:
-
-`{-1.0, -0.5, +0.5, +1.0}`
-
-It has **four** symbols and no zero symbol for an individual entry in a nonzero row. The old model's inference path uses multiplication/dot-product, convolution and gating operations. Do not describe it as add/sub-only.
-
-The legacy profile and artifact format remain available for backward compatibility. See [legacy architecture](docs/ARCHITECTURE.md), [Q2 quantization contract](docs/Q2_QUANTIZATION_SPEC.md) and [strict 2-bit migration status](docs/STRICT_2BIT_MIGRATION.md).
-
-## Repository layout
-
-- `qmini/` — legacy model, configuration, tokenizer, data pipeline, trainer, generation, export and runtime.
-- `qmini_addsub/` — independent Add/Sub v1 configuration, training model, data filters, tokenizer, training/SFT and additive projection prototype.
-- `configs/` — legacy model profiles.
-- `scripts/` — data preparation, benchmark and development utilities.
-- `tests/` — unit and regression tests, including synthetic test fixtures.
-- `colab/` — the three supported notebooks only: Add/Sub from-scratch, legacy English CPU resume and existing-Drive CPU chat.
-- `tests/fixtures/legacy_colab/` — six read-only historical notebook fixtures used by CI regression tests; they are not supported training entry points.
-- `docs/` — architecture, training, evaluation, data provenance and project audit.
-
-## Development checks
-
-Install the project and run the tests:
+## Development
 
 ```bash
 python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-The CI suite also compiles the native C++ projection primitive and cross-compiles its AArch64/NEON source. Cross-compilation is not a real Android-device benchmark.
+CI also compiles the native C++ projection primitive and cross-compiles its AArch64 implementation. Cross-compilation is not a real-device benchmark.
 
-## Capability and safety notes
-
-- A passing unit-test suite does not prove conversational quality.
-- A synthetic learning proof does not prove English language understanding.
-- A packed Q2 archive does not prove quality preservation.
-- An AArch64 cross-compile does not prove complete Android compatibility.
-- User Google Drive checkpoints and training logs are not stored in this Git repository.
-- No model training is started by CI or by this README.
-
-For the history, confirmed defects, data-quality policy and cleanup decisions, read [Project history and cleanup audit (Hindi)](docs/PROJECT_HISTORY_AND_CLEANUP_AUDIT_HI.md).
-
-
-### Add/Sub scaled trainability revision
-
-The Add/Sub development branch now includes scaled five-symbol QAT, dense initialization, 0.01 matrix decay, a 1,024-token chat-aware ByteLevel tokenizer and repetition penalty. It is a new 760,340-parameter identity; the prior 710,676-parameter model and Drive artifacts are preserved. Response quality still requires fresh training and held-out English evaluation.
-
-
-The Add/Sub default corpus preparation now uses a hash-pinned Simple English Wikipedia snapshot (human-authored text only; model-generated importance labels are ignored) with leakage-safe page-ID splits. Its CC-BY-SA-3.0 obligations are documented and must be reviewed before enabling corpus preparation.

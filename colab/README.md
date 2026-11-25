@@ -1,27 +1,24 @@
-# Active Colab entry points — exactly two model lines
+# Supported Colab entry points
 
-Only the following two model families are active in this repository. Do not mix their datasets, tokenizers, checkpoints, configs or Drive folders.
+The repository has two model implementations. Their Drive folders, tokenizers, datasets and checkpoints are separate.
 
-## 1. Legacy Q-Mini Light 0.7M
+## Legacy Q-Mini Light
 
-- **Training:** [English CPU resume trainer — V12](QMini_English_CPU_One_Click_Resume.ipynb). Uses the pinned DailyDialog/OpenAssistant preparation path and resumes only compatible legacy checkpoints.
-- **Chat/demo:** [Existing Drive data CPU chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb). This is a runtime demonstration for an existing legacy checkpoint; it does not create a new model family.
+- Training/resume: [Q-Mini English CPU resume](QMini_English_CPU_One_Click_Resume.ipynb)
+- Existing-checkpoint chat: [Q-Mini existing Drive data chat](QMini_Existing_Drive_Data_CPU_Chat.ipynb)
+- Package: `qmini/`
+- Configuration: `configs/qmini_light_0.7m.json`
 
-Package: `qmini/`. Legacy artifacts and checkpoints stay in their existing format and location. This model uses its documented Q2 format and is not an Add/Sub-only runtime.
+These notebooks work with the legacy checkpoint/data lineage only. Preserve existing Drive artifacts.
 
-## 2. New Q-Mini Add/Sub v1
+## Q-Mini Add/Sub
 
-- **From-scratch training:** [Q-Mini Add/Sub v1 notebook](QMini_AddSub_V1_From_Scratch.ipynb). English-first, independent random initialization, separate tokenizer/data/checkpoint paths, CPU by default. Pretraining and SFT are OFF until explicitly enabled.
+- From-scratch experimental pipeline: [Q-Mini Add/Sub](QMini_AddSub_V1_From_Scratch.ipynb)
+- Package: `qmini_addsub/`
+- Separate tokenizer, dataset manifest, pretraining/SFT checkpoints and evaluation.
 
-Package: `qmini_addsub/`. It must never load legacy `qmini/` weights or artifacts. The current implementation has the training/data pipeline and an additive projection reference primitive; the complete full-graph multiply-free inference runtime and export are still under development. It is not yet a trained or deployable assistant.
+Data preparation, tokenizer building, pretraining, SFT and evaluation are disabled by default. Review the selected source licence and data manifest before enabling them.
 
-## Legacy regression fixtures
+## Archive
 
-Historical notebook snapshots used by CI are stored under
-`tests/fixtures/legacy_colab/`, outside the active Colab folder. They are kept
-only to protect legacy compatibility tests. Do not use them as current training
-instructions.
-
-Only the three notebooks linked above are supported entry points. The legacy
-and Add/Sub model packages, tokenizers, datasets and checkpoints must remain
-separate.
+Historical notebook fixtures under `tests/fixtures/legacy_colab/` are used only by regression tests. They are not active training instructions or additional models.

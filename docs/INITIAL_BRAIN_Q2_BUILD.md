@@ -4,7 +4,7 @@ This process creates an **untrained, random-initialized Q-Mini model** whose del
 
 ## Google Colab
 
-For the automated build-only workflow, open [Q-Mini Light 0.7M Initial Brain Builder](https://colab.research.google.com/github/lion36508/Q-mini-light-0.7M/blob/main/colab/QMini_Initial_Brain_Build.ipynb) in Colab and run the cells from top to bottom. It defaults to the repository's 0.7M-class configuration, checks available RAM and storage, builds locally, verifies the Q2-v2 archive, and publishes a hash-checked copy to Drive. It does not train the model.
+This is a CLI build-only workflow, not a currently supported Colab notebook. Clone the repository, install its dependencies, and run the command below with the active Light configuration. It creates an untrained random-initialized Q2-v2 artifact; it does not train the model.
 
 Mount Drive and clone the repository:
 
@@ -47,10 +47,10 @@ Q2-v2 is the production/deployment matrix-weight format. During later Quantizati
 
 ## Training is a separate stage
 
-The initial artifact is not trained and does not include a tokenizer. The later training workflow must provide matching Q-Mini data streams and tokenizer. The 0.7M Light profile is intended to use the repository's existing single-device CUDA trainer; FSDP/ZeRO is not a prerequisite for this small profile. Keep the separate distributed-training work (issue #18) scoped to larger 5B-scale training. QAT still uses FP32 master parameters, gradients and optimizer state, so a packed 2-bit deployment artifact does not mean training itself runs in 2-bit memory.
+The initial artifact is not trained and does not include a tokenizer. The later training workflow must provide matching Q-Mini data streams and tokenizer. The 0.7M Light profile is intended to use the repository's existing single-device CUDA trainer; FSDP/ZeRO is not a prerequisite for this small profile. Distributed training is not included in this Light workflow. QAT still uses FP32 master parameters, gradients and optimizer state, so a packed 2-bit deployment artifact does not mean training itself runs in 2-bit memory.
 
 Do not delete older FP32 shards as part of this migration. Keep them as a separate backup/diagnostic artifact until the new Q2-v2 output has been independently verified.
 
 ## Private repository access from Colab
 
-This repository is private. In Colab, authenticate access to GitHub and either save a fine-grained token as a notebook secret named QMINI_GITHUB_TOKEN or enter it when the notebook displays its hidden prompt. Limit the token to this repository and Contents: Read-only. The notebook passes the token through a temporary Git authentication header and does not print or save it.
+The repository is public. Do not place a GitHub token in the notebook or output logs.

@@ -54,7 +54,7 @@ def _validate_base_tokenizer_fingerprint(
     if (
         not isinstance(expected, str)
         or len(expected) != 64
-        or any(character not in "0123456789abcdef" for character in expected.lower())
+        or any(character not in "0123456789abcdef" for character in expected)
     ):
         raise ValueError("Pretraining checkpoint is missing a valid tokenizer SHA-256 fingerprint.")
     actual = sha256_file(tokenizer_path)

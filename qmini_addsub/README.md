@@ -1,158 +1,46 @@
-# Q-Mini Add/Sub v1
+# Q-Mini Add/Sub
 
-An independent next-generation model line inside the same repository. It borrows the ideas of the legacy Q-Mini—causal depthwise convolution, gated diagonal state-space memory and sparse Top-1 experts—but implements its own code, configuration, tokenizer, training checkpoints and data lineage.
+Q-Mini Add/Sub is the repository's **one experimental new-model implementation**. It is not a separate third-party model and it must not load legacy Q2-v2 checkpoints.
 
-**Default experimental profile:** 1,024-token vocabulary, 96-wide state, four blocks with causal dilations 1/2/4/8, two Top-1 SwiGLU experts, 170-wide expert bottleneck, and 512-token context. The instantiated training model has **760,340 parameters**. This size is a design baseline, not evidence of better model quality.
+## Default profile
 
-Each block uses RMSNorm, causal depthwise convolution, an input-dependent gated diagonal state-space update (parallel associative scan), sparse Top-1 SwiGLU experts and learned bounded residual branch gates. Hard activation clipping is avoided so gradients are not zeroed at a clipping boundary. The same old-model ideas have been independently implemented, not imported from the legacy `qmini/` package.
+- 1,024-token vocabulary, width 96, four blocks, two Top-1 experts.
+- 512-token context and 760,340 parameters.
+- Causal depthwise convolution, gated diagonal state-space memory, sparse Top-1 SwiGLU experts, RMSNorm and residual branches.
+- Five quantized weight symbols: `{-1.5, -0.5, 0, +0.5, +1.5}`; fixed-width packing requires 3 bits per weight.
 
-## Add/Sub v2 algorithm-stability update
+This is an experimental model size, not a quality score. The public repository does not establish that this model has learned useful general-purpose conversation.
 
-The training algorithm now includes three explicit stability controls while preserving the 760,340-parameter default architecture and the five-symbol codebook:
+## Training and data
 
-- Residual branch gates initialize at **0.1**, not 0.5. The convolution, state-space and expert branches begin as small residual corrections and can learn stronger contributions from data.
-- Sparse Top-1 routing keeps the existing load-balancing objective and adds a separately weighted **router z-loss** on the log-partition. This discourages uncontrolled router-logit growth without hiding the coefficient inside the load-balancing term.
-- Every training/SFT metric row records **per-layer expert assignment fractions** plus the two router losses. Padding tokens are excluded from the balance and z-loss statistics.
+The implementation has its own tokenizer, data manifest, pretraining checkpoints, SFT checkpoints, evaluation and export path. The standard training model uses PyTorch floating-point operations and autograd.
 
-The pretraining and SFT checkpoint format identifiers are bumped so a run made with the older loss contract cannot be resumed accidentally. The offline exporter can still read prior shape-compatible checkpoint formats for conversion; this does not make their training trajectories interchangeable.
+The optional pinned data-preparation command uses:
+- Simple English Wikipedia article text for pretraining (CC-BY-SA-3.0).
+- Filtered English OpenAssistant OASST1 conversations (Apache-2.0).
+- Human-authored Databricks Dolly instructions (CC-BY-SA-3.0).
 
-These changes are algorithmic stability measures, not a claim of improved language quality. That requires a real, reviewed English corpus and held-out validation after training.
- 
-## Implementation status
+The script pins source revisions and hashes and writes the dataset transactionally. It requires `--accept-source-licenses` after the source terms have been reviewed. Install the declared optional dependencies with:
 
-**Implemented in this branch**
-- Independent random-initialized training model and validated configuration.
-- Five-symbol QAT weight alphabet: {-1.5, -0.5, 0, +0.5, +1.5}.
-- Three-bit packing/unpacking with invalid-code and non-canonical padding rejection.
-- Checkpoint-to-archive export of every five-symbol model weight, a separate auxiliary tensor sidecar, SHA-256 manifest validation and a strict reconstruction loader with parity/tamper tests.
-- Integer additive projection reference primitive; its AST regression test prohibits multiply, divide and matmul operators.
-- Pinned non-synthetic English data preparation.
-- Independent byte-level BPE tokenizer and token-stream preparation scripts.
-- Random-init pretraining with linear warm-up/cosine learning-rate decay, vector/norm no-decay AdamW groups and Add/Sub-only checkpoint resume.
-- Response-masked instruction fine-tuning from an Add/Sub v1 checkpoint, with deterministic Python/Torch RNG checkpoint state and resumable SFT v4 checkpoints, plus a separate held-out SFT test split.
-- Cached one-token reference generation with per-layer causal-convolution history and diagonal-SSM state, plus an interactive chat CLI.
+```bash
+python -m pip install -e ".[addsub-data]"
+python scripts/prepare_qmini_addsub_data.py --accept-source-licenses
+```
 
-**Not yet complete**
-- The packed `.qma` export is an offline model-weight container. Its auxiliary normalization, bias and gate tensors are stored as float32; its loader reconstructs the PyTorch reference model. It is not the integer-only deployed inference graph.
-- The cached PyTorch generation path avoids reprocessing the full prompt, but it is a reference path and still uses floating-point operators. The integer runtime currently proves the projection primitive and bounded integer residual addition only.
-- Calibrated activation/state/gating LUTs, complete integer convolution/SSM/MoE/normalization/output execution and the compiled ARM64/Android runtime are not implemented.
-- No Add/Sub weights have been trained and no quality/phone performance results exist.
+A user-selected local corpus can be imported instead. The import manifest records source/license declarations and hashes; those declarations are not an independent legal or authorship audit. Train the tokenizer only after checking the train/validation/test split and provenance.
 
-Do not use the PyTorch training graph as a production inference runtime. The training graph intentionally uses floating-point operations and optimizer arithmetic; the project requirement is that the deployed inference graph use only lookup, comparisons, integer addition and subtraction.
+The Colab notebook `colab/QMini_AddSub_V1_From_Scratch.ipynb` is the supported interactive entry point. All data and training stages are disabled by default.
 
-## Legacy and new model separation
+## Checkpoints and generation
 
-| Legacy model | Add/Sub v1 |
-|---|---|
-| qmini package | qmini_addsub package |
-| Q2-v2 four symbols | Five symbols including exact zero |
-| Existing tokenizer/checkpoints | Independent tokenizer/checkpoints |
-| Existing Drive data | Separate QMini-Light-AddSub-v1 folder |
-| Existing code is preserved | Random initialization only |
+Add/Sub accepts only its own checkpoint formats and verifies the tokenizer/data fingerprints before resuming or fine-tuning. Keep each dataset, tokenizer, run directory and checkpoint lineage together. Never point it at a legacy `qmini/` checkpoint or legacy Drive folder.
 
-Never load a legacy Q2-v2 checkpoint into this package. Do not overwrite or migrate old model files.
+The PyTorch generation path is a correctness/reference path. The `.qma` export packs five-symbol weights and verifies archive hashes, but its auxiliary tensors remain float32 and its loader reconstructs the PyTorch reference model. The complete integer-only convolution/state-space/MoE/normalization/output graph and production ARM64 runtime are not complete.
 
-## Bring your own selected dataset (no download)
+## Optional WaveBit-HSRA
 
-The model does not require the repository's optional pinned corpus. After reviewing a dataset yourself, put three already-separated UTF-8 English text files in a folder:
+WaveBit-HSRA is an opt-in experimental mode inside this same Add/Sub implementation. It is off by default and is not a separately trained model. Its native projection primitives and archive format are not proof of full-model multiplication-free inference, higher quality or a speedup. No such claims should be made without complete end-to-end parity and matched held-out measurements.
 
-- `train.txt`
-- `validation.txt`
-- `test.txt`
+## Evaluation limits
 
-The files must be distinct and should already be split by document/source group to avoid leakage. The importer records the user-declared source, license, file hashes and split paths; it cannot independently prove that a source is human-authored or that plain-text splits have no document-level overlap. You must explicitly attest both that the data is English and that you reviewed the rights/non-synthetic provenance; these flags are declarations, not automatic language, license or authorship verification.
-
-Import only the local files (no network download is performed):
-
-    python scripts/import_qmini_addsub_dataset.py --pretrain-train /path/train.txt --pretrain-validation /path/validation.txt --pretrain-test /path/test.txt --pretrain-source "dataset name and revision" --pretrain-license "exact source license" --confirm-rights-and-human-data --confirm-english-data --output data/qmini_addsub_v1
-
-For supervised assistant training, supply all three files `--sft-train`, `--sft-validation` and `--sft-test`, plus `--sft-source` and `--sft-license`. Each JSONL record must contain alternating `user`/`assistant` messages, `human_authored: true`, and `synthetic: false`. The importer normalizes messages and rejects exact duplicate conversations across every pair of splits. SFT reports validation response loss during training and held-out test response loss only after training is complete. Do not mark generated or unknown-provenance text as human-authored.
-
-Then build the tokenizer and streams. SFT data is optional at this stage; the tokenizer is trained on pretraining train text alone when no SFT train file exists. The tokenizer script also writes `model_config.json` with the exact vocabulary size it actually produced; pass this file to training so tokenizer and model cannot silently disagree:
-
-    python scripts/train_qmini_addsub_tokenizer.py
-    python scripts/encode_qmini_addsub_streams.py
-
-The existing pinned WikiText/OASST1/Dolly preparation command remains optional. No dataset is downloaded by importing the model package or by running CI. The Add/Sub Colab notebook has data import, tokenizer build, pretraining and SFT switches OFF by default.
-
-## English training-data mix
-
-The default preparation script uses:
-
-1. **WikiText-103 raw** for next-token language pretraining. The source archive is SHA-256 pinned; source metadata reports CC-BY-SA/GFDL terms (upstream raw metadata does not pin one single version).
-2. **OpenAssistant OASST1** for English human-annotated multi-turn conversation data. Only ready-for-export, positively reviewed, non-deleted, explicitly non-synthetic messages and rank-0 assistant answers are retained. The pinned source revision/file hash is verified. License: Apache-2.0.
-3. **Databricks Dolly 15k** for human-authored instruction/response examples. Dataset revision is pinned and source file SHA-256 is recorded at preparation time. License: CC-BY-SA-3.0.
-
-DailyDialog is deliberately excluded from this default mix because its dataset card lists CC-BY-NC-SA-4.0 non-commercial/share-alike conditions. TinyStories, Alpaca/UltraChat, teacher-generated outputs and other model-generated corpora are excluded from production training.
-
-Review each source's terms before use or redistribution. Attribution/share-alike requirements can affect downstream releases. The preparation script requires the explicit --accept-source-licenses flag.
-
-## Reproducible build steps
-
-Install the data-preparation extras without replacing the environment's existing PyTorch:
-
-    python -m pip install -e ".[addsub-data]"
-
-Prepare pinned data:
-
-    python scripts/prepare_qmini_addsub_data.py --accept-source-licenses
-
-Train the tokenizer using only training splits, then encode pretraining text:
-
-    python scripts/train_qmini_addsub_tokenizer.py
-    python scripts/encode_qmini_addsub_streams.py
-
-Start a new model from random initialization:
-
-    python -m qmini_addsub.train --train-bin data/qmini_addsub_v1/pretrain_train.u16 --valid-bin data/qmini_addsub_v1/pretrain_validation.u16 --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --config artifacts/qmini_addsub_v1/model_config.json --output runs/qmini_addsub_v1_pretrain --device cpu --steps 2000
-
-After a pretraining or SFT checkpoint exists, create a verified offline five-symbol weight archive:
-
-    python -m qmini_addsub.export --checkpoint runs/qmini_addsub_v1_sft/sft-checkpoint-step-000000500.pt --output artifacts/qmini_addsub_v1/model.qma
-
-The archive contains all quantized matrix/embedding/depthwise weights packed at 3 bits per symbol, checksums, a configuration/tensor index and a float32 auxiliary tensor sidecar. Load it for PyTorch reference parity/tamper checks with `load_addsub_export`. It is not yet a production integer-only/mobile runtime.
-
-After a checkpoint exists, the PyTorch reference chat can be opened with `python -m qmini_addsub.generate --checkpoint <checkpoint.pt> --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --interactive`. This is for correctness testing, not the multiplication-free phone runtime.
-
-Instruction fine-tuning may begin only from a checkpoint produced by this Add/Sub v1 pretraining code:
-
-    python -m qmini_addsub.sft --base-checkpoint runs/qmini_addsub_v1_pretrain/checkpoint-step-000002000.pt --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --train-jsonl data/qmini_addsub_v1/sft_train.jsonl --valid-jsonl data/qmini_addsub_v1/sft_validation.jsonl --test-jsonl data/qmini_addsub_v1/sft_test.jsonl --output runs/qmini_addsub_v1_sft --device cpu
-
-Paths/step counts above are examples; only run after checking data preparation, available storage/compute and validation. No training begins during CI or by importing this package.
-
-## Held-out assistant evaluation
-
-After SFT, run greedy generation only on the manifest-declared held-out test split:
-
-    python -m qmini_addsub.evaluate --checkpoint runs/qmini_addsub_v1_sft/sft-checkpoint-step-000000500.pt --tokenizer artifacts/qmini_addsub_v1/tokenizer.json --test-jsonl data/qmini_addsub_v1/sft_test.jsonl --dataset-manifest data/qmini_addsub_v1/dataset_manifest.json --output runs/qmini_addsub_v1_eval
-
-The evaluator verifies the test-file hash and tokenizer fingerprint, keeps prior turns as context, and writes every generated answer/reference pair plus exact-match and token-overlap metrics. These are lexical baselines only; they do not prove factuality, reasoning or semantic correctness. Never use the SFT training or validation split as the reported held-out result.
-
-## Inference arithmetic contract
-
-The required weight codebook is {-1.5, -0.5, 0, +0.5, +1.5}. Five symbols require at least three bits; they cannot be encoded in fixed two-bit storage.
-
-The real inference path must not use multiplication, division, matmul, dot products, convolution multiply, floating rescaling or fused multiply-add. Quantized activation/weight contributions are obtained from versioned lookup tables and accumulated by addition/subtraction. Zero maps to no contribution. This contract is not considered satisfied until the entire graph—including convolution, recurrent state, expert routing, nonlinearities, embedding/output projection and sampling—is audited.
-
-See the full architecture and acceptance contract in docs/ADD_SUB_V1_SPEC.md.
-
-
-## Data-cleaning contract
-
-Pinned English sources pass through a fail-closed, versioned cleaner before the SFT split is written. Text is normalized to Unicode NFC, line endings and horizontal whitespace are normalized, and unsafe control characters are removed. Empty/short and overlong fields, email addresses, credential-like strings and explicitly labelled phone-contact strings are rejected with per-field reason counters in `dataset_manifest.json`.
-
-OASST1 still requires `lang == "en"`, `ready_for_export`, positive review, `deleted is False`, `synthetic is False`, and rank-zero assistant responses. Dolly is pinned to a fixed dataset revision and is treated as an English source. This cleaner does not claim to infer language from arbitrary text: language provenance comes from those source contracts. Exact duplicate conversations are removed before stable whole-conversation train/validation/test splitting. Raw pinned downloads remain in the cache and are not overwritten.
-
-Synthetic tests and benchmarks remain outside the production corpus. A cleaning pass never converts a synthetic sample into a human-authored one.
-
-
-## Scaled QAT and balanced tokenizer update
-
-Dense Kaiming-normal master weights now use per-tensor scaled five-symbol STE (scale = 1.4 × mean absolute weight). Zero is exact and STE gradients remain live through zero master weights. Matrix weight decay is 0.01. The 1,024-token ByteLevel tokenizer samples up to 64 MiB from pretraining training text and includes all SFT training messages so conversational terms influence BPE merges. Validation and test are never used for tokenizer training.
-
-WikiText `@-@` and spaces before punctuation are normalized. SFT and generation use `You are Q-Mini.`; generation applies a configurable repetition penalty. New checkpoint IDs prevent resuming old optimizer states. Packed archive v2 saves tensor scales and retains v1 reading support. Old 710,676-parameter Drive files are preserved and need new training for the 760,340-parameter model. This is not yet the complete multiply-free Android runtime.
-
-
-### Pretraining corpus selection
-
-The default pinned pretraining source is Simple English Wikipedia, dump 2026-03-01, from `juno-labs/simple_wikipedia` at revision `e95aee4ada4de4ec556d93505e577b29f9ff9a08`. The 439,202,943-byte Parquet file is SHA-256 checked before use. Only the human-authored `content_no_link` article text and titles are used; the dataset's model-generated `importance` labels are ignored. Article page IDs are split deterministically 90/5/5 for train/validation/test. The dataset is CC-BY-SA-3.0 and requires attribution/share-alike review.
+The evaluator records generated/reference pairs and lexical metrics such as exact match and token overlap. These do not measure semantic correctness, factuality, reasoning or safety. A passing software test suite is not proof of conversational quality. Real-data pretraining/SFT and independent held-out evaluation are still required before describing Add/Sub as a capable assistant.

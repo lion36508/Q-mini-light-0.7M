@@ -78,7 +78,19 @@ def test_architecture_preflight_checks_shapes_and_gradients_without_updating_wei
 
 
 def test_architecture_preflight_rejects_oversized_config_before_allocation():
-    config = QMiniConfig.from_json("configs/qmini_5b.json")
+    config = QMiniConfig(
+        vocab_size=32768,
+        d_model=1024,
+        d_hidden=2048,
+        n_layers=32,
+        n_experts=8,
+        top_k=1,
+        max_context=512,
+        kernel_size=10,
+        dilations=(1,) * 32,
+        use_state_space=True,
+        gradient_checkpointing=True,
+    )
     with pytest.raises(MemoryError, match="refused to materialize"):
         run_architecture_preflight(
             config,
