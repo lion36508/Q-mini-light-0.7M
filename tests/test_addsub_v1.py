@@ -1877,6 +1877,9 @@ def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
     assert "from qmini_addsub.checkpoints import resolve_checkpoint" in code
     assert "Automatically resuming pretraining" in code
     assert "Automatically resuming assistant SFT" in code
+    assert "RUN_READINESS_GATE = False" in code
+    assert "qmini_addsub.readiness" in code
+    assert "'--checkpoint'" in code
     assert "metrics_filename='metrics.jsonl'" in code
     assert "sorted(PRETRAIN_DIR.glob" not in code
     assert "sorted(SFT_DIR.glob" not in code
