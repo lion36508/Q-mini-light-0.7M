@@ -95,6 +95,12 @@ def groupwise_scale(weight: torch.Tensor, group_size: int = 32, multiplier: floa
         raise ValueError("group_size must be a positive integer.")
     if not math.isfinite(multiplier) or multiplier <= 0.0:
         raise ValueError("scale multiplier must be finite and positive.")
+    fixed_scale = getattr(weight, "_qmini_fixed_group_scale", None)
+    if fixed_scale is not None:
+        value = torch.as_tensor(fixed_scale, device=weight.device, dtype=weight.dtype)
+        if value.shape != weight.shape or not bool(torch.isfinite(value).all()) or bool((value <= 0).any()):
+            raise ValueError("Frozen group-wise quantization scale is invalid.")
+        return value.detach()
     if not bool(torch.isfinite(weight).all()):
         raise ValueError("WaveBit weights contain non-finite values.")
     flat = weight.detach().reshape(weight.shape[0], -1)

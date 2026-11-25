@@ -71,10 +71,8 @@ def export_addsub_checkpoint(
     checkpoint = torch.load(source, map_location="cpu", weights_only=True)
     run_contract = checkpoint.get("run_contract", {})
     if isinstance(run_contract, dict) and run_contract.get("wavebit_hsra") is not None:
-        raise ValueError(
-            "WaveBit-HSRA group-wise packing needs its dedicated archive/runtime format; "
-            "the legacy per-tensor exporter is intentionally blocked."
-        )
+        from .wavebit_export import export_wavebit_checkpoint
+        return export_wavebit_checkpoint(source, destination, checkpoint)
     checkpoint_format = checkpoint.get("format")
     if checkpoint_format not in ACCEPTED_CHECKPOINT_FORMATS:
         raise ValueError("Only known Q-Mini Add/Sub v1 checkpoints can be exported.")
@@ -225,9 +223,19 @@ def load_addsub_export(
     with zipfile.ZipFile(source, "r") as archive:
         member_names = archive.namelist()
         names = set(member_names)
-        if len(member_names) != len(names) or names != ARCHIVE_MEMBERS:
+        wavebit_members = {
+            "manifest.json", "weights.bin", "auxiliary.npz", "group_metadata.npz"
+        }
+        if len(member_names) != len(names):
+            raise ValueError("Add/Sub export contains duplicate archive members.")
+        if names == wavebit_members:
+            from .wavebit_export import load_wavebit_export
+            return load_wavebit_export(
+                source, device_name=device_name, tokenizer_path=tokenizer_path
+            )
+        if names != ARCHIVE_MEMBERS:
             raise ValueError(
-                "Add/Sub export contains duplicate, missing or unexpected archive members."
+                "Add/Sub export contains missing, unexpected or incompatible archive members."
             )
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         weights_payload = archive.read("weights.bin")
