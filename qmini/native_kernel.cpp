@@ -531,8 +531,10 @@ static int qmini_octave_groupwise_linear_i8_impl(
         const int8_t* input_row = input +
             static_cast<std::size_t>(row) * static_cast<std::size_t>(in_features);
         for (int output_index = 0; output_index < out_features; ++output_index) {
-            std::vector<int64_t> group_accumulators(
-                static_cast<std::size_t>(group_count), 0
+            // Decode the variable-length triplet stream once, then accumulate
+            // each scale group in 8-lane blocks where the target has NEON.
+            std::vector<int8_t> decoded_coefficients(
+                static_cast<std::size_t>(in_features), 0
             );
             std::size_t cursor = row_offsets[output_index];
             const std::size_t end = row_offsets[output_index + 1];
@@ -576,11 +578,8 @@ static int qmini_octave_groupwise_linear_i8_impl(
                         static_cast<int64_t>(logical_triplet) * 3 + lane;
                     if (feature64 < in_features) {
                         const int feature = static_cast<int>(feature64);
-                        const int group_index = feature / group_size;
-                        group_accumulators[static_cast<std::size_t>(group_index)] +=
-                            qmini_octave_shift_add_term(
-                                input_row[feature], coefficients[lane]
-                            );
+                        decoded_coefficients[static_cast<std::size_t>(feature)] =
+                            coefficients[lane];
                     }
                 }
                 ++logical_triplet;
@@ -595,9 +594,24 @@ static int qmini_octave_groupwise_linear_i8_impl(
                 static_cast<std::size_t>(output_index) *
                 static_cast<std::size_t>(group_count);
             for (int group = 0; group < group_count; ++group) {
-                const float partial_half_units = static_cast<float>(
-                    group_accumulators[static_cast<std::size_t>(group)]
-                );
+                const int group_start = group * group_size;
+                const int group_width =
+                    (in_features - group_start) < group_size
+                        ? (in_features - group_start) : group_size;
+                int64_t group_accumulator = 0;
+                int offset = 0;
+                while (offset < group_width) {
+                    const int block_width =
+                        (group_width - offset) < 8 ? (group_width - offset) : 8;
+                    group_accumulator += qmini_octave_accumulate_block(
+                        input_row,
+                        group_start + offset,
+                        decoded_coefficients.data() + group_start + offset,
+                        block_width
+                    );
+                    offset += block_width;
+                }
+                const float partial_half_units = static_cast<float>(group_accumulator);
                 const float scale = group_scales[
                     scale_row + static_cast<std::size_t>(group)
                 ];

@@ -557,6 +557,22 @@ def test_native_octave_groupwise_projection_validates_group_metadata(compiled_na
         )
 
 
+def test_native_octave_groupwise_projection_handles_all_zero_groups(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.asarray([[127, -127, 64, 32, -16, 8, 4]], dtype=np.int8)
+    codes = np.full((2, 7), 2, dtype=np.uint8)
+    modes = np.zeros((2, 3), dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=True)
+    group_scales = np.ones((2, 2), dtype=np.float32)
+    input_scales = np.asarray([0.125], dtype=np.float32)
+
+    actual = native.octave_groupwise_linear(
+        activations, packed, offsets, group_scales, input_scales,
+        group_size=6, boost_factor=4,
+    )
+    np.testing.assert_array_equal(actual, np.zeros((1, 2), dtype=np.float32))
+
+
 def test_native_octave_groupwise_projection_supports_missing_bias(compiled_native_library):
     native = NativeKernel(compiled_native_library)
     activations = np.asarray([[4, -3, 7, 1, 2]], dtype=np.int8)
