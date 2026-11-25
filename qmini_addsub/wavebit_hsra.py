@@ -31,6 +31,11 @@ DEFAULT_WAVEBIT_OPTIONS = {
     "context_threshold": 0.5,
     "context_temperature": 0.75,
     "state_limit": 16.0,
+    # 4 preserves existing checkpoints; x2 is an explicit research ablation.
+    "octave_boost_factor": 4,
+    "hadamard": False,
+    "hadamard_block_size": 8,
+    "activation_bits": 4,
 }
 
 
@@ -43,6 +48,23 @@ def validate_wavebit_options(options: dict[str, Any] | None) -> dict[str, Any] |
     if unknown:
         raise ValueError(f"Unknown WaveBit-HSRA options: {sorted(unknown)}")
     result = {**DEFAULT_WAVEBIT_OPTIONS, **options}
+    boost_factor = result["octave_boost_factor"]
+    if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
+        raise ValueError("Octave-Shift boost factor must be 2 or 4.")
+    if not isinstance(result["hadamard"], bool):
+        raise TypeError("WaveBit hadamard must be a boolean.")
+    block_size = result["hadamard_block_size"]
+    if (
+        isinstance(block_size, bool) or not isinstance(block_size, int)
+        or block_size < 1 or block_size > 64 or block_size & (block_size - 1)
+    ):
+        raise ValueError("Hadamard block size must be a power of two in [1, 64].")
+    activation_bits = result["activation_bits"]
+    if (
+        isinstance(activation_bits, bool) or not isinstance(activation_bits, int)
+        or activation_bits < 2 or activation_bits > 8
+    ):
+        raise ValueError("Activation quantization bits must be an integer in [2, 8].")
     if isinstance(result["group_size"], bool) or not isinstance(result["group_size"], int) or result["group_size"] < 3 or result["group_size"] % 3:
         raise ValueError("Octave-Shift group_size must be a positive multiple of three.")
     if isinstance(result["gamma"], bool) or not isinstance(result["gamma"], int) or not 1 <= result["gamma"] <= 15:
@@ -101,8 +123,9 @@ def octave_shift_quantize(
     group_size: int = 30,
     ewgs_strength: float = 0.5,
     octave_temperature: float = 0.25,
+    boost_factor: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Five base symbols plus one shared x4 mode bit per three-weight group."""
+    """Five base symbols plus one shared x2 or x4 mode bit per triplet."""
     if not isinstance(weight, torch.Tensor) or not weight.is_floating_point():
         raise TypeError("Octave-Shift weights must be floating-point tensors.")
     if weight.ndim < 2 or weight.numel() == 0:
@@ -113,6 +136,8 @@ def octave_shift_quantize(
         raise ValueError("ewgs_strength must be finite and in [0, 2].")
     if not math.isfinite(octave_temperature) or octave_temperature <= 0.0:
         raise ValueError("octave_temperature must be finite and positive.")
+    if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
+        raise ValueError("boost_factor must be the integer 2 or 4.")
     if not bool(torch.isfinite(weight).all()):
         raise ValueError("Octave-Shift weights contain non-finite values.")
 
@@ -133,8 +158,8 @@ def octave_shift_quantize(
     normalized = flat_weight / flat_scale
     grouped = normalized.reshape(rows, -1, 3)
     normal_hard = _hard_octave_symbol(grouped)
-    boost_base_hard = _hard_octave_symbol(grouped / 4.0)
-    boost_hard = boost_base_hard * 4.0
+    boost_base_hard = _hard_octave_symbol(grouped / float(boost_factor))
+    boost_hard = boost_base_hard * float(boost_factor)
 
     normal_error = (grouped - normal_hard).square().sum(dim=-1)
     boost_error = (grouped - boost_hard).square().sum(dim=-1)
@@ -181,12 +206,14 @@ def wavebit_quantize(
     group_size: int = 30,
     ewgs_strength: float = 0.5,
     octave_temperature: float = 0.25,
+    boost_factor: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compatibility entry point; the active weight quantizer is Octave-Shift."""
     return octave_shift_quantize(
         weight, group_size=group_size,
         ewgs_strength=ewgs_strength,
         octave_temperature=octave_temperature,
+        boost_factor=boost_factor,
     )
 
 
@@ -351,15 +378,17 @@ def unpack_octave_stream(
     return decoded_codes[:, :features], decoded_modes
 
 
-def build_octave_decode_lut() -> np.ndarray:
-    """256-entry decode table; valid outputs are signed half-unit coefficients."""
+def build_octave_decode_lut(boost_factor: int = 4) -> np.ndarray:
+    """256-entry decode table; boost_factor is recorded alongside packed weights."""
+    if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
+        raise ValueError("boost_factor must be the integer 2 or 4.")
     table = np.full((256, 4), -128, dtype=np.int8)
     half_units = (-2, -1, 0, 1, 2)
     for token in range(250):
         base = token % 125
         boost = token >= 125
         symbol_codes = (base % 5, (base // 5) % 5, base // 25)
-        factor = 4 if boost else 1
+        factor = boost_factor if boost else 1
         table[token, :3] = [half_units[code] * factor for code in symbol_codes]
         table[token, 3] = int(boost)
     return table
@@ -371,8 +400,11 @@ def integer_octave_projection(
     row_offsets: np.ndarray,
     input_features: int,
     bias_half_units: np.ndarray | None = None,
+    boost_factor: int = 4,
 ) -> np.ndarray:
     """Integer reference: LUT decode plus add/sub/left-shift, result in half-units."""
+    if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
+        raise ValueError("boost_factor must be the integer 2 or 4.")
     activations = np.asarray(activation_codes)
     stream = np.asarray(packed_stream)
     offsets = np.asarray(row_offsets)
@@ -393,7 +425,7 @@ def integer_octave_projection(
         raise ValueError("Octave row offsets must be monotonically increasing.")
 
     required_groups = (input_features + 2) // 3
-    lut = build_octave_decode_lut()
+    lut = build_octave_decode_lut(boost_factor=boost_factor)
     output = np.zeros((activations.shape[0], out_features), dtype=np.int64)
     for batch in range(activations.shape[0]):
         for out_index in range(out_features):
@@ -480,6 +512,58 @@ def resize_context(context: torch.Tensor, width: int) -> torch.Tensor:
     return context.index_select(-1, indices)
 
 
+
+
+def _hadamard_power_of_two(inputs: torch.Tensor) -> torch.Tensor:
+    """Orthonormal Walsh-Hadamard butterfly for a power-of-two final dimension."""
+    width = inputs.shape[-1]
+    if width < 1 or width & (width - 1):
+        raise ValueError("Hadamard transform width must be a positive power of two.")
+    transformed = inputs
+    offset = 1
+    while offset < width:
+        shape = (*transformed.shape[:-1], width // (2 * offset), 2, offset)
+        pairs = transformed.reshape(shape)
+        left = pairs.select(-2, 0)
+        right = pairs.select(-2, 1)
+        transformed = torch.stack((left + right, left - right), dim=-2).reshape_as(transformed)
+        offset *= 2
+    return transformed / math.sqrt(width)
+
+
+def blockwise_hadamard(inputs: torch.Tensor, block_size: int = 8) -> torch.Tensor:
+    """Apply orthonormal Hadamard blocks and transform any power-of-two tail."""
+    if not isinstance(inputs, torch.Tensor) or inputs.ndim < 1 or inputs.shape[-1] < 1:
+        raise ValueError("Hadamard inputs must have a non-empty final feature dimension.")
+    if isinstance(block_size, bool) or not isinstance(block_size, int) or block_size < 1 or block_size > 64 or block_size & (block_size - 1):
+        raise ValueError("Hadamard block_size must be a power of two in [1, 64].")
+    width = inputs.shape[-1]
+    pieces = []
+    cursor = 0
+    while cursor < width:
+        remaining = width - cursor
+        current = min(block_size, remaining)
+        current = 1 << (current.bit_length() - 1)
+        pieces.append(_hadamard_power_of_two(inputs[..., cursor : cursor + current]))
+        cursor += current
+    return torch.cat(pieces, dim=-1) if len(pieces) > 1 else pieces[0]
+
+
+def quantize_activation_ste(inputs: torch.Tensor, bits: int = 4) -> torch.Tensor:
+    """Per-token symmetric activation fake-quantization with an identity STE."""
+    if not isinstance(inputs, torch.Tensor) or not inputs.is_floating_point():
+        raise TypeError("Activation quantization expects a floating-point tensor.")
+    if isinstance(bits, bool) or not isinstance(bits, int) or not 2 <= bits <= 8:
+        raise ValueError("Activation bits must be an integer in [2, 8].")
+    if not bool(torch.isfinite(inputs).all()):
+        raise ValueError("Activation tensor contains non-finite values.")
+    maximum_code = (1 << (bits - 1)) - 1
+    scale = inputs.detach().abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / maximum_code
+    codes = torch.round(inputs / scale).clamp(-maximum_code, maximum_code)
+    dequantized = codes * scale
+    return inputs + (dequantized - inputs).detach()
+
+
 def wavebit_linear(
     inputs: torch.Tensor,
     weight: torch.Tensor,
@@ -489,15 +573,28 @@ def wavebit_linear(
     group_size: int = 30,
     ewgs_strength: float = 0.5,
     octave_temperature: float = 0.25,
+    boost_factor: int = 4,
+    hadamard: bool = False,
+    hadamard_block_size: int = 8,
+    activation_bits: int = 4,
 ) -> torch.Tensor:
-    """Octave-Shift weights combined with WaveBit's dynamic context gain."""
+    """Octave-Shift weights plus optional Hadamard-rotated low-bit activations."""
     if inputs.shape != context.shape:
         raise ValueError("WaveBit linear context must match the input tensor shape.")
     quantized, _, _, _ = wavebit_quantize(
         weight, group_size=group_size, ewgs_strength=ewgs_strength,
         octave_temperature=octave_temperature,
+        boost_factor=boost_factor,
     )
-    return F.linear(inputs * wavebit_context_gain(context), quantized, bias)
+    projected_inputs = inputs * wavebit_context_gain(context)
+    if hadamard:
+        projected_inputs = blockwise_hadamard(
+            projected_inputs, block_size=hadamard_block_size
+        )
+        projected_inputs = quantize_activation_ste(
+            projected_inputs, bits=activation_bits
+        )
+    return F.linear(projected_inputs, quantized, bias)
 
 
 def wavebit_depthwise_conv1d(
@@ -510,13 +607,14 @@ def wavebit_depthwise_conv1d(
     group_size: int,
     ewgs_strength: float,
     octave_temperature: float = 0.25,
+    boost_factor: int = 4,
 ) -> torch.Tensor:
     """Depthwise Octave-Shift projection with context-modulated inputs."""
     if padded_inputs.shape != padded_context.shape:
         raise ValueError("Padded WaveBit inputs and contexts must have identical shapes.")
     quantized, _, _, _ = wavebit_quantize(
         weight, group_size=group_size, ewgs_strength=ewgs_strength,
-        octave_temperature=octave_temperature,
+        octave_temperature=octave_temperature, boost_factor=boost_factor,
     )
     return F.conv1d(
         padded_inputs * wavebit_context_gain(padded_context),

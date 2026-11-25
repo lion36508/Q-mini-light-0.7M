@@ -87,3 +87,47 @@ original path. A baseline run remains available by omitting `--wavebit-hsra`.
 
 The existing Add/Sub model remains the single zero-inclusive evolving model.
 All WaveBit additions are implemented inside that model path, not alongside it.
+
+
+
+## x2 + Hadamard research ablation (same model, opt-in)
+
+The new controls extend the existing model path; they do not create another
+model class or parameter set:
+
+- octave_boost_factor=2 selects a shared x2 boost for each packed weight
+  triplet. The default remains x4 so old WaveBit run contracts and old packed
+  semantics are unchanged. The factor is recorded in the checkpoint run
+  contract and must be supplied to the Python integer decoder.
+- hadamard=True applies a fixed, orthonormal blockwise Walsh-Hadamard
+  transform to activations entering each expert's down projection, followed
+  by per-token symmetric fake quantization at the configured bit width
+  (default 4). The transform uses power-of-two blocks and transforms any
+  power-of-two tail, so the 170-wide default expert hidden vector remains
+  exactly 170 features.
+- The Hadamard transform has no trainable parameters. Existing model
+  parameter count and state_dict keys remain unchanged.
+- The setting is opt-in and affects the training/reference graph only. It
+  does not establish lower validation loss, better English chat quality,
+  lower latency or lower energy until matched training runs and held-out
+  evaluation are completed.
+
+Example CPU command-line options:
+
+    python -m qmini_addsub.train \\
+      --train-bin data/train.bin \\
+      --valid-bin data/validation.bin \\
+      --tokenizer data/tokenizer.json \\
+      --output runs/qmini_addsub_x2_hadamard \\
+      --device cpu \\
+      --wavebit-hsra \\
+      --wavebit-octave-boost-factor 2 \\
+      --wavebit-hadamard \\
+      --wavebit-hadamard-block-size 8 \\
+      --wavebit-activation-bits 4
+
+The current C++ qmini_octave_linear_i8_v1 decoder remains x4-specific;
+the x2 path is currently covered by the Python integer reference and the
+PyTorch training surrogate. Native x2 dispatch and a versioned group-wise
+archive must be added and tested before x2 can be described as a deployable
+packed runtime. The existing exporter continues to reject WaveBit checkpoints.

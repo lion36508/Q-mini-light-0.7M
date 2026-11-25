@@ -482,6 +482,16 @@ def main() -> None:
     parser.add_argument("--wavebit-gamma", type=int, default=4)
     parser.add_argument("--wavebit-ewgs-strength", type=float, default=0.5)
     parser.add_argument("--wavebit-octave-temperature", type=float, default=0.25)
+    parser.add_argument(
+        "--wavebit-octave-boost-factor", type=int, choices=(2, 4), default=4,
+        help="Shared triplet boost; 4 keeps old behavior, 2 selects the x2 ablation.",
+    )
+    parser.add_argument(
+        "--wavebit-hadamard", action="store_true",
+        help="Enable blockwise Hadamard + per-token activation fake-quantization on expert down projections.",
+    )
+    parser.add_argument("--wavebit-hadamard-block-size", type=int, default=8)
+    parser.add_argument("--wavebit-activation-bits", type=int, default=4)
     args = parser.parse_args()
     config = None
     if args.config is not None:
@@ -511,6 +521,10 @@ def main() -> None:
                 "gamma": args.wavebit_gamma,
                 "ewgs_strength": args.wavebit_ewgs_strength,
                 "octave_temperature": args.wavebit_octave_temperature,
+                "octave_boost_factor": args.wavebit_octave_boost_factor,
+                "hadamard": args.wavebit_hadamard,
+                "hadamard_block_size": args.wavebit_hadamard_block_size,
+                "activation_bits": args.wavebit_activation_bits,
             }
             if args.wavebit_hsra else None
         ),

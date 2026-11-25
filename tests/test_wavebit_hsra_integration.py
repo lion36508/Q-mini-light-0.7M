@@ -11,6 +11,7 @@ from qmini_addsub.wavebit_hsra import (
     holographic_state_step_int, integer_wavebit_projection, wavebit_quantize,
     pack_octave_stream, unpack_octave_stream, pack_octave_triplets,
     unpack_octave_triplets, integer_octave_projection, build_octave_decode_lut,
+    blockwise_hadamard, quantize_activation_ste, octave_shift_quantize,
 )
 
 
@@ -215,3 +216,95 @@ def test_octave_decode_lut_has_256_entries_and_marks_reserved_codes():
 def test_octave_group_size_must_align_to_triplet_packing():
     with pytest.raises(ValueError):
         AddSubLanguageModel(tiny_config(), wavebit_options={"group_size": 32})
+
+
+
+def test_octave_x2_quantizer_uses_shared_two_times_boost_without_x4_values():
+    weight = torch.tensor([[2.0, 0.0, 0.0]], dtype=torch.float32)
+    quantized, codes, modes, scale = octave_shift_quantize(
+        weight, group_size=3, ewgs_strength=0.5, boost_factor=2
+    )
+    assert modes.shape == (1, 1)
+    assert bool(modes[0, 0])
+    assert torch.all(quantized.abs() <= 2.0 * scale + 1e-6)
+    assert codes.shape == weight.shape
+    assert torch.isfinite(quantized).all()
+
+
+def test_octave_x2_integer_decoder_matches_signed_half_unit_reference():
+    codes = np.asarray([[4, 2, 0, 1, 3, 2]], dtype=np.uint8)
+    modes = np.asarray([[True, False]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    activations = np.asarray([[7, -5, 3, 2, -4, 6]], dtype=np.int16)
+    actual = integer_octave_projection(
+        activations, packed, offsets, input_features=6, boost_factor=2
+    )
+    base_levels = (-2, -1, 0, 1, 2)
+    expected = 0
+    for feature, code in enumerate(codes[0]):
+        factor = 2 if modes[0, feature // 3] else 1
+        expected += int(activations[0, feature]) * base_levels[int(code)] * factor
+    np.testing.assert_array_equal(actual, np.asarray([[expected]], dtype=np.int64))
+    assert build_octave_decode_lut(boost_factor=2).shape == (256, 4)
+    with pytest.raises(ValueError, match="2 or 4"):
+        build_octave_decode_lut(boost_factor=3)
+
+
+def test_blockwise_hadamard_is_energy_preserving_for_odd_model_widths():
+    inputs = torch.randn(3, 170, dtype=torch.float32)
+    transformed = blockwise_hadamard(inputs, block_size=8)
+    assert transformed.shape == inputs.shape
+    torch.testing.assert_close(
+        transformed.square().sum(dim=-1),
+        inputs.square().sum(dim=-1),
+        rtol=2e-5,
+        atol=2e-5,
+    )
+
+
+def test_activation_fake_quant_is_four_bit_symmetric_and_has_ste_gradient():
+    inputs = torch.randn(4, 170, dtype=torch.float32, requires_grad=True)
+    quantized = quantize_activation_ste(inputs, bits=4)
+    quantized.sum().backward()
+    assert torch.isfinite(quantized).all()
+    assert torch.equal(inputs.grad, torch.ones_like(inputs))
+    scale = inputs.detach().abs().amax(dim=-1, keepdim=True).clamp_min(1e-8) / 7
+    codes = torch.round(quantized.detach() / scale)
+    assert int(codes.abs().max()) <= 7
+    torch.testing.assert_close(codes, torch.round(codes))
+
+
+def test_x2_hadamard_addsub_model_preserves_state_keys_and_incremental_parity():
+    torch.manual_seed(43)
+    config = tiny_config()
+    experimental = options() | {
+        "octave_boost_factor": 2,
+        "hadamard": True,
+        "hadamard_block_size": 8,
+        "activation_bits": 4,
+    }
+    baseline = AddSubLanguageModel(config, seed=43)
+    model = AddSubLanguageModel(config, seed=43, wavebit_options=experimental).eval()
+    assert model.parameter_count() == baseline.parameter_count()
+    assert set(model.state_dict()) == set(baseline.state_dict())
+    tokens = torch.randint(0, 264, (2, 9))
+    with torch.inference_mode():
+        expected = model(tokens)["logits"]
+        caches = model.init_cache(batch_size=tokens.shape[0])
+        pieces = []
+        for index in range(tokens.shape[1]):
+            logits, caches = model.forward_step(tokens[:, index], caches)
+            pieces.append(logits.unsqueeze(1))
+        actual = torch.cat(pieces, dim=1)
+    torch.testing.assert_close(actual, expected, rtol=3e-5, atol=3e-5)
+
+
+def test_invalid_hadamard_options_are_rejected():
+    with pytest.raises(ValueError, match="power of two"):
+        AddSubLanguageModel(tiny_config(), wavebit_options=options() | {
+            "hadamard": True, "hadamard_block_size": 6,
+        })
+    with pytest.raises(ValueError, match="bits"):
+        AddSubLanguageModel(tiny_config(), wavebit_options=options() | {
+            "activation_bits": 9,
+        })

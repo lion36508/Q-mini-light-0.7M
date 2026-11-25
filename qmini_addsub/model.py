@@ -32,8 +32,10 @@ class AddSubLinear(nn.Linear):
         out_features: int,
         bias: bool = True,
         wavebit_options: dict | None = None,
+        hadamard: bool = False,
     ):
         super().__init__(in_features, out_features, bias=bias)
+        self.hadamard = bool(hadamard)
         self.wavebit_options = validate_wavebit_options(wavebit_options)
         initialize_five_symbol_weight_(self.weight)
         if self.bias is not None:
@@ -55,6 +57,10 @@ class AddSubLinear(nn.Linear):
             group_size=options["group_size"],
             ewgs_strength=options["ewgs_strength"],
             octave_temperature=options["octave_temperature"],
+            boost_factor=options["octave_boost_factor"],
+            hadamard=self.hadamard,
+            hadamard_block_size=options["hadamard_block_size"],
+            activation_bits=options["activation_bits"],
         )
 
 
@@ -101,6 +107,7 @@ class CausalConvMixer(nn.Module):
             group_size=options["group_size"],
             ewgs_strength=options["ewgs_strength"],
             octave_temperature=options["octave_temperature"],
+            boost_factor=options["octave_boost_factor"],
         )
 
     def forward(
@@ -276,7 +283,8 @@ class SwiGLUExpert(nn.Module):
             config.d_model, config.d_hidden * 2, wavebit_options=wavebit_options
         )
         self.down = AddSubLinear(
-            config.d_hidden, config.d_model, wavebit_options=wavebit_options
+            config.d_hidden, config.d_model, wavebit_options=wavebit_options,
+            hadamard=bool(self.wavebit_options and self.wavebit_options["hadamard"]),
         )
 
     def forward(
@@ -538,6 +546,7 @@ class AddSubLanguageModel(nn.Module):
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
                 octave_temperature=self.wavebit_options["octave_temperature"],
+                boost_factor=self.wavebit_options["octave_boost_factor"],
             )[0]
         hidden = F.embedding(input_ids, embedding_weight)
         balance_losses = []
@@ -566,6 +575,7 @@ class AddSubLanguageModel(nn.Module):
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
                 octave_temperature=self.wavebit_options["octave_temperature"],
+                boost_factor=self.wavebit_options["octave_boost_factor"],
             )
         return {
             "logits": logits,
@@ -644,6 +654,7 @@ class AddSubLanguageModel(nn.Module):
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
                 octave_temperature=self.wavebit_options["octave_temperature"],
+                boost_factor=self.wavebit_options["octave_boost_factor"],
             )[0]
         hidden = F.embedding(input_ids, embedding_weight).unsqueeze(1)
         updated_caches = []
@@ -667,6 +678,7 @@ class AddSubLanguageModel(nn.Module):
                 group_size=self.wavebit_options["group_size"],
                 ewgs_strength=self.wavebit_options["ewgs_strength"],
                 octave_temperature=self.wavebit_options["octave_temperature"],
+                boost_factor=self.wavebit_options["octave_boost_factor"],
             )
         return logits, updated_caches
 
