@@ -165,9 +165,9 @@ def wavebit_linear(
     _, polarity, phase, scale = wavebit_quantize(
         weight, group_size=group_size, ewgs_strength=ewgs_strength
     )
-    static_weight = polarity * scale
+    static_weight = polarity * scale * 0.5
     dynamic_weight = polarity * phase * scale
-    gain_delta = wavebit_context_gain(context) - 1.0
+    gain_delta = wavebit_context_gain(context) - 0.5
     output = F.linear(inputs, static_weight, None)
     output = output + F.linear(inputs * gain_delta, dynamic_weight, None)
     if bias is not None:
@@ -191,9 +191,9 @@ def wavebit_depthwise_conv1d(
     _, polarity, phase, scale = wavebit_quantize(
         weight, group_size=group_size, ewgs_strength=ewgs_strength
     )
-    static_weight = polarity * scale
+    static_weight = polarity * scale * 0.5
     dynamic_weight = polarity * phase * scale
-    gain_delta = wavebit_context_gain(padded_context) - 1.0
+    gain_delta = wavebit_context_gain(padded_context) - 0.5
     static = F.conv1d(
         padded_inputs, static_weight, None, dilation=dilation, groups=padded_inputs.shape[1]
     )
@@ -285,7 +285,6 @@ def integer_wavebit_projection(
                 if p < 0:
                     term = -term
                 if phase[out_index, feature] == 0:
-                    acc += term
                     acc += term
                 else:
                     c = int(flat_c[row, feature])

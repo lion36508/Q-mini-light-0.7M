@@ -106,7 +106,7 @@ def test_integer_projection_matches_seven_effective_states():
             if p == 0:
                 continue
             term = -x if p < 0 else x
-            copies = 2 if not g or c == 0 else (1 if c < 0 else 4)
+            copies = 1 if not g else (1 if c < 0 else (2 if c == 0 else 4))
             for _ in range(copies):
                 expected[0, out_index] += term
     np.testing.assert_array_equal(actual, expected)
