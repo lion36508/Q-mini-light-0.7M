@@ -266,3 +266,36 @@ def test_tokenizer_builder_refuses_to_replace_existing_tokenizer(tmp_path, monke
         builder.main()
     assert output.read_text(encoding="utf-8") == "previous-tokenizer"
     assert not output.with_name("model_config.json").exists()
+
+
+def test_weight_quantizer_rejects_nonfloat_empty_and_nonfinite_inputs():
+    import torch
+    from qmini_addsub.quantization import quantize_weight_ste
+
+    with pytest.raises(TypeError, match="floating-point"):
+        quantize_weight_ste(torch.ones(2, 2, dtype=torch.int64))
+    with pytest.raises(ValueError, match="empty"):
+        quantize_weight_ste(torch.empty(0, 2))
+    with pytest.raises(ValueError, match="Non-finite"):
+        quantize_weight_ste(torch.tensor([[float("nan"), 1.0]]), scale=1.0)
+
+
+@pytest.mark.parametrize("scale", [True, "1.0", float("nan"), 0.0])
+def test_weight_quantizer_rejects_invalid_explicit_scale(scale):
+    import torch
+    from qmini_addsub.quantization import quantize_weight_ste
+
+    with pytest.raises((TypeError, ValueError)):
+        quantize_weight_ste(torch.ones(2, 2), scale=scale)
+
+
+def test_numpy_weight_quantizer_rejects_bool_and_non_numeric_arrays():
+    import numpy as np
+    from qmini_addsub.quantization import quantize_to_codes
+
+    with pytest.raises(TypeError, match="real numeric"):
+        quantize_to_codes(np.asarray([True, False]))
+    with pytest.raises(TypeError, match="real numeric"):
+        quantize_to_codes(np.asarray(["1.0", "0.5"]))
+    with pytest.raises(TypeError, match="boolean"):
+        quantize_to_codes(np.asarray([1.0]), scale=True)
