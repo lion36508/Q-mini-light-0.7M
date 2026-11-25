@@ -24,7 +24,7 @@ The implementations must not share weights, tokenizers, optimizer state, dataset
 
 ## Out of scope
 
-The active Light target does not include capacity profiles or training promises for 5M, 25M, 134M, 152M, 853M, 5B or 20B models. It does not include distributed large-model training, a complete integer-only Add/Sub runtime, proven 4GB-phone support or measured speedup claims.
+The active scope is limited to the two implementations listed above. Distributed multi-device training, complete integer-only Add/Sub inference and production Android deployment are not delivered features.
 
 ## Evidence standard
 
