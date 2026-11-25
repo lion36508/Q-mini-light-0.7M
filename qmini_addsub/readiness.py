@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 from typing import Any
+
+
+def _file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_json(path: str | Path) -> dict[str, Any]:
@@ -52,6 +61,7 @@ def assess_addsub_readiness(
     metrics: list[dict[str, Any]],
     heldout: dict[str, Any],
     *,
+    checkpoint_sha256: str,
     min_validation_improvement: float = 0.01,
     min_test_records: int = 50,
     min_mean_token_f1: float = 0.15,
@@ -136,6 +146,15 @@ def assess_addsub_readiness(
             },
             "detail": "Assistant-response validation loss must improve; optimizer steps and training loss alone are insufficient.",
         })
+
+    if (
+        not isinstance(checkpoint_sha256, str)
+        or len(checkpoint_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in checkpoint_sha256)
+    ):
+        raise ValueError("Selected checkpoint SHA-256 must be a lowercase 64-character hexadecimal digest.")
+    if heldout.get("checkpoint_sha256") != checkpoint_sha256:
+        raise ValueError("Held-out report checkpoint_sha256 does not match the selected SFT checkpoint.")
 
     if heldout.get("format") != "qmini-addsub-heldout-eval-v1":
         raise ValueError("Held-out report must use qmini-addsub-heldout-eval-v1.")
@@ -295,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Fail-closed held-out readiness gate for Q-Mini Add/Sub SFT."
     )
     parser.add_argument("--metrics", required=True, help="sft_metrics.jsonl")
+    parser.add_argument("--checkpoint", required=True, help="Exact SFT checkpoint used for held-out evaluation")
     parser.add_argument("--heldout-summary", required=True, help="heldout_summary.json from qmini_addsub.evaluate")
     parser.add_argument("--output", required=True, help="Readiness JSON output")
     parser.add_argument("--min-validation-improvement", type=float, default=0.01)
@@ -308,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     report = assess_addsub_readiness(
         _load_metrics(args.metrics),
         _load_json(args.heldout_summary),
+        checkpoint_sha256=_file_sha256(args.checkpoint),
         min_validation_improvement=args.min_validation_improvement,
         min_test_records=args.min_test_records,
         min_mean_token_f1=args.min_mean_token_f1,
