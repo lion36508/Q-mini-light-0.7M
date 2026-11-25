@@ -49,6 +49,62 @@ class NativeKernel:
         self.neon_function.argtypes = []
         self.neon_function.restype = ctypes.c_int
         self.uses_neon = bool(self.neon_function())
+        self.octave_function = getattr(
+            self.library, "qmini_octave_linear_i8_v1", None
+        )
+        if self.octave_function is not None:
+            u32 = np.ctypeslib.ndpointer(dtype=np.uint32, flags="C_CONTIGUOUS")
+            i64 = np.ctypeslib.ndpointer(dtype=np.int64, flags="C_CONTIGUOUS")
+            self.octave_function.argtypes = [
+                i8, u8, u32, i64, i64,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ]
+            self.octave_function.restype = ctypes.c_int
+
+    def octave_linear(
+        self, activations_i8, packed_stream, row_offsets, bias_half_units=None
+    ):
+        """Run the Octave-Shift integer reference kernel from the native library."""
+        if self.octave_function is None:
+            raise RuntimeError(
+                "Native library does not include the Octave-Shift ABI; rebuild it."
+            )
+        raw_x = np.asarray(activations_i8)
+        raw_stream = np.asarray(packed_stream)
+        raw_offsets = np.asarray(row_offsets)
+        if raw_x.dtype != np.int8 or raw_x.ndim != 2 or min(raw_x.shape) < 1:
+            raise TypeError("activations_i8 must be a non-empty 2-D int8 array.")
+        if raw_stream.dtype != np.uint8 or raw_stream.ndim != 1:
+            raise TypeError("packed_stream must already be a 1-D uint8 array.")
+        if raw_offsets.dtype.kind not in "iu" or raw_offsets.ndim != 1:
+            raise TypeError("row_offsets must be a 1-D integer array.")
+        if raw_offsets.size < 2:
+            raise ValueError("row_offsets must include at least one output row.")
+        if np.any(raw_offsets < 0) or np.any(raw_offsets > np.iinfo(np.uint32).max):
+            raise ValueError("row_offsets must fit in uint32.")
+        if raw_offsets[0] != 0 or raw_offsets[-1] != raw_stream.size:
+            raise ValueError("row_offsets must span the packed stream exactly.")
+        if np.any(raw_offsets[1:] < raw_offsets[:-1]):
+            raise ValueError("row_offsets must be monotonically increasing.")
+        x = np.ascontiguousarray(raw_x)
+        stream = np.ascontiguousarray(raw_stream)
+        offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint32)
+        out_features = offsets.size - 1
+        if bias_half_units is None:
+            bias = np.zeros(out_features, dtype=np.int64)
+        else:
+            raw_bias = np.asarray(bias_half_units)
+            if raw_bias.dtype.kind not in "iu" or raw_bias.shape != (out_features,):
+                raise ValueError("bias_half_units must be an integer output vector.")
+            bias = np.ascontiguousarray(raw_bias, dtype=np.int64)
+        output = np.empty((x.shape[0], out_features), dtype=np.int64)
+        status = self.octave_function(
+            x, stream, offsets, bias, output,
+            x.shape[0], x.shape[1], out_features, stream.size,
+        )
+        if status:
+            raise RuntimeError(f"Octave-Shift native kernel returned error {status}.")
+        return output
 
     def linear(
         self, activations_i8, packed_weights, weight_scales, activation_scales,

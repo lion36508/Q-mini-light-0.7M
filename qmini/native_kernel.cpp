@@ -173,6 +173,251 @@ QMINI_EXPORT int qmini_linear_i8_v2(
     return 0;
 }
 
+
+static inline int qmini_octave_shift_for(int8_t coefficient) {
+    switch (coefficient < 0 ? -coefficient : coefficient) {
+        case 1: return 0;
+        case 2: return 1;
+        case 4: return 2;
+        case 8: return 3;
+        case 0: return 0;
+        default: return -1;
+    }
+}
+
+static inline int64_t qmini_octave_shift_add_term(
+    int8_t activation, int8_t coefficient
+) {
+    if (activation == 0 || coefficient == 0) {
+        return 0;
+    }
+    const int shift = qmini_octave_shift_for(coefficient);
+    if (shift < 0) {
+        return 0;
+    }
+    const int32_t signed_activation = static_cast<int32_t>(activation);
+    const uint32_t magnitude = static_cast<uint32_t>(
+        signed_activation < 0 ? -signed_activation : signed_activation
+    ) << shift;
+    const bool negative = (signed_activation < 0) != (coefficient < 0);
+    const int64_t term = static_cast<int64_t>(magnitude);
+    return negative ? -term : term;
+}
+
+struct QMiniOctaveDecodeTable {
+    int8_t coefficients[256][3];
+
+    QMiniOctaveDecodeTable() {
+        for (int token = 0; token < 256; ++token) {
+            for (int lane = 0; lane < 3; ++lane) {
+                coefficients[token][lane] = static_cast<int8_t>(-128);
+            }
+        }
+        static constexpr int8_t normal[5] = {-2, -1, 0, 1, 2};
+        static constexpr int8_t boosted[5] = {-8, -4, 0, 4, 8};
+        for (int token = 0; token < 250; ++token) {
+            const int code = token >= 125 ? token - 125 : token;
+            const int8_t* levels = token >= 125 ? boosted : normal;
+            coefficients[token][0] = levels[code % 5];
+            coefficients[token][1] = levels[(code / 5) % 5];
+            coefficients[token][2] = levels[code / 25];
+        }
+    }
+};
+
+static inline const QMiniOctaveDecodeTable& qmini_octave_decode_table() {
+    static const QMiniOctaveDecodeTable table;
+    return table;
+}
+
+#if QMINI_HAS_NEON
+static inline int64_t qmini_octave_accumulate_eight_neon(
+    const int8_t* input,
+    int feature_start,
+    const int8_t* coefficients
+) {
+    int16_t shifts[8];
+    uint16_t negative_mask[8];
+    uint16_t zero_mask[8];
+    for (int lane = 0; lane < 8; ++lane) {
+        const int8_t coefficient = coefficients[lane];
+        const int shift = qmini_octave_shift_for(coefficient);
+        if (shift < 0) {
+            return 0;
+        }
+        shifts[lane] = static_cast<int16_t>(shift);
+        negative_mask[lane] = coefficient < 0 ? 0xFFFFu : 0u;
+        zero_mask[lane] = coefficient == 0 ? 0xFFFFu : 0u;
+    }
+
+    // Eight INT8 activations are widened, shifted by 0..3, sign-selected,
+    // and pairwise accumulated. No activation*weight multiply is performed.
+    const int8x8_t activations_i8 = vld1_s8(input + feature_start);
+    const int16x8_t activations_i16 = vmovl_s8(activations_i8);
+    int16x8_t shifted = vshlq_s16(activations_i16, vld1q_s16(shifts));
+    const int16x8_t negative = vnegq_s16(shifted);
+    shifted = vbslq_s16(vld1q_u16(negative_mask), negative, shifted);
+    shifted = vbslq_s16(vld1q_u16(zero_mask), vdupq_n_s16(0), shifted);
+    const int32x4_t pair_sums = vpaddlq_s16(shifted);
+    int32_t lanes[4];
+    vst1q_s32(lanes, pair_sums);
+    return static_cast<int64_t>(lanes[0])
+         + static_cast<int64_t>(lanes[1])
+         + static_cast<int64_t>(lanes[2])
+         + static_cast<int64_t>(lanes[3]);
+}
+#endif
+
+static inline int64_t qmini_octave_accumulate_block(
+    const int8_t* input,
+    int feature_start,
+    const int8_t* coefficients,
+    int count
+) {
+#if QMINI_HAS_NEON
+    if (count == 8) {
+        return qmini_octave_accumulate_eight_neon(
+            input, feature_start, coefficients
+        );
+    }
+#endif
+    int64_t accumulator = 0;
+    for (int lane = 0; lane < count; ++lane) {
+        accumulator += qmini_octave_shift_add_term(
+            input[feature_start + lane], coefficients[lane]
+        );
+    }
+    return accumulator;
+}
+
+// Octave-Shift native projection. The packed stream stores one byte per
+// triplet, with 250..254 skipping 4/8/16/32/64 all-zero triplet-groups and
+// 255 followed by an extended skip count. Output remains in half-units;
+// group/output scales are intentionally applied by a later requantization.
+QMINI_EXPORT int qmini_octave_linear_i8_v1(
+    const int8_t* input,
+    const uint8_t* packed_stream,
+    const uint32_t* row_offsets,
+    const int64_t* bias_half_units,
+    int64_t* output,
+    int rows,
+    int in_features,
+    int out_features,
+    int packed_size
+) {
+    if (!input || !packed_stream || !row_offsets || !output) {
+        return 1;
+    }
+    if (rows <= 0 || in_features <= 0 || in_features > std::numeric_limits<int>::max() - 2 ||
+        out_features <= 0 || packed_size < 0) {
+        return 2;
+    }
+    if (row_offsets[0] != 0 || row_offsets[out_features] !=
+        static_cast<uint32_t>(packed_size)) {
+        return 3;
+    }
+    for (int output_index = 0; output_index < out_features; ++output_index) {
+        if (row_offsets[output_index] > row_offsets[output_index + 1] ||
+            row_offsets[output_index + 1] > static_cast<uint32_t>(packed_size)) {
+            return 4;
+        }
+    }
+
+    const int required_groups = (in_features + 2) / 3;
+    const auto& table = qmini_octave_decode_table();
+    for (int row = 0; row < rows; ++row) {
+        const int8_t* input_row = input +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(in_features);
+        for (int output_index = 0; output_index < out_features; ++output_index) {
+            std::size_t cursor = row_offsets[output_index];
+            const std::size_t end = row_offsets[output_index + 1];
+            int logical_group = 0;
+            int logical_feature = 0;
+            int64_t accumulator = 0;
+            int buffered = 0;
+            int buffer_start = 0;
+            int8_t coefficient_buffer[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
+            while (cursor < end) {
+                const uint8_t token = packed_stream[cursor++];
+                if (token >= 250) {
+                    if (buffered != 0) {
+                        accumulator += qmini_octave_accumulate_block(
+                            input_row, buffer_start, coefficient_buffer, buffered
+                        );
+                        buffered = 0;
+                    }
+
+                    int skip = 0;
+                    if (token == 255) {
+                        if (cursor >= end) {
+                            return 5;
+                        }
+                        skip = static_cast<int>(packed_stream[cursor++]);
+                        if (skip < 1) {
+                            return 6;
+                        }
+                    } else {
+                        switch (token) {
+                            case 250: skip = 4; break;
+                            case 251: skip = 8; break;
+                            case 252: skip = 16; break;
+                            case 253: skip = 32; break;
+                            case 254: skip = 64; break;
+                            default: return 7;
+                        }
+                    }
+                    if (logical_group > required_groups - skip) {
+                        return 8;
+                    }
+                    logical_group += skip;
+                    logical_feature += skip;
+                    logical_feature += skip;
+                    logical_feature += skip;
+                    continue;
+                }
+
+                if (logical_group >= required_groups) {
+                    return 9;
+                }
+                const int8_t* decoded = table.coefficients[token];
+                for (int lane = 0; lane < 3; ++lane) {
+                    if (logical_feature < in_features) {
+                        if (buffered == 0) {
+                            buffer_start = logical_feature;
+                        }
+                        coefficient_buffer[buffered++] = decoded[lane];
+                        if (buffered == 8) {
+                            accumulator += qmini_octave_accumulate_block(
+                                input_row, buffer_start, coefficient_buffer, buffered
+                            );
+                            buffered = 0;
+                        }
+                    }
+                    ++logical_feature;
+                }
+                ++logical_group;
+            }
+
+            if (buffered != 0) {
+                accumulator += qmini_octave_accumulate_block(
+                    input_row, buffer_start, coefficient_buffer, buffered
+                );
+            }
+            if (logical_group != required_groups || cursor != end) {
+                return 10;
+            }
+            if (bias_half_units) {
+                accumulator += bias_half_units[output_index];
+            }
+            output[static_cast<std::size_t>(row) *
+                static_cast<std::size_t>(out_features) +
+                static_cast<std::size_t>(output_index)] = accumulator;
+        }
+    }
+    return 0;
+}
+
 QMINI_EXPORT int qmini_kernel_has_neon() {
     return QMINI_HAS_NEON;
 }

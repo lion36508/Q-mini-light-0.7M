@@ -9,6 +9,10 @@ import torch
 
 from qmini.native import NativeKernel
 from qmini.quantization import pack_quaternary, unpack_quaternary
+from qmini_addsub.wavebit_hsra import (
+    integer_octave_projection,
+    pack_octave_stream,
+)
 
 
 @pytest.mark.skipif(not (shutil.which("g++") or shutil.which("clang++")), reason="C++ compiler missing")
@@ -326,3 +330,54 @@ def test_native_q2_v2_rejects_negative_scale_but_accepts_zero(compiled_native_li
         x_scale, q2_version=2,
     )
     assert np.array_equal(out, np.zeros((1, 2), dtype=np.float32))
+
+
+def test_native_octave_projection_matches_python_reference_with_zero_skips(
+    compiled_native_library,
+):
+    rng = np.random.default_rng(20261125)
+    symbol_codes = rng.integers(0, 5, size=(5, 225), dtype=np.uint8)
+    boost_modes = rng.integers(0, 2, size=(5, 75), dtype=np.uint8).astype(bool)
+    # Add long, all-zero sections so the byte stream includes skip commands.
+    symbol_codes[:, 30:30 + 3 * 18] = 2
+    boost_modes[:, 10:28] = False
+    packed, offsets = pack_octave_stream(symbol_codes, boost_modes)
+    activations = rng.integers(-127, 128, size=(4, 225), dtype=np.int16).astype(np.int8)
+
+    native = NativeKernel(compiled_native_library)
+    actual = native.octave_linear(activations, packed, offsets)
+    expected = integer_octave_projection(
+        activations, packed, offsets, input_features=225
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_native_octave_projection_accepts_integer_bias_and_rejects_bad_types(
+    compiled_native_library,
+):
+    rng = np.random.default_rng(7)
+    codes = rng.integers(0, 5, size=(2, 12), dtype=np.uint8)
+    modes = rng.integers(0, 2, size=(2, 4), dtype=np.uint8).astype(bool)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    activations = rng.integers(-100, 101, size=(3, 12), dtype=np.int16).astype(np.int8)
+    bias = np.asarray([17, -9], dtype=np.int64)
+    native = NativeKernel(compiled_native_library)
+    actual = native.octave_linear(activations, packed, offsets, bias)
+    expected = integer_octave_projection(
+        activations, packed, offsets, input_features=12, bias_half_units=bias
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+    with pytest.raises(TypeError, match="already a 1-D uint8"):
+        native.octave_linear(activations, packed.astype(np.int16), offsets)
+
+
+def test_native_octave_projection_detects_missing_escape_payload(
+    compiled_native_library,
+):
+    native = NativeKernel(compiled_native_library)
+    activations = np.ones((1, 12), dtype=np.int8)
+    stream = np.asarray([255], dtype=np.uint8)
+    offsets = np.asarray([0, 1], dtype=np.uint32)
+    with pytest.raises(RuntimeError, match="returned error"):
+        native.octave_linear(activations, stream, offsets)
