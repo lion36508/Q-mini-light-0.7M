@@ -345,6 +345,8 @@ class SparseTop1Experts(nn.Module):
         if not bool(torch.isfinite(load).all()) or bool((load < 0).any()):
             raise ValueError("observed_load must be finite and non-negative.")
         total = load.sum()
+        if not bool(torch.isfinite(total)):
+            raise ValueError("observed_load total must remain finite.")
         if not bool(total > 0):
             raise ValueError("observed_load must contain at least one routed token.")
         load = load / total
