@@ -149,6 +149,20 @@ def _apply_repetition_penalty(logits: torch.Tensor, generated: list[int],
     return scores
 
 
+def _would_exceed_fourgram_repeat(
+    generated: list[int], next_token: int, max_repeats: int = 4
+) -> bool:
+    """Stop an exact four-token phrase before it would occur a fifth time."""
+    if len(generated) < 3:
+        return False
+    candidate = (*generated[-3:], next_token)
+    existing = sum(
+        tuple(generated[index:index + 4]) == candidate
+        for index in range(max(0, len(generated) - 3))
+    )
+    return existing >= max_repeats
+
+
 def _choose_next_token(
     logits: torch.Tensor,
     temperature: float,
@@ -232,7 +246,7 @@ def generate_reply(
 
     control = _special_ids(tokenizer)
     stop_ids = {
-        control["<eos>"], control["<|end|>"], control["<|user|>"],
+        control["<unk>"], control["<eos>"], control["<|end|>"], control["<|user|>"],
         control["<|system|>"], control["<|assistant|>"], control["<bos>"],
         control["<pad>"],
     }
@@ -253,6 +267,8 @@ def generate_reply(
             repetition_window=repetition_window,
         )
         if next_id in stop_ids:
+            break
+        if _would_exceed_fourgram_repeat(generated, next_id):
             break
         generated.append(next_id)
         if index + 1 < generation_limit:
