@@ -436,6 +436,7 @@ def fine_tune_from_addsub_checkpoint(
             model.parameters(), 1.0, error_if_nonfinite=True
         )
         optimizer.step()
+        model.update_loss_free_router_bias(result["router_load"])
         assert_finite_training_state(model, optimizer, step)
         last_loss = float(loss.detach())
 
