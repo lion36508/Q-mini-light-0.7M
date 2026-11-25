@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
 import urllib.request
 import zipfile
 from collections import defaultdict
@@ -82,37 +83,69 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
             "Simple English Wikipedia file failed pinned size/SHA-256 verification."
         )
 
-    table = pq.read_table(
-        parquet_path,
-        columns=["page_id", "title", "content_no_link", "error"],
-    )
-    output.mkdir(parents=True, exist_ok=True)
+    parquet_file = pq.ParquetFile(parquet_path)
     split_paths = {
         name: output / f"pretrain_{name}.txt"
         for name in ("train", "validation", "test")
     }
     counts = {name: {"articles": 0, "bytes": 0} for name in split_paths}
-    dropped = {"source_error": 0, "empty_or_rejected": 0}
-    handles = {name: path.open("w", encoding="utf-8", newline="\n")
-               for name, path in split_paths.items()}
+    dropped = {
+        "source_error": 0,
+        "empty_or_rejected": 0,
+        "missing_page_id": 0,
+        "duplicate_page_id": 0,
+        "duplicate_article": 0,
+    }
+    handles = {
+        name: path.open("w", encoding="utf-8", newline="\n")
+        for name, path in split_paths.items()
+    }
+    seen_page_ids: set[str] = set()
+    seen_articles: set[str] = set()
     try:
-        for row in table.to_pylist():
-            if row.get("error") is True:
-                dropped["source_error"] += 1
-                continue
-            title, title_reason = normalize_training_text(row.get("title"), min_chars=1)
-            content, content_reason = normalize_training_text(
-                row.get("content_no_link"), min_chars=20
-            )
-            if title_reason != "accepted" or content_reason != "accepted":
-                dropped["empty_or_rejected"] += 1
-                continue
-            article = f"{title}\n{content}\n"
-            split = stable_split(
-                str(row["page_id"]), seed="qmini-simplewiki-20260301"
-            )
-            handles[split].write(article)
-            counts[split]["articles"] += 1
+        # Use bounded Parquet batches rather than materializing the full corpus.
+        for batch in parquet_file.iter_batches(
+            batch_size=512,
+            columns=["page_id", "title", "content_no_link", "error"],
+        ):
+            for row in batch.to_pylist():
+                if row.get("error") is True:
+                    dropped["source_error"] += 1
+                    continue
+                raw_page_id = row.get("page_id")
+                if raw_page_id is None or not str(raw_page_id).strip():
+                    dropped["missing_page_id"] += 1
+                    continue
+                page_id = str(raw_page_id)
+                if page_id in seen_page_ids:
+                    dropped["duplicate_page_id"] += 1
+                    continue
+                seen_page_ids.add(page_id)
+
+                title, title_reason = normalize_training_text(
+                    row.get("title"), min_chars=1
+                )
+                content, content_reason = normalize_training_text(
+                    row.get("content_no_link"), min_chars=20
+                )
+                if title_reason != "accepted" or content_reason != "accepted":
+                    dropped["empty_or_rejected"] += 1
+                    continue
+
+                article = f"{title}\n{content}\n"
+                content_key = hashlib.sha256(
+                    (title + "\n" + content).encode("utf-8")
+                ).hexdigest()
+                if content_key in seen_articles:
+                    dropped["duplicate_article"] += 1
+                    continue
+                seen_articles.add(content_key)
+
+                split = stable_split(
+                    page_id, seed="qmini-simplewiki-20260301"
+                )
+                handles[split].write(article)
+                counts[split]["articles"] += 1
     finally:
         for handle in handles.values():
             handle.close()
@@ -409,6 +442,99 @@ def write_sft_splits(output: Path, conversations: list[dict]) -> dict:
     return details
 
 
+def prepare_dataset(output: Path, cache: Path) -> dict:
+    """Build every source/split in a sibling staging directory and publish atomically.
+
+    Existing non-empty output is never overwritten. The download cache must be
+    outside the output tree so a failed rebuild cannot damage a verified cache.
+    """
+    output = Path(output).expanduser()
+    cache = Path(cache).expanduser()
+    output_parent = output.parent.resolve()
+    output_parent.mkdir(parents=True, exist_ok=True)
+    output = output_parent / output.name
+    cache_resolved = cache.resolve()
+
+    if output.is_symlink():
+        raise ValueError("Refusing to prepare data through an output symlink.")
+    if output.exists():
+        if not output.is_dir():
+            raise FileExistsError(f"Dataset output exists and is not a directory: {output}")
+        if any(output.iterdir()):
+            raise FileExistsError(
+                f"Dataset output is not empty: {output}. Select a new folder; "
+                "verified data will never be overwritten implicitly."
+            )
+    if cache_resolved == output.resolve() or output.resolve() in cache_resolved.parents:
+        raise ValueError("Dataset download cache must be outside the output directory.")
+
+    cache.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(
+        prefix=f".{output.name}.staging-",
+        dir=str(output_parent),
+    ))
+    try:
+        print("Preparing hash-pinned Simple English Wikipedia training data...")
+        simplewiki_info = prepare_simple_wikipedia(cache, staging)
+        print("Preparing strictly filtered human OASST1 conversations...")
+        oasst_records, oasst_info = load_oasst_conversations(cache)
+        print("Preparing human-authored Databricks Dolly instructions...")
+        dolly_records, dolly_info = load_dolly_conversations(cache)
+
+        all_conversations = oasst_records + dolly_records
+        sft_splits = write_sft_splits(staging, all_conversations)
+        manifest = {
+            "format": "qmini-addsub-data-v1",
+            "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "language": "English",
+            "synthetic_training_records_included": 0,
+            "cleaning_policy": {
+                "version": "qmini-addsub-text-clean-v2",
+                "normalization": "Unicode NFC; normalized line endings; horizontal whitespace collapse; control-character removal",
+                "rejections": ["short/empty text", "overlong text", "email addresses", "credential-like secrets", "explicitly labelled phone-contact strings"],
+                "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
+                "maximum_text_characters": 32768
+            },
+            "pretraining": simplewiki_info,
+            "instruction_sources": {
+                "oasst1": oasst_info,
+                "dolly": dolly_info,
+            },
+            "approved_instruction_sources": [
+                OASST_REPOSITORY,
+                DOLLY_REPOSITORY,
+            ],
+            "instruction_splits": sft_splits,
+            "excluded_sources": {
+                "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
+                "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; Simple English Wikipedia is the human-authored pretraining source.",
+                "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
+            },
+            "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
+        }
+        manifest_path = staging / "dataset_manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        # An empty folder may have been pre-created by Colab. Remove only that
+        # empty folder; if anything was added meanwhile, rmdir safely fails.
+        if output.exists():
+            output.rmdir()
+        staging.replace(output)
+        return {
+            "manifest": str(output / "dataset_manifest.json"),
+            "simple_wikipedia": simplewiki_info["splits"],
+            "oasst1_conversations": len(oasst_records),
+            "dolly_conversations": len(dolly_records),
+            "sft_splits": sft_splits,
+            "synthetic_training_records_included": 0,
+        }
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare pinned, non-synthetic English data for Q-Mini Add/Sub v1."
@@ -426,60 +552,8 @@ def main() -> None:
             "Pass --accept-source-licenses only after reviewing SimpleWiki CC-BY-SA-3.0, "
             "OASST1 Apache-2.0 and Dolly CC-BY-SA-3.0 terms."
         )
-
-    output, cache = Path(args.output), Path(args.cache)
-    output.mkdir(parents=True, exist_ok=True)
-    print("Preparing hash-pinned Simple English Wikipedia training data...")
-    simplewiki_info = prepare_simple_wikipedia(cache, output)
-    print("Preparing strictly filtered human OASST1 conversations...")
-    oasst_records, oasst_info = load_oasst_conversations(cache)
-    print("Preparing human-authored Databricks Dolly instructions...")
-    dolly_records, dolly_info = load_dolly_conversations(cache)
-
-    all_conversations = oasst_records + dolly_records
-    sft_splits = write_sft_splits(output, all_conversations)
-    manifest = {
-        "format": "qmini-addsub-data-v1",
-        "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "language": "English",
-        "synthetic_training_records_included": 0,
-        "cleaning_policy": {
-            "version": "qmini-addsub-text-clean-v2",
-            "normalization": "Unicode NFC; normalized line endings; horizontal whitespace collapse; control-character removal",
-            "rejections": ["short/empty text", "overlong text", "email addresses", "credential-like secrets", "explicitly labelled phone-contact strings"],
-            "language_authority": "OASST1 lang=en metadata and pinned English Dolly source; no heuristic language detection is claimed",
-            "maximum_text_characters": 32768
-        },
-        "pretraining": simplewiki_info,
-        "instruction_sources": {
-            "oasst1": oasst_info,
-            "dolly": dolly_info,
-        },
-        "approved_instruction_sources": [
-            OASST_REPOSITORY,
-            DOLLY_REPOSITORY,
-        ],
-        "instruction_splits": sft_splits,
-        "excluded_sources": {
-            "DailyDialog": "Not included by default: CC-BY-NC-SA-4.0 has non-commercial/share-alike conditions.",
-            "TinyStories": "Excluded because this project requires human-authored, non-synthetic training data; Simple English Wikipedia is the human-authored pretraining source.",
-            "Alpaca/UltraChat/teacher-generated corpora": "Excluded as model-generated or insufficiently verified synthetic data.",
-        },
-        "split_rule": "stable SHA-256 group split: 90% train, 5% validation, 5% test",
-    }
-    manifest_path = output / "dataset_manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps({
-        "manifest": str(manifest_path),
-        "simple_wikipedia": simplewiki_info["splits"],
-        "oasst1_conversations": len(oasst_records),
-        "dolly_conversations": len(dolly_records),
-        "sft_splits": sft_splits,
-        "synthetic_training_records_included": 0,
-    }, ensure_ascii=False, indent=2))
+    summary = prepare_dataset(Path(args.output), Path(args.cache))
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
