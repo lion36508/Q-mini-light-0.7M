@@ -25,6 +25,46 @@ from .train import sha256_file
 SFT_FORMAT = "qmini-addsub-sft-v6"
 SYSTEM_TEXT = "You are Q-Mini."
 
+CHAT_SPECIAL_TOKENS = (
+    "<unk>", "<bos>", "<eos>", "<pad>",
+    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+)
+
+
+def _chat_special_token_ids(tokenizer: Tokenizer) -> dict[str, int]:
+    """Require every structural token and reject aliases before SFT."""
+    values = {
+        token: tokenizer.token_to_id(token)
+        for token in CHAT_SPECIAL_TOKENS
+    }
+    missing = [token for token, token_id in values.items() if token_id is None]
+    if missing:
+        raise ValueError(f"Tokenizer is missing required Add/Sub chat tokens: {missing}")
+    normalized = {token: int(token_id) for token, token_id in values.items()}
+    if len(set(normalized.values())) != len(normalized):
+        raise ValueError("Tokenizer chat control-token IDs must be unique.")
+    return normalized
+
+
+def _validate_base_tokenizer_fingerprint(
+    checkpoint: dict[str, Any], tokenizer_path: str | Path
+) -> str:
+    """Prevent SFT from changing token meanings under an existing embedding table."""
+    expected = checkpoint.get("tokenizer_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected.lower())
+    ):
+        raise ValueError("Pretraining checkpoint is missing a valid tokenizer SHA-256 fingerprint.")
+    actual = sha256_file(tokenizer_path)
+    if actual != expected:
+        raise ValueError(
+            "SFT tokenizer fingerprint does not match the pretraining checkpoint; "
+            "token IDs would refer to different embeddings."
+        )
+    return actual
+
 
 def _load_conversations(
     path: Path, approved_sources: set[str] | None = None
@@ -81,16 +121,7 @@ def _load_conversations(
 class ConversationDataset(Dataset):
     def __init__(self, records: list[dict], tokenizer: Tokenizer, max_context: int):
         self.samples = []
-        special = {
-            token: tokenizer.token_to_id(token)
-            for token in (
-                "<bos>", "<eos>", "<pad>", "<|system|>", "<|user|>",
-                "<|assistant|>", "<|end|>",
-            )
-        }
-        if any(value is None for value in special.values()):
-            raise ValueError("Tokenizer is missing a required Add/Sub chat token.")
-        special = {key: int(value) for key, value in special.items()}
+        special = _chat_special_token_ids(tokenizer)
 
         for record in records:
             messages = [{"role": "system", "content": SYSTEM_TEXT}]
@@ -233,9 +264,11 @@ def fine_tune_from_addsub_checkpoint(
     wavebit_options = validate_wavebit_options(wavebit_options)
     if int(base.get("step", 0)) < 1:
         raise ValueError("SFT refuses a step-zero or random-only base checkpoint.")
+    tokenizer_sha = _validate_base_tokenizer_fingerprint(base, tokenizer_path)
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     if tokenizer.get_vocab_size() != config.vocab_size:
         raise ValueError("Tokenizer vocabulary does not match the Add/Sub base config.")
+    _chat_special_token_ids(tokenizer)
 
     manifest_path = train_path.parent / "dataset_manifest.json"
     if not manifest_path.is_file():
@@ -247,7 +280,7 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("SFT refuses a dataset manifest containing synthetic training records.")
     sft_manifest = data_manifest.get("instruction_splits", {})
     tokenizer_meta = data_manifest.get("tokenizer", {})
-    if tokenizer_meta.get("sha256") != sha256_file(tokenizer_path):
+    if tokenizer_meta.get("sha256") != tokenizer_sha:
         raise ValueError("SFT tokenizer does not match the curated dataset/tokenizer manifest.")
     for split_name, source_path in (
         ("train", train_path),
