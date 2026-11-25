@@ -174,3 +174,14 @@ def test_loss_free_bias_survives_packed_export_roundtrip(tmp_path, wavebit):
             restored_block.experts.loss_free_router_bias,
             original_block.experts.loss_free_router_bias,
         )
+
+
+def test_loss_free_bias_rejects_finite_values_whose_sum_overflows():
+    experts = SparseTop1Experts(
+        _config(moe_loss_free_bias=True)
+    ).train()
+    huge = torch.finfo(torch.float32).max
+    before = experts.loss_free_router_bias.clone()
+    with pytest.raises(ValueError, match="total must remain finite"):
+        experts.update_loss_free_bias(torch.tensor([huge, huge]))
+    torch.testing.assert_close(experts.loss_free_router_bias, before)
