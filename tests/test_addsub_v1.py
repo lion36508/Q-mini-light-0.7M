@@ -1694,6 +1694,14 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     assert (output_dir / "heldout_responses.jsonl").is_file()
     assert (output_dir / "heldout_summary.json").is_file()
+    diversity = summary["output_diversity"]
+    assert diversity["examples"] == summary["test_records"] == 1
+    assert 1 <= diversity["unique_normalized_answers"] <= 1
+    assert diversity["unique_answer_fraction"] == 1.0
+    assert diversity["largest_identical_answer_count"] == 1
+    assert diversity["all_outputs_identical"] is True
+    persisted = json.loads((output_dir / "heldout_summary.json").read_text(encoding="utf-8"))
+    assert persisted["output_diversity"] == diversity
 
 
 
