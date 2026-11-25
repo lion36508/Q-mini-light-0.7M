@@ -12,6 +12,7 @@ from qmini.quantization import pack_quaternary, unpack_quaternary
 from qmini_addsub.wavebit_hsra import (
     integer_octave_projection,
     pack_octave_stream,
+    unpack_octave_stream,
 )
 
 
@@ -554,3 +555,26 @@ def test_native_octave_groupwise_projection_validates_group_metadata(compiled_na
             activations, packed, offsets, group_scales, input_scales,
             group_size=8, boost_factor=3,
         )
+
+
+def test_native_octave_groupwise_projection_supports_missing_bias(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.asarray([[4, -3, 7, 1, 2]], dtype=np.int8)
+    codes = np.asarray([[4, 1, 2, 3, 0]], dtype=np.uint8)
+    modes = np.asarray([[False, True]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    group_size = 3
+    group_scales = np.asarray([[0.125, 0.25]], dtype=np.float32)
+    input_scales = np.asarray([0.0625], dtype=np.float32)
+
+    actual = native.octave_groupwise_linear(
+        activations, packed, offsets, group_scales, input_scales,
+        bias=None, group_size=group_size, boost_factor=4,
+    )
+    decoded_codes, decoded_modes = unpack_octave_stream(packed, offsets, (1, 5))
+    levels = np.asarray([-2, -1, 0, 1, 2], dtype=np.float32)
+    mode = np.repeat(decoded_modes, 3, axis=1)[:, :5]
+    weights = levels[decoded_codes] * np.where(mode, 4.0, 1.0) * 0.5
+    weights *= np.repeat(group_scales, group_size, axis=1)[:, :5]
+    expected = (activations.astype(np.float32) * input_scales[:, None]) @ weights.T
+    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)

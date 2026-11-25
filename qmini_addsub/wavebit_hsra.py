@@ -39,6 +39,32 @@ DEFAULT_WAVEBIT_OPTIONS = {
 }
 
 
+def _finite_real(value: Any, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise TypeError(f"{name} must be a real number, not a boolean or string.")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite.")
+    return result
+
+
+def _validated_octave_shape(original_shape: tuple[int, int]) -> tuple[int, int]:
+    if not isinstance(original_shape, (tuple, list)) or len(original_shape) != 2:
+        raise ValueError("original_shape must contain exactly two positive integer dimensions.")
+    dimensions = []
+    for dimension in original_shape:
+        if isinstance(dimension, (bool, np.bool_)) or not isinstance(
+            dimension, (int, np.integer)
+        ):
+            raise TypeError("original_shape dimensions must be integers; booleans and floats are invalid.")
+        if dimension < 1:
+            raise ValueError("original_shape dimensions must be positive.")
+        dimensions.append(int(dimension))
+    return dimensions[0], dimensions[1]
+
+
 def validate_wavebit_options(options: dict[str, Any] | None) -> dict[str, Any] | None:
     if options is None:
         return None
@@ -71,17 +97,19 @@ def validate_wavebit_options(options: dict[str, Any] | None) -> dict[str, Any] |
         raise ValueError("WaveBit gamma must be an integer in [1, 15].")
     if isinstance(result["rotation"], bool) or not isinstance(result["rotation"], int):
         raise ValueError("WaveBit rotation must be an integer.")
-    if not math.isfinite(float(result["ewgs_strength"])) or not 0.0 <= float(result["ewgs_strength"]) <= 2.0:
-        raise ValueError("WaveBit ewgs_strength must be finite and in [0, 2].")
-    if not math.isfinite(float(result["octave_temperature"])) or float(result["octave_temperature"]) <= 0.0:
-        raise ValueError("Octave-Shift temperature must be finite and positive.")
-    result["octave_temperature"] = float(result["octave_temperature"])
+    ewgs_strength = _finite_real(result["ewgs_strength"], "WaveBit ewgs_strength")
+    if not 0.0 <= ewgs_strength <= 2.0:
+        raise ValueError("WaveBit ewgs_strength must be in [0, 2].")
+    octave_temperature = _finite_real(result["octave_temperature"], "Octave-Shift temperature")
+    if octave_temperature <= 0.0:
+        raise ValueError("Octave-Shift temperature must be positive.")
+    result["octave_temperature"] = octave_temperature
     for key in ("context_threshold", "context_temperature", "state_limit"):
-        value = float(result[key])
-        if not math.isfinite(value) or value <= 0.0:
-            raise ValueError(f"WaveBit {key} must be finite and positive.")
+        value = _finite_real(result[key], f"WaveBit {key}")
+        if value <= 0.0:
+            raise ValueError(f"WaveBit {key} must be positive.")
         result[key] = value
-    result["ewgs_strength"] = float(result["ewgs_strength"])
+    result["ewgs_strength"] = ewgs_strength
     return result
 
 
@@ -93,8 +121,9 @@ def groupwise_scale(weight: torch.Tensor, group_size: int = 32, multiplier: floa
         raise ValueError("WaveBit weights must have at least two non-empty dimensions.")
     if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
         raise ValueError("group_size must be a positive integer.")
-    if not math.isfinite(multiplier) or multiplier <= 0.0:
-        raise ValueError("scale multiplier must be finite and positive.")
+    multiplier = _finite_real(multiplier, "scale multiplier")
+    if multiplier <= 0.0:
+        raise ValueError("scale multiplier must be positive.")
     fixed_scale = getattr(weight, "_qmini_fixed_group_scale", None)
     if fixed_scale is not None:
         value = torch.as_tensor(fixed_scale, device=weight.device, dtype=weight.dtype)
@@ -138,10 +167,12 @@ def octave_shift_quantize(
         raise ValueError("Octave-Shift weights must have at least two non-empty dimensions.")
     if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 3 or group_size % 3:
         raise ValueError("Octave-Shift group_size must be a positive multiple of three.")
-    if not math.isfinite(ewgs_strength) or not 0.0 <= ewgs_strength <= 2.0:
-        raise ValueError("ewgs_strength must be finite and in [0, 2].")
-    if not math.isfinite(octave_temperature) or octave_temperature <= 0.0:
-        raise ValueError("octave_temperature must be finite and positive.")
+    ewgs_strength = _finite_real(ewgs_strength, "ewgs_strength")
+    octave_temperature = _finite_real(octave_temperature, "octave_temperature")
+    if not 0.0 <= ewgs_strength <= 2.0:
+        raise ValueError("ewgs_strength must be in [0, 2].")
+    if octave_temperature <= 0.0:
+        raise ValueError("octave_temperature must be positive.")
     if isinstance(boost_factor, bool) or not isinstance(boost_factor, int) or boost_factor not in (2, 4):
         raise ValueError("boost_factor must be the integer 2 or 4.")
     if not bool(torch.isfinite(weight).all()):
@@ -261,9 +292,7 @@ def unpack_octave_triplets(
     payload = np.asarray(packed)
     if payload.dtype.kind not in "iu" or payload.ndim != 2:
         raise TypeError("Packed Octave payload must be a 2-D integer array.")
-    if len(original_shape) != 2 or min(original_shape) < 1:
-        raise ValueError("original_shape must contain positive dimensions.")
-    rows, features = map(int, original_shape)
+    rows, features = _validated_octave_shape(original_shape)
     triples = (features + 2) // 3
     if payload.shape != (rows, triples) or np.any(payload < 0) or np.any(payload > 249):
         raise ValueError("Packed payload shape is wrong or contains reserved control bytes.")
@@ -341,9 +370,7 @@ def unpack_octave_stream(
         raise ValueError("Octave packed_stream must be a 1-D byte array.")
     if offsets.dtype.kind not in "iu" or offsets.ndim != 1:
         raise TypeError("Octave row_offsets must be a 1-D integer array.")
-    if len(original_shape) != 2 or min(original_shape) < 1:
-        raise ValueError("original_shape must contain positive dimensions.")
-    rows, features = map(int, original_shape)
+    rows, features = _validated_octave_shape(original_shape)
     groups = (features + 2) // 3
     if offsets.shape != (rows + 1,) or offsets[0] != 0 or offsets[-1] != len(stream):
         raise ValueError("Octave row_offsets do not match stream length/row count.")

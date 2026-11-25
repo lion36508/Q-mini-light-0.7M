@@ -12,6 +12,7 @@ from qmini_addsub.wavebit_hsra import (
     pack_octave_stream, unpack_octave_stream, pack_octave_triplets,
     unpack_octave_triplets, integer_octave_projection, build_octave_decode_lut,
     blockwise_hadamard, quantize_activation_ste, octave_shift_quantize,
+    validate_wavebit_options,
 )
 
 
@@ -308,3 +309,25 @@ def test_invalid_hadamard_options_are_rejected():
         AddSubLanguageModel(tiny_config(), wavebit_options=options() | {
             "activation_bits": 9,
         })
+
+
+@pytest.mark.parametrize("bad_shape", [(2.5, 3), (2, True), (0, 3), (2,), [2, 3.0]])
+def test_octave_decoders_reject_non_integer_or_invalid_shapes(bad_shape):
+    packed = np.zeros((2, 1), dtype=np.uint8)
+    with pytest.raises((TypeError, ValueError)):
+        unpack_octave_triplets(packed, bad_shape)
+    stream = np.zeros(2, dtype=np.uint8)
+    offsets = np.asarray([0, 1, 2], dtype=np.int64)
+    with pytest.raises((TypeError, ValueError)):
+        unpack_octave_stream(stream, offsets, bad_shape)
+
+
+@pytest.mark.parametrize("bad_value", [True, "0.5"])
+def test_wavebit_configuration_rejects_boolean_and_string_hyperparameters(bad_value):
+    with pytest.raises((TypeError, ValueError)):
+        validate_wavebit_options({"ewgs_strength": bad_value})
+
+
+def test_wavebit_configuration_rejects_boolean_temperature():
+    with pytest.raises((TypeError, ValueError)):
+        validate_wavebit_options({"octave_temperature": True})
