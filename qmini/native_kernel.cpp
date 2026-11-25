@@ -484,7 +484,7 @@ static int qmini_octave_groupwise_linear_i8_impl(
     int boost_factor
 ) {
     if (!input || !packed_stream || !row_offsets || !group_scales ||
-        !input_scales || !bias || !output) {
+        !input_scales || !output) {
         return 1;
     }
     if (rows <= 0 || in_features <= 0 ||
@@ -508,7 +508,7 @@ static int qmini_octave_groupwise_linear_i8_impl(
             row_offsets[output_index + 1] > static_cast<uint32_t>(packed_size)) {
             return 5;
         }
-        if (!std::isfinite(bias[output_index])) {
+        if (bias && !std::isfinite(bias[output_index])) {
             return 6;
         }
     }
@@ -590,7 +590,7 @@ static int qmini_octave_groupwise_linear_i8_impl(
                 return 14;
             }
 
-            float total = bias[output_index];
+            float total = bias ? bias[output_index] : 0.0f;
             const std::size_t scale_row =
                 static_cast<std::size_t>(output_index) *
                 static_cast<std::size_t>(group_count);

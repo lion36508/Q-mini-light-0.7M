@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import torch
@@ -51,6 +52,8 @@ def build_chat_prompt(
         raise ValueError("max_context must be at least 8 tokens.")
     if not messages or messages[-1].get("role") != "user":
         raise ValueError("Chat history must end with a user message.")
+    if messages[0].get("role") != "user":
+        raise ValueError("Chat history must start with a user message.")
 
     control = _special_ids(tokenizer)
     segments: list[list[int]] = []
@@ -139,8 +142,18 @@ def _choose_next_token(
     repetition_penalty: float = 1.18,
     repetition_window: int = 64,
 ) -> int:
-    scores=_apply_repetition_penalty(logits,generated or [],repetition_penalty,repetition_window)
-    if greedy or temperature <= 0:
+    if not isinstance(logits, torch.Tensor) or logits.ndim != 1 or logits.numel() < 1:
+        raise ValueError("logits must be a non-empty one-dimensional tensor.")
+    if not bool(torch.isfinite(logits).all()):
+        raise ValueError("logits contain non-finite values.")
+    if not math.isfinite(temperature) or temperature < 0:
+        raise ValueError("temperature must be finite and non-negative.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be finite and in (0, 1].")
+    scores = _apply_repetition_penalty(logits,generated or [],repetition_penalty,repetition_window)
+    if greedy or temperature == 0:
         return int(torch.argmax(scores).item())
 
     scores = scores / temperature
@@ -176,16 +189,18 @@ def generate_reply(
     repetition_window: int = 64,
 ) -> str:
     """Generate an assistant turn using the model's cached PyTorch reference path."""
-    if max_new_tokens < 1:
-        raise ValueError("max_new_tokens must be positive.")
-    if top_k < 0:
-        raise ValueError("top_k must be non-negative.")
-    if not 0.0 < top_p <= 1.0:
-        raise ValueError("top_p must be in (0, 1].")
-    if temperature < 0:
-        raise ValueError("temperature must be non-negative.")
-    if not 1.0 <= repetition_penalty <= 4.0 or repetition_window < 1:
-        raise ValueError("Invalid repetition penalty/window.")
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be a positive integer.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be finite and in (0, 1].")
+    if not math.isfinite(temperature) or temperature < 0:
+        raise ValueError("temperature must be finite and non-negative.")
+    if not math.isfinite(repetition_penalty) or not 1.0 <= repetition_penalty <= 4.0:
+        raise ValueError("repetition_penalty must be finite and in [1, 4].")
+    if isinstance(repetition_window, bool) or not isinstance(repetition_window, int) or repetition_window < 1:
+        raise ValueError("repetition_window must be a positive integer.")
 
     model.eval()
     device = next(model.parameters()).device
