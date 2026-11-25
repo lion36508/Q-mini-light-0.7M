@@ -47,6 +47,11 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
         ast.parse(source, filename=f"{notebook_path}:cell-{index}")
     all_code = "\n".join(code)
     assert "Q mini 2 light" in all_code
+    assert "REPO_BRANCH = 'main'" in all_code
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in all_code
+    assert "REPO_COMMIT = subprocess.check_output" in all_code
+    assert "algorithm/addsub-stability-routing-v2" not in all_code
+    assert "trainability_v2" not in all_code
     assert "PREPARE_PINNED_CORPUS = False" in all_code
     assert "IMPORT_USER_DATA = False" in all_code
     assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
