@@ -72,7 +72,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Measure Q-Mini full forward, prompt prefill and cached decode throughput."
     )
-    parser.add_argument("--config", default="configs/qmini_base.json")
+    parser.add_argument("--config", default="configs/qmini_light_0.7m.json")
     parser.add_argument(
         "--model-dir", default=None,
         help="load a trained model bundle; prefers the packed Q2 CPU runtime when available",
