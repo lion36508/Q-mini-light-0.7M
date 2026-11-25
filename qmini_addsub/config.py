@@ -27,6 +27,10 @@ class AddSubConfig:
     # Explicit coefficients keep the router objectives visible in the run config.
     moe_balance_coef: float = 0.01
     router_z_loss_coef: float = 0.001
+    # Optional non-gradient MoE balancing bias, updated once after each optimizer step.
+    moe_loss_free_bias: bool = False
+    moe_bias_update_rate: float = 0.001
+    moe_bias_max_abs: float = 2.0
     seed: int = 20261119
 
     def validate(self) -> None:
@@ -64,6 +68,16 @@ class AddSubConfig:
         ):
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative.")
+        if not isinstance(self.moe_loss_free_bias, bool):
+            raise TypeError("moe_loss_free_bias must be a boolean.")
+        for name, value in (
+            ("moe_bias_update_rate", self.moe_bias_update_rate),
+            ("moe_bias_max_abs", self.moe_bias_max_abs),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a real number.")
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive.")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
             raise ValueError("seed must be a non-negative integer.")
         if self.n_experts < 2:
