@@ -58,16 +58,26 @@ class AddSubConfig:
             raise ValueError("max_context must be at least 8 tokens for the chat control format.")
         if self.d_model % 8:
             raise ValueError("d_model must be divisible by 8 for the reference integer path.")
+        for name, value in (
+            ("dropout", self.dropout),
+            ("residual_init", self.residual_init),
+            ("moe_balance_coef", self.moe_balance_coef),
+            ("router_z_loss_coef", self.router_z_loss_coef),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a real number, not a boolean or string.")
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
-        if not math.isfinite(self.residual_init) or not 0.0 < self.residual_init < 1.0:
-            raise ValueError("residual_init must be finite and strictly between 0 and 1.")
+        if not 0.0 < self.residual_init < 1.0:
+            raise ValueError("residual_init must be strictly between 0 and 1.")
         for name, value in (
             ("moe_balance_coef", self.moe_balance_coef),
             ("router_z_loss_coef", self.router_z_loss_coef),
         ):
-            if not math.isfinite(value) or value < 0.0:
-                raise ValueError(f"{name} must be finite and non-negative.")
+            if value < 0.0:
+                raise ValueError(f"{name} must be non-negative.")
         if not isinstance(self.moe_loss_free_bias, bool):
             raise TypeError("moe_loss_free_bias must be a boolean.")
         for name, value in (
