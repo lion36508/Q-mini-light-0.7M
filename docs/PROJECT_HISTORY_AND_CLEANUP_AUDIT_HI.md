@@ -3,7 +3,9 @@
 **ऑडिट की तारीख:** 19 नवम्बर 2026  
 **जाँची गई शाखा:** `main`  
 **मूल commit:** `da4df686b8d1073c43b26ad9e6e02c0278ac622c`  
-**उद्देश्य:** पुराने Q-Mini Light को सुरक्षित रखते हुए असली training data, test-only synthetic data, production runtime, unused experiments और अगले Add/Sub model को अलग-अलग पहचानना।
+**उद्देश्य:** पुराने Q-Mini Light को सुरक्षित रखते हुए असली training data, test-only synthetic data, production runtime और Add/Sub model को अलग-अलग पहचानना।
+
+**वर्तमानता नोट (25 नवम्बर 2026):** यह तारीख़वार ऐतिहासिक audit है। पुराने profile/config निर्णय उस समय की स्थिति बताते हैं; मौजूदा scope के लिए root README और वर्तमान architecture/training docs मान्य हैं। 25 नवम्बर cleanup ने inactive capacity profiles और speculative planning documents हटाए हैं।
 
 ## 1. सबसे ज़रूरी निष्कर्ष
 
@@ -130,7 +132,7 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 
 ### वास्तविक training scope से बाहर
 
-`qmini/distributed.py` resource planning देता है; यह FSDP/ZeRO trainer नहीं है। 5B configs planning artifacts हैं, single-device production training की गारंटी नहीं। Android ARM64 cross-compile पूर्ण Android inference app के बराबर नहीं है। इन बातों को product capability की तरह advertise न किया जाए।
+उस समय `qmini/distributed.py` resource planning देता था; यह FSDP/ZeRO trainer नहीं था। वह planning module बाद में Light scope से हटाया गया। Android ARM64 cross-compile पूर्ण Android inference app के बराबर नहीं है।
 
 ## 8. Add/Sub v1 का अलग नियम
 
@@ -183,7 +185,7 @@ DailyDialog train/validation/test ZIPs के लिए exact size और SHA-25
 - 15 पुराने, duplicate या project direction से बाहर notebooks हटाए गए: चार Hindi variants, पुराने duplicate English trainers, T4/GPU V6–V8 experiments, पुराने optimized trainers, distillation और obsolete personal-assistant experiment। इससे लगभग 1,018,970 bytes (0.97 MiB) tracked notebook content हटता है।
 - छह पुराने notebooks जिन्हें अभी regression tests और notebook-validation workflow पढ़ते हैं, उन्हें `colab/archive/` से `tests/fixtures/legacy_colab/` में स्थानांतरित किया गया। उनके content/blob IDs सुरक्षित हैं; वे अब active Colab entry points नहीं हैं।
 - `colab/` में केवल तीन supported notebooks रखे गए: Add/Sub from-scratch, English CPU resume और existing-Drive CPU chat।
-- `qmini/` और `qmini_addsub/` के model implementation files, model tests, data-preparation scripts और configuration profiles को इस cleanup में नहीं बदला गया। 5B profile सहित सभी configs सुरक्षित रखे गए।
+- 23 नवम्बर audit के समय model implementation और configs सुरक्षित रखे गए थे। यह historical decision 25 नवम्बर के focused cleanup से supersede हुआ: अब `configs/` में केवल Light profile और CI smoke profile रखे गए हैं।
 - Regression tests और GitHub Actions notebook validator को नए fixture path पर अपडेट किया गया ताकि सफ़ाई के बाद CI coverage बनी रहे।
 
 यह notebook/structure cleanup है; model architecture, training data या model weights में कोई बदलाव नहीं किया गया।
