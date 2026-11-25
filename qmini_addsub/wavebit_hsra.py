@@ -447,6 +447,11 @@ def integer_octave_projection(
         raise ValueError("input_features must be a positive integer.")
     if activations.shape[1] != input_features:
         raise ValueError("input_features does not match activation width.")
+    if (
+        np.any(activations > 127)
+        or (activations.dtype.kind == "i" and np.any(activations < -128))
+    ):
+        raise ValueError("Octave activation codes must fit in signed int8 [-128, 127].")
     if stream.dtype.kind not in "iu" or stream.ndim != 1 or np.any(stream < 0) or np.any(stream > 255):
         raise ValueError("Octave packed stream must be a 1-D byte array.")
     if offsets.dtype.kind not in "iu" or offsets.ndim != 1:
@@ -507,7 +512,13 @@ def integer_octave_projection(
         bias = np.asarray(bias_half_units)
         if bias.dtype.kind not in "iu" or bias.shape != (out_features,):
             raise ValueError("bias_half_units must be an integer output vector.")
-        output = np.add(output, bias.astype(np.int64, copy=False))
+        int64_info = np.iinfo(np.int64)
+        if any(int(value) < int64_info.min or int(value) > int64_info.max for value in bias):
+            raise ValueError("bias_half_units values must fit in int64 without narrowing.")
+        combined = output.astype(object) + bias.astype(object)[None, :]
+        if any(int(value) < int64_info.min or int(value) > int64_info.max for value in combined.flat):
+            raise OverflowError("Octave projection plus bias exceeds int64 range.")
+        output = np.asarray(combined, dtype=np.int64)
     return output
 
 

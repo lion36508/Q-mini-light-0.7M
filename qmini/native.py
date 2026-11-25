@@ -174,6 +174,9 @@ class NativeKernel:
             raw_bias = np.asarray(bias_half_units)
             if raw_bias.dtype.kind not in "iu" or raw_bias.shape != (out_features,):
                 raise ValueError("bias_half_units must be an integer output vector.")
+            int64_info = np.iinfo(np.int64)
+            if any(int(value) < int64_info.min or int(value) > int64_info.max for value in raw_bias):
+                raise ValueError("bias_half_units values must fit in int64 without narrowing.")
             bias = np.ascontiguousarray(raw_bias, dtype=np.int64)
         output = np.empty((x.shape[0], out_features), dtype=np.int64)
         arguments = (

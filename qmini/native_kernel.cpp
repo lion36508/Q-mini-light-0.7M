@@ -414,7 +414,12 @@ static int qmini_octave_linear_i8_impl(
                 return 10;
             }
             if (bias_half_units) {
-                accumulator += bias_half_units[output_index];
+                const int64_t offset = bias_half_units[output_index];
+                if ((offset > 0 && accumulator > std::numeric_limits<int64_t>::max() - offset) ||
+                    (offset < 0 && accumulator < std::numeric_limits<int64_t>::min() - offset)) {
+                    return 11;
+                }
+                accumulator += offset;
             }
             output[static_cast<std::size_t>(row) *
                 static_cast<std::size_t>(out_features) +

@@ -594,3 +594,49 @@ def test_native_octave_groupwise_projection_supports_missing_bias(compiled_nativ
     weights *= np.repeat(group_scales, group_size, axis=1)[:, :5]
     expected = (activations.astype(np.float32) * input_scales[:, None]) @ weights.T
     np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_native_octave_bias_uint64_overflow_is_rejected_before_cast(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.asarray([[1]], dtype=np.int8)
+    codes = np.asarray([[4]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    bias = np.asarray([np.iinfo(np.uint64).max], dtype=np.uint64)
+
+    with pytest.raises(ValueError, match="fit in int64"):
+        native.octave_linear(activations, packed, offsets, bias)
+
+
+def test_native_octave_bias_accumulator_overflow_is_rejected(compiled_native_library):
+    native = NativeKernel(compiled_native_library)
+    activations = np.asarray([[1]], dtype=np.int8)
+    codes = np.asarray([[4]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    bias = np.asarray([np.iinfo(np.int64).max], dtype=np.int64)
+
+    with pytest.raises(RuntimeError, match="returned error 11"):
+        native.octave_linear(activations, packed, offsets, bias)
+
+
+def test_integer_octave_reference_rejects_activation_and_bias_overflow():
+    with pytest.raises(ValueError, match="fit in signed int8"):
+        integer_octave_projection(
+            np.asarray([[128]], dtype=np.int16),
+            np.asarray([0], dtype=np.uint8),
+            np.asarray([0, 1], dtype=np.int64),
+            input_features=1,
+        )
+
+    codes = np.asarray([[4]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    packed, offsets = pack_octave_stream(codes, modes, use_zero_skips=False)
+    with pytest.raises(OverflowError, match="exceeds int64 range"):
+        integer_octave_projection(
+            np.asarray([[1]], dtype=np.int8),
+            packed,
+            offsets,
+            input_features=1,
+            bias_half_units=np.asarray([np.iinfo(np.int64).max], dtype=np.int64),
+        )
