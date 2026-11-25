@@ -161,14 +161,18 @@ def _choose_next_token(
 
     scores = scores / temperature
     if top_k > 0 and top_k < scores.numel():
-        threshold = torch.topk(scores, top_k).values[-1]
-        scores = scores.masked_fill(scores < threshold, float("-inf"))
+        keep_indices = torch.topk(scores, top_k).indices
+        keep_mask = torch.zeros_like(scores, dtype=torch.bool)
+        keep_mask[keep_indices] = True
+        scores = scores.masked_fill(~keep_mask, float("-inf"))
 
     if top_p < 1.0:
         sorted_scores, sorted_indices = torch.sort(scores, descending=True)
         sorted_probs = torch.softmax(sorted_scores, dim=-1)
         cumulative = torch.cumsum(sorted_probs, dim=-1)
-        remove = cumulative - sorted_probs >= top_p
+        # Remove tokens whose inclusion would push cumulative mass over p,
+        # but always retain the highest-probability token.
+        remove = cumulative > top_p
         remove[1:] = remove[:-1].clone()
         remove[0] = False
         scores[sorted_indices[remove]] = float("-inf")

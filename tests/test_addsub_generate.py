@@ -43,3 +43,34 @@ def test_sampling_rejects_nonfinite_logits():
     logits[3] = float("nan")
     with pytest.raises(ValueError, match="logits contain non-finite"):
         _choose_next_token(logits, 0.7, top_k=4, top_p=0.9, greedy=False)
+
+
+def test_top_p_keeps_the_crossing_token_and_removes_the_tail(monkeypatch):
+    captured = {}
+
+    def capture_multinomial(probabilities, num_samples):
+        captured["probabilities"] = probabilities.detach().clone()
+        return torch.argmax(probabilities).reshape(1)
+
+    monkeypatch.setattr(torch, "multinomial", capture_multinomial)
+    logits = torch.log(torch.tensor([0.6, 0.3, 0.1], dtype=torch.float32))
+    _choose_next_token(logits, 1.0, top_k=0, top_p=0.8, greedy=False)
+
+    probabilities = captured["probabilities"]
+    assert probabilities[0] > 0
+    assert probabilities[1] > 0
+    assert probabilities[2] == 0
+    torch.testing.assert_close(probabilities.sum(), torch.tensor(1.0))
+
+
+def test_top_k_keeps_exact_number_of_tokens_when_scores_tie(monkeypatch):
+    captured = {}
+
+    def capture_multinomial(probabilities, num_samples):
+        captured["probabilities"] = probabilities.detach().clone()
+        return torch.argmax(probabilities).reshape(1)
+
+    monkeypatch.setattr(torch, "multinomial", capture_multinomial)
+    _choose_next_token(torch.ones(8), 1.0, top_k=3, top_p=1.0, greedy=False)
+
+    assert int(torch.count_nonzero(captured["probabilities"])) == 3
