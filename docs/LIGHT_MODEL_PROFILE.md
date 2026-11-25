@@ -20,4 +20,4 @@ The documented reference profile has 705,742 parameters. The exact count should 
 
 This profile is the legacy line in `qmini/`. It is not the Add/Sub model. Preserve its checkpoints, tokenizer and existing Drive location. The legacy inference path uses multiplication/dot products and is not Add/Sub-only.
 
-No large capacity-only profiles are part of the Light target. This repository does not claim a trained 5M/134M/152M/853M/5B model or distributed training support.
+The Light configuration is a small reference profile. Its parameter count describes model shape only; it does not imply that a checkpoint has been trained or that the model has passed an assistant-quality benchmark.
