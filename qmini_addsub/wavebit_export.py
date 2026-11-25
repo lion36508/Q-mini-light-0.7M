@@ -429,7 +429,9 @@ def load_wavebit_export(
             restored[name] = torch.from_numpy(
                 np.ascontiguousarray(values.reshape(shape), dtype=np.float32)
             )
-            frozen_group_scales[name] = np.ascontiguousarray(expanded_scales, dtype=np.float32)
+            frozen_group_scales[name] = np.ascontiguousarray(
+                expanded_scales.reshape(shape), dtype=np.float32
+            )
             expected_offset += nbytes
 
         if set(metadata.files) != metadata_keys:
