@@ -115,3 +115,62 @@ def test_loss_free_bias_config_round_trips():
     config = _config(moe_loss_free_bias=True, moe_bias_update_rate=0.02, moe_bias_max_abs=0.7)
     restored = AddSubConfig.from_dict(config.to_dict())
     assert restored == config
+
+
+@pytest.mark.parametrize("wavebit", [False, True])
+def test_loss_free_bias_survives_packed_export_roundtrip(tmp_path, wavebit):
+    import hashlib
+    import json
+
+    from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
+    from qmini_addsub.train import CHECKPOINT_FORMAT
+
+    config = _config(moe_loss_free_bias=True)
+    options = None
+    if wavebit:
+        from qmini_addsub.wavebit_hsra import validate_wavebit_options
+        options = validate_wavebit_options({
+            "group_size": 6,
+            "octave_boost_factor": 2,
+            "hadamard": True,
+            "hadamard_block_size": 8,
+            "activation_bits": 4,
+        })
+
+    original = AddSubLanguageModel(
+        config, seed=config.seed, wavebit_options=options
+    ).eval()
+    with torch.no_grad():
+        for block in original.blocks:
+            block.experts.loss_free_router_bias.copy_(torch.tensor([0.125, -0.25]))
+
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer_path.write_text(
+        json.dumps({"vocab": config.vocab_size}), encoding="utf-8"
+    )
+    tokenizer_sha = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+    checkpoint_path = tmp_path / "bias-checkpoint.pt"
+    torch.save({
+        "format": CHECKPOINT_FORMAT,
+        "step": 1,
+        "config": config.to_dict(),
+        "model": original.state_dict(),
+        "tokenizer_sha256": tokenizer_sha,
+        "data_manifest_sha256": "a" * 64,
+        "run_contract": {
+            "seed": config.seed,
+            **({"wavebit_hsra": options} if options is not None else {}),
+        },
+    }, checkpoint_path)
+
+    export_path = tmp_path / ("bias-wavebit.qma" if wavebit else "bias-packed.qma")
+    export_addsub_checkpoint(checkpoint_path, export_path)
+    restored, manifest = load_addsub_export(
+        export_path, tokenizer_path=tokenizer_path
+    )
+    assert manifest["config"]["moe_loss_free_bias"] is True
+    for original_block, restored_block in zip(original.blocks, restored.blocks):
+        torch.testing.assert_close(
+            restored_block.experts.loss_free_router_bias,
+            original_block.experts.loss_free_router_bias,
+        )
