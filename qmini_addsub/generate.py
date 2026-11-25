@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import torch
@@ -37,7 +38,10 @@ def _special_ids(tokenizer: Tokenizer) -> dict[str, int]:
     missing = [token for token, token_id in values.items() if token_id is None]
     if missing:
         raise ValueError(f"Tokenizer is missing required control tokens: {missing}")
-    return {token: int(token_id) for token, token_id in values.items()}
+    normalized = {token: int(token_id) for token, token_id in values.items()}
+    if len(set(normalized.values())) != len(normalized):
+        raise ValueError("Tokenizer control token IDs must be unique.")
+    return normalized
 
 
 def build_chat_prompt(
@@ -47,10 +51,23 @@ def build_chat_prompt(
     system_text: str = SYSTEM_TEXT,
 ) -> list[int]:
     """Encode chat turns, dropping old exchanges before trimming the current prompt."""
+    if isinstance(max_context, bool) or not isinstance(max_context, int):
+        raise TypeError("max_context must be an integer.")
     if max_context < 8:
         raise ValueError("max_context must be at least 8 tokens.")
-    if not messages or messages[-1].get("role") != "user":
+    if not isinstance(system_text, str):
+        raise TypeError("system_text must be a string.")
+    if not isinstance(messages, (list, tuple)) or not messages:
+        raise ValueError("messages must be a non-empty list or tuple.")
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise ValueError(f"Invalid chat message at index {index}: expected an object.")
+    if messages[0].get("role") != "user":
+        raise ValueError("Chat history must start with a user message.")
+    if messages[-1].get("role") != "user":
         raise ValueError("Chat history must end with a user message.")
+    if messages[0].get("role") != "user":
+        raise ValueError("Chat history must start with a user message.")
 
     control = _special_ids(tokenizer)
     segments: list[list[int]] = []
@@ -121,7 +138,10 @@ def build_chat_prompt(
 def _apply_repetition_penalty(logits: torch.Tensor, generated: list[int],
                                penalty: float = 1.18, window: int = 64) -> torch.Tensor:
     """Apply a sign-aware penalty to recent generated token IDs."""
-    if not 1.0 <= penalty <= 4.0 or window < 1: raise ValueError("Invalid repetition penalty/window.")
+    if isinstance(penalty, bool) or not isinstance(penalty, (int, float)) or not math.isfinite(penalty) or not 1.0 <= penalty <= 4.0:
+        raise ValueError("repetition penalty must be finite and in [1, 4].")
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ValueError("repetition window must be a positive integer.")
     scores=logits.float().clone()
     for token_id in set(generated[-window:]):
         if token_id<0 or token_id>=scores.numel(): raise ValueError("Generated token ID outside vocabulary.")
@@ -139,20 +159,34 @@ def _choose_next_token(
     repetition_penalty: float = 1.18,
     repetition_window: int = 64,
 ) -> int:
-    scores=_apply_repetition_penalty(logits,generated or [],repetition_penalty,repetition_window)
-    if greedy or temperature <= 0:
+    if not isinstance(logits, torch.Tensor) or logits.ndim != 1 or logits.numel() < 1:
+        raise ValueError("logits must be a non-empty one-dimensional tensor.")
+    if not bool(torch.isfinite(logits).all()):
+        raise ValueError("logits contain non-finite values.")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or temperature < 0:
+        raise ValueError("temperature must be finite and non-negative.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be finite and in (0, 1].")
+    scores = _apply_repetition_penalty(logits,generated or [],repetition_penalty,repetition_window)
+    if greedy or temperature == 0:
         return int(torch.argmax(scores).item())
 
     scores = scores / temperature
     if top_k > 0 and top_k < scores.numel():
-        threshold = torch.topk(scores, top_k).values[-1]
-        scores = scores.masked_fill(scores < threshold, float("-inf"))
+        keep_indices = torch.topk(scores, top_k).indices
+        keep_mask = torch.zeros_like(scores, dtype=torch.bool)
+        keep_mask[keep_indices] = True
+        scores = scores.masked_fill(~keep_mask, float("-inf"))
 
     if top_p < 1.0:
         sorted_scores, sorted_indices = torch.sort(scores, descending=True)
         sorted_probs = torch.softmax(sorted_scores, dim=-1)
         cumulative = torch.cumsum(sorted_probs, dim=-1)
-        remove = cumulative - sorted_probs >= top_p
+        # Remove tokens whose inclusion would push cumulative mass over p,
+        # but always retain the highest-probability token.
+        remove = cumulative > top_p
         remove[1:] = remove[:-1].clone()
         remove[0] = False
         scores[sorted_indices[remove]] = float("-inf")
@@ -176,16 +210,18 @@ def generate_reply(
     repetition_window: int = 64,
 ) -> str:
     """Generate an assistant turn using the model's cached PyTorch reference path."""
-    if max_new_tokens < 1:
-        raise ValueError("max_new_tokens must be positive.")
-    if top_k < 0:
-        raise ValueError("top_k must be non-negative.")
-    if not 0.0 < top_p <= 1.0:
-        raise ValueError("top_p must be in (0, 1].")
-    if temperature < 0:
-        raise ValueError("temperature must be non-negative.")
-    if not 1.0 <= repetition_penalty <= 4.0 or repetition_window < 1:
-        raise ValueError("Invalid repetition penalty/window.")
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be a positive integer.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+        raise ValueError("top_k must be a non-negative integer.")
+    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be finite and in (0, 1].")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or temperature < 0:
+        raise ValueError("temperature must be finite and non-negative.")
+    if isinstance(repetition_penalty, bool) or not isinstance(repetition_penalty, (int, float)) or not math.isfinite(repetition_penalty) or not 1.0 <= repetition_penalty <= 4.0:
+        raise ValueError("repetition_penalty must be finite and in [1, 4].")
+    if isinstance(repetition_window, bool) or not isinstance(repetition_window, int) or repetition_window < 1:
+        raise ValueError("repetition_window must be a positive integer.")
 
     model.eval()
     device = next(model.parameters()).device
@@ -250,7 +286,13 @@ def load_addsub_model(
                 "Tokenizer fingerprint does not match the selected model checkpoint."
             )
     config = AddSubConfig.from_dict(checkpoint["config"])
-    model = AddSubLanguageModel(config).to(device)
+    run_contract = checkpoint.get("run_contract", {})
+    wavebit_options = (
+        run_contract.get("wavebit_hsra") if isinstance(run_contract, dict) else None
+    )
+    model = AddSubLanguageModel(
+        config, wavebit_options=wavebit_options
+    ).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
 
     # The pre-scaled v1/v2 checkpoints used fixed, unscaled codebook thresholds.

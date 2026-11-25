@@ -27,31 +27,70 @@ def _quantize_normalized(weight:torch.Tensor)->torch.Tensor:
     x=weight.clamp(-1.5,1.5)
     return torch.where(x<=-1.0,-1.5,torch.where(x<=-0.25,-0.5,torch.where(x<=0.25,0.0,torch.where(x<=1.0,0.5,1.5))))
 
-def quantize_weight_ste(weight:torch.Tensor,scale:torch.Tensor|float|None=None)->torch.Tensor:
+def quantize_weight_ste(weight: torch.Tensor, scale: torch.Tensor | float | None = None) -> torch.Tensor:
     """Per-tensor scaled five-symbol quantization; identity STE gradient at zero."""
-    if scale is None: scale_tensor=weight_scale(weight)
-    else:
-        scale_tensor=torch.as_tensor(scale,device=weight.device,dtype=weight.dtype).detach()
-        if scale_tensor.numel()!=1 or not bool(torch.isfinite(scale_tensor)) or float(scale_tensor.item())<=0: raise ValueError("Scale must be one finite positive scalar.")
-    effective=_quantize_normalized(weight/scale_tensor)*scale_tensor
-    return weight+(effective-weight).detach()
+    if not isinstance(weight, torch.Tensor) or not weight.is_floating_point():
+        raise TypeError("Weight quantization requires a floating-point torch.Tensor.")
+    if weight.numel() == 0:
+        raise ValueError("Cannot quantize an empty weight tensor.")
+    if not bool(torch.isfinite(weight).all()):
+        raise ValueError("Non-finite weights cannot be quantized.")
 
-def initialize_five_symbol_weight_(weight:torch.Tensor)->torch.Tensor:
+    if scale is None:
+        scale_tensor = weight_scale(weight)
+    else:
+        if isinstance(scale, bool):
+            raise TypeError("Scale must be a real scalar, not a boolean.")
+        if isinstance(scale, torch.Tensor):
+            if scale.numel() != 1 or not scale.is_floating_point():
+                raise TypeError("Scale tensor must contain one floating-point value.")
+        elif not isinstance(scale, (int, float, np.integer, np.floating)):
+            raise TypeError("Scale must be a real scalar or one-element floating tensor.")
+        scale_tensor = torch.as_tensor(
+            scale, device=weight.device, dtype=weight.dtype
+        ).detach()
+        if (
+            scale_tensor.numel() != 1
+            or not bool(torch.isfinite(scale_tensor).all())
+            or float(scale_tensor.item()) <= 0.0
+        ):
+            raise ValueError("Scale must be one finite positive scalar.")
+
+    effective = _quantize_normalized(weight / scale_tensor) * scale_tensor
+    return weight + (effective - weight).detach()
+
+def initialize_five_symbol_weight_(weight: torch.Tensor) -> torch.Tensor:
     """Dense Kaiming master weights for scaled five-symbol QAT."""
-    if weight.ndim<2 or any(size<1 for size in weight.shape): raise ValueError("Weight must have at least two non-empty dimensions.")
-    if not weight.is_floating_point(): raise TypeError("Weight must be floating point.")
-    with torch.no_grad(): torch.nn.init.kaiming_normal_(weight,mode="fan_in",nonlinearity="linear")
+    if not isinstance(weight, torch.Tensor):
+        raise TypeError("Weight initialization requires a torch.Tensor.")
+    if weight.ndim < 2 or any(size < 1 for size in weight.shape):
+        raise ValueError("Weight must have at least two non-empty dimensions.")
+    if not weight.is_floating_point():
+        raise TypeError("Weight must be floating point.")
+    with torch.no_grad():
+        torch.nn.init.kaiming_normal_(weight, mode="fan_in", nonlinearity="linear")
     return weight
 
-def quantize_to_codes(weight:np.ndarray,scale:float|None=None)->np.ndarray:
-    values=np.asarray(weight,dtype=np.float32)
-    if not np.isfinite(values).all(): raise ValueError("Non-finite weights cannot be quantized.")
+def quantize_to_codes(weight: np.ndarray, scale: float | None = None) -> np.ndarray:
+    raw = np.asarray(weight)
+    if raw.dtype.kind not in "iuf":
+        raise TypeError("Weights must be a real numeric array.")
+    with np.errstate(over="ignore", invalid="ignore"):
+        values = raw.astype(np.float32, copy=False)
+    if not np.isfinite(values).all():
+        raise ValueError("Non-finite weights cannot be quantized.")
     if scale is not None:
-        scale_value=float(scale)
-        if not math.isfinite(scale_value) or scale_value<=0: raise ValueError("Scale must be finite and positive.")
-        values=values/np.float32(scale_value)
-    clipped=np.clip(values,-1.5,1.5); levels=np.asarray(WEIGHT_SYMBOLS,dtype=np.float32)
-    return np.argmin(np.abs(clipped[...,None]-levels),axis=-1).astype(np.uint8)
+        if isinstance(scale, (bool, np.bool_)):
+            raise TypeError("Scale must be a real number, not a boolean.")
+        if not isinstance(scale, (int, float, np.integer, np.floating)):
+            raise TypeError("Scale must be a real scalar.")
+        scale_value = float(scale)
+        if not math.isfinite(scale_value) or scale_value <= 0:
+            raise ValueError("Scale must be finite and positive.")
+        values = values / np.float32(scale_value)
+    clipped = np.clip(values, -1.5, 1.5)
+    levels = np.asarray(WEIGHT_SYMBOLS, dtype=np.float32)
+    return np.argmin(np.abs(clipped[..., None] - levels), axis=-1).astype(np.uint8)
 
 def codes_to_values(codes:np.ndarray)->np.ndarray:
     v=np.asarray(codes)

@@ -17,12 +17,53 @@ from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
 from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
+from .wavebit_hsra import validate_wavebit_options
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
 SFT_FORMAT = "qmini-addsub-sft-v6"
 SYSTEM_TEXT = "You are Q-Mini."
+
+CHAT_SPECIAL_TOKENS = (
+    "<unk>", "<bos>", "<eos>", "<pad>",
+    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+)
+
+
+def _chat_special_token_ids(tokenizer: Tokenizer) -> dict[str, int]:
+    """Require every structural token and reject aliases before SFT."""
+    values = {
+        token: tokenizer.token_to_id(token)
+        for token in CHAT_SPECIAL_TOKENS
+    }
+    missing = [token for token, token_id in values.items() if token_id is None]
+    if missing:
+        raise ValueError(f"Tokenizer is missing required Add/Sub chat tokens: {missing}")
+    normalized = {token: int(token_id) for token, token_id in values.items()}
+    if len(set(normalized.values())) != len(normalized):
+        raise ValueError("Tokenizer chat control-token IDs must be unique.")
+    return normalized
+
+
+def _validate_base_tokenizer_fingerprint(
+    checkpoint: dict[str, Any], tokenizer_path: str | Path
+) -> str:
+    """Prevent SFT from changing token meanings under an existing embedding table."""
+    expected = checkpoint.get("tokenizer_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected.lower())
+    ):
+        raise ValueError("Pretraining checkpoint is missing a valid tokenizer SHA-256 fingerprint.")
+    actual = sha256_file(tokenizer_path)
+    if actual != expected:
+        raise ValueError(
+            "SFT tokenizer fingerprint does not match the pretraining checkpoint; "
+            "token IDs would refer to different embeddings."
+        )
+    return actual
 
 
 def _load_conversations(
@@ -80,16 +121,7 @@ def _load_conversations(
 class ConversationDataset(Dataset):
     def __init__(self, records: list[dict], tokenizer: Tokenizer, max_context: int):
         self.samples = []
-        special = {
-            token: tokenizer.token_to_id(token)
-            for token in (
-                "<bos>", "<eos>", "<pad>", "<|system|>", "<|user|>",
-                "<|assistant|>", "<|end|>",
-            )
-        }
-        if any(value is None for value in special.values()):
-            raise ValueError("Tokenizer is missing a required Add/Sub chat token.")
-        special = {key: int(value) for key, value in special.items()}
+        special = _chat_special_token_ids(tokenizer)
 
         for record in records:
             messages = [{"role": "system", "content": SYSTEM_TEXT}]
@@ -225,11 +257,18 @@ def fine_tune_from_addsub_checkpoint(
     if base.get("format") != PRETRAIN_FORMAT:
         raise ValueError("SFT accepts only a Q-Mini Add/Sub v1 pretraining checkpoint.")
     config = AddSubConfig.from_dict(base["config"])
+    base_contract = base.get("run_contract", {})
+    wavebit_options = (
+        base_contract.get("wavebit_hsra") if isinstance(base_contract, dict) else None
+    )
+    wavebit_options = validate_wavebit_options(wavebit_options)
     if int(base.get("step", 0)) < 1:
         raise ValueError("SFT refuses a step-zero or random-only base checkpoint.")
+    tokenizer_sha = _validate_base_tokenizer_fingerprint(base, tokenizer_path)
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     if tokenizer.get_vocab_size() != config.vocab_size:
         raise ValueError("Tokenizer vocabulary does not match the Add/Sub base config.")
+    _chat_special_token_ids(tokenizer)
 
     manifest_path = train_path.parent / "dataset_manifest.json"
     if not manifest_path.is_file():
@@ -241,7 +280,7 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("SFT refuses a dataset manifest containing synthetic training records.")
     sft_manifest = data_manifest.get("instruction_splits", {})
     tokenizer_meta = data_manifest.get("tokenizer", {})
-    if tokenizer_meta.get("sha256") != sha256_file(tokenizer_path):
+    if tokenizer_meta.get("sha256") != tokenizer_sha:
         raise ValueError("SFT tokenizer does not match the curated dataset/tokenizer manifest.")
     for split_name, source_path in (
         ("train", train_path),
@@ -289,8 +328,12 @@ def fine_tune_from_addsub_checkpoint(
         "save_every": save_every,
         "seed": seed,
     }
+    if wavebit_options is not None:
+        run_contract["wavebit_hsra"] = wavebit_options
 
-    model = AddSubLanguageModel(config, seed=seed).to(device)
+    model = AddSubLanguageModel(
+        config, seed=seed, wavebit_options=wavebit_options
+    ).to(device)
     model.load_state_dict(base["model"], strict=True)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     hashes = {
@@ -426,6 +469,7 @@ def fine_tune_from_addsub_checkpoint(
             model.parameters(), 1.0, error_if_nonfinite=True
         )
         optimizer.step()
+        model.update_loss_free_router_bias(result["router_load"])
         assert_finite_training_state(model, optimizer, step)
         last_loss = float(loss.detach())
 
