@@ -124,7 +124,10 @@ def build_chat_prompt(
 def _apply_repetition_penalty(logits: torch.Tensor, generated: list[int],
                                penalty: float = 1.18, window: int = 64) -> torch.Tensor:
     """Apply a sign-aware penalty to recent generated token IDs."""
-    if not 1.0 <= penalty <= 4.0 or window < 1: raise ValueError("Invalid repetition penalty/window.")
+    if isinstance(penalty, bool) or not isinstance(penalty, (int, float)) or not math.isfinite(penalty) or not 1.0 <= penalty <= 4.0:
+        raise ValueError("repetition penalty must be finite and in [1, 4].")
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ValueError("repetition window must be a positive integer.")
     scores=logits.float().clone()
     for token_id in set(generated[-window:]):
         if token_id<0 or token_id>=scores.numel(): raise ValueError("Generated token ID outside vocabulary.")
@@ -146,11 +149,11 @@ def _choose_next_token(
         raise ValueError("logits must be a non-empty one-dimensional tensor.")
     if not bool(torch.isfinite(logits).all()):
         raise ValueError("logits contain non-finite values.")
-    if not math.isfinite(temperature) or temperature < 0:
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or temperature < 0:
         raise ValueError("temperature must be finite and non-negative.")
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
         raise ValueError("top_k must be a non-negative integer.")
-    if not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
         raise ValueError("top_p must be finite and in (0, 1].")
     scores = _apply_repetition_penalty(logits,generated or [],repetition_penalty,repetition_window)
     if greedy or temperature == 0:
@@ -193,11 +196,11 @@ def generate_reply(
         raise ValueError("max_new_tokens must be a positive integer.")
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
         raise ValueError("top_k must be a non-negative integer.")
-    if not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
+    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not math.isfinite(top_p) or not 0.0 < top_p <= 1.0:
         raise ValueError("top_p must be finite and in (0, 1].")
-    if not math.isfinite(temperature) or temperature < 0:
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or temperature < 0:
         raise ValueError("temperature must be finite and non-negative.")
-    if not math.isfinite(repetition_penalty) or not 1.0 <= repetition_penalty <= 4.0:
+    if isinstance(repetition_penalty, bool) or not isinstance(repetition_penalty, (int, float)) or not math.isfinite(repetition_penalty) or not 1.0 <= repetition_penalty <= 4.0:
         raise ValueError("repetition_penalty must be finite and in [1, 4].")
     if isinstance(repetition_window, bool) or not isinstance(repetition_window, int) or repetition_window < 1:
         raise ValueError("repetition_window must be a positive integer.")

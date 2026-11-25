@@ -30,7 +30,7 @@ def test_chat_prompt_rejects_history_that_starts_with_assistant():
         )
 
 
-@pytest.mark.parametrize("temperature", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("temperature", [float("nan"), float("inf"), -float("inf"), True])
 def test_sampling_rejects_nonfinite_temperature(temperature):
     with pytest.raises(ValueError, match="temperature must be finite"):
         _choose_next_token(
