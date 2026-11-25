@@ -555,6 +555,60 @@ def blockwise_hadamard(inputs: torch.Tensor, block_size: int = 8) -> torch.Tenso
     return torch.cat(pieces, dim=-1) if len(pieces) > 1 else pieces[0]
 
 
+
+
+
+def blockwise_hadamard_quantize_i8(
+    activations_i8: np.ndarray,
+    input_scales: np.ndarray,
+    block_size: int = 8,
+    activation_bits: int = 4,
+) -> tuple[np.ndarray, np.ndarray]:
+    """NumPy integer reference for native blockwise Hadamard + low-bit activation quantization."""
+    activations = np.asarray(activations_i8)
+    scales = np.asarray(input_scales)
+    if activations.dtype != np.int8 or activations.ndim != 2 or min(activations.shape) < 1:
+        raise TypeError("activations_i8 must be a non-empty 2-D int8 array.")
+    if scales.dtype != np.float32 or scales.shape != (activations.shape[0],):
+        raise TypeError("input_scales must be a float32 vector with one scale per row.")
+    if not np.isfinite(scales).all() or np.any(scales <= 0.0):
+        raise ValueError("input_scales must be finite and positive.")
+    if isinstance(block_size, bool) or not isinstance(block_size, int) or block_size < 1 or block_size > 64 or block_size & (block_size - 1):
+        raise ValueError("block_size must be a power of two in [1, 64].")
+    if isinstance(activation_bits, bool) or not isinstance(activation_bits, int) or not 2 <= activation_bits <= 8:
+        raise ValueError("activation_bits must be an integer in [2, 8].")
+
+    rows, features = activations.shape
+    max_code = (1 << (activation_bits - 1)) - 1
+    output = np.zeros_like(activations)
+    output_scales = np.empty(rows, dtype=np.float32)
+    for row in range(rows):
+        transformed = np.empty(features, dtype=np.float32)
+        cursor = 0
+        max_abs = 1.0e-8
+        while cursor < features:
+            width = min(block_size, features - cursor)
+            block_width = 1 << (width.bit_length() - 1)
+            values = activations[row, cursor : cursor + block_width].astype(np.int32)
+            stride = 1
+            while stride < block_width:
+                for base in range(0, block_width, stride * 2):
+                    left = values[base : base + stride].copy()
+                    right = values[base + stride : base + stride * 2].copy()
+                    values[base : base + stride] = left + right
+                    values[base + stride : base + stride * 2] = left - right
+                stride *= 2
+            normalized = values.astype(np.float32) / np.float32(math.sqrt(block_width))
+            transformed[cursor : cursor + block_width] = normalized
+            if normalized.size:
+                max_abs = max(max_abs, float(np.max(np.abs(normalized))))
+            cursor += block_width
+        codes = np.rint(transformed * (float(max_code) / max_abs))
+        output[row] = np.clip(codes, -max_code, max_code).astype(np.int8)
+        output_scales[row] = np.float32(scales[row] * (max_abs / max_code))
+    return output, output_scales
+
+
 def quantize_activation_ste(inputs: torch.Tensor, bits: int = 4) -> torch.Tensor:
     """Per-token symmetric activation fake-quantization with an identity STE."""
     if not isinstance(inputs, torch.Tensor) or not inputs.is_floating_point():

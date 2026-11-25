@@ -417,3 +417,59 @@ def test_native_octave_x2_abi_validates_boost_factor(compiled_native_library):
         native.octave_linear(
             activations, packed, offsets, boost_factor=3
         )
+
+
+
+def test_native_hadamard_quantization_matches_integer_reference(compiled_native_library):
+    from qmini.native import NativeKernel
+    from qmini_addsub.wavebit_hsra import blockwise_hadamard_quantize_i8
+
+    rng = np.random.default_rng(20261127)
+    inputs = rng.integers(-127, 128, size=(5, 170), dtype=np.int16).astype(np.int8)
+    inputs[0] = 0
+    input_scales = np.asarray([0.125, 0.03125, 0.0625, 0.2, 0.5], dtype=np.float32)
+    expected_codes, expected_scales = blockwise_hadamard_quantize_i8(
+        inputs, input_scales, block_size=8, activation_bits=4
+    )
+    native_codes, native_scales = NativeKernel(compiled_native_library).hadamard_quantize_i8(
+        inputs, input_scales, block_size=8, activation_bits=4
+    )
+    np.testing.assert_array_equal(native_codes, expected_codes)
+    np.testing.assert_allclose(native_scales, expected_scales, rtol=2e-6, atol=1e-8)
+    assert int(np.max(np.abs(native_codes))) <= 7
+    assert np.all(native_codes[0] == 0)
+    assert native_scales[0] > 0.0
+
+
+def test_native_hadamard_quantization_supports_nondefault_bits_and_tail_blocks(
+    compiled_native_library,
+):
+    from qmini.native import NativeKernel
+    from qmini_addsub.wavebit_hsra import blockwise_hadamard_quantize_i8
+
+    rng = np.random.default_rng(91)
+    inputs = rng.integers(-100, 101, size=(2, 19), dtype=np.int16).astype(np.int8)
+    scales = np.asarray([0.25, 0.5], dtype=np.float32)
+    expected, expected_scales = blockwise_hadamard_quantize_i8(
+        inputs, scales, block_size=4, activation_bits=6
+    )
+    actual, actual_scales = NativeKernel(compiled_native_library).hadamard_quantize_i8(
+        inputs, scales, block_size=4, activation_bits=6
+    )
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_allclose(actual_scales, expected_scales, rtol=2e-6, atol=1e-8)
+    assert int(np.max(np.abs(actual))) <= 31
+
+
+def test_native_hadamard_quantization_rejects_invalid_parameters(compiled_native_library):
+    from qmini.native import NativeKernel
+
+    native = NativeKernel(compiled_native_library)
+    activations = np.ones((2, 8), dtype=np.int8)
+    scales = np.ones(2, dtype=np.float32)
+    with pytest.raises(ValueError, match="power of two"):
+        native.hadamard_quantize_i8(activations, scales, block_size=6)
+    with pytest.raises(ValueError, match="bits"):
+        native.hadamard_quantize_i8(activations, scales, activation_bits=9)
+    with pytest.raises(TypeError, match="float32 vector"):
+        native.hadamard_quantize_i8(activations, scales.astype(np.float64))

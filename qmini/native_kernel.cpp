@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
@@ -460,6 +461,106 @@ QMINI_EXPORT int qmini_octave_linear_i8_v2(
         rows, in_features, out_features, packed_size, boost_factor
     );
 }
+
+
+
+// Integer Walsh-Hadamard transform followed by symmetric per-row activation
+// quantization. Each feature block is independently normalized by sqrt(width),
+// then one symmetric 2..8-bit scale is computed across the transformed row.
+QMINI_EXPORT int qmini_hadamard_quantize_i8_v1(
+    const int8_t* input,
+    const float* input_scales,
+    int8_t* output,
+    float* output_scales,
+    int rows,
+    int features,
+    int block_size,
+    int activation_bits
+) {
+    if (!input || !input_scales || !output || !output_scales) {
+        return 1;
+    }
+    if (rows <= 0 || features <= 0) {
+        return 2;
+    }
+    if (block_size < 1 || block_size > 64 ||
+        (block_size & (block_size - 1)) != 0) {
+        return 3;
+    }
+    if (activation_bits < 2 || activation_bits > 8) {
+        return 4;
+    }
+
+    const int max_code = (1 << (activation_bits - 1)) - 1;
+    std::vector<float> normalized(static_cast<std::size_t>(features));
+    for (int row = 0; row < rows; ++row) {
+        if (!std::isfinite(input_scales[row]) || input_scales[row] <= 0.0f) {
+            return 5;
+        }
+        const int8_t* input_row = input +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(features);
+        int cursor = 0;
+        float max_abs = 1.0e-8f;
+
+        while (cursor < features) {
+            const int remaining = features - cursor;
+            const int width = remaining < block_size ? remaining : block_size;
+            int block_width = 1;
+            while (block_width <= width / 2) {
+                block_width <<= 1;
+            }
+            int32_t values[64] = {0};
+            for (int index = 0; index < block_width; ++index) {
+                values[index] = static_cast<int32_t>(input_row[cursor + index]);
+            }
+            for (int stride = 1; stride < block_width; stride <<= 1) {
+                for (int base = 0; base < block_width; base += stride * 2) {
+                    for (int lane = 0; lane < stride; ++lane) {
+                        const int32_t left = values[base + lane];
+                        const int32_t right = values[base + stride + lane];
+                        values[base + lane] = left + right;
+                        values[base + stride + lane] = left - right;
+                    }
+                }
+            }
+            const float inverse_norm =
+                1.0f / std::sqrt(static_cast<float>(block_width));
+            for (int index = 0; index < block_width; ++index) {
+                const float value = static_cast<float>(values[index]) * inverse_norm;
+                normalized[static_cast<std::size_t>(cursor + index)] = value;
+                const float magnitude = std::fabs(value);
+                if (magnitude > max_abs) {
+                    max_abs = magnitude;
+                }
+            }
+            cursor += block_width;
+        }
+
+        const float quantization_factor = static_cast<float>(max_code) / max_abs;
+        for (int feature = 0; feature < features; ++feature) {
+            float rounded = std::nearbyint(
+                normalized[static_cast<std::size_t>(feature)] * quantization_factor
+            );
+            if (rounded > static_cast<float>(max_code)) {
+                rounded = static_cast<float>(max_code);
+            } else if (rounded < static_cast<float>(-max_code)) {
+                rounded = static_cast<float>(-max_code);
+            }
+            output[static_cast<std::size_t>(row) *
+                static_cast<std::size_t>(features) +
+                static_cast<std::size_t>(feature)] = static_cast<int8_t>(rounded);
+        }
+
+        const float output_scale =
+            input_scales[row] * (max_abs / static_cast<float>(max_code));
+        if (!std::isfinite(output_scale) || output_scale <= 0.0f) {
+            return 6;
+        }
+        output_scales[row] = output_scale;
+    }
+    return 0;
+}
+
 
 QMINI_EXPORT int qmini_kernel_has_neon() {
     return QMINI_HAS_NEON;

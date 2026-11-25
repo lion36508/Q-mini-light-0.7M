@@ -49,6 +49,16 @@ class NativeKernel:
         self.neon_function.argtypes = []
         self.neon_function.restype = ctypes.c_int
         self.uses_neon = bool(self.neon_function())
+        self.hadamard_function = getattr(
+            self.library, "qmini_hadamard_quantize_i8_v1", None
+        )
+        if self.hadamard_function is not None:
+            f32_vector = np.ctypeslib.ndpointer(dtype=np.float32, flags="C_CONTIGUOUS")
+            self.hadamard_function.argtypes = [
+                i8, f32_vector, i8, f32_vector,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ]
+            self.hadamard_function.restype = ctypes.c_int
         self.octave_function = getattr(
             self.library, "qmini_octave_linear_i8_v1", None
         )
@@ -67,6 +77,47 @@ class NativeKernel:
         if self.octave_function_v2 is not None:
             self.octave_function_v2.argtypes = octave_argtypes + [ctypes.c_int]
             self.octave_function_v2.restype = ctypes.c_int
+
+
+
+    def hadamard_quantize_i8(
+        self, activations_i8, input_scales, block_size: int = 8,
+        activation_bits: int = 4,
+    ):
+        """Apply the native integer Hadamard butterfly and symmetric low-bit quantizer."""
+        if self.hadamard_function is None:
+            raise RuntimeError(
+                "Native library does not include the Hadamard ABI; rebuild it."
+            )
+        raw = np.asarray(activations_i8)
+        scales_raw = np.asarray(input_scales)
+        if raw.dtype != np.int8 or raw.ndim != 2 or min(raw.shape) < 1:
+            raise TypeError("activations_i8 must be a non-empty 2-D int8 array.")
+        if scales_raw.dtype != np.float32 or scales_raw.shape != (raw.shape[0],):
+            raise TypeError("input_scales must be a float32 vector with one scale per row.")
+        if not np.isfinite(scales_raw).all() or np.any(scales_raw <= 0.0):
+            raise ValueError("input_scales must be finite and positive.")
+        if (
+            isinstance(block_size, bool) or not isinstance(block_size, int)
+            or block_size < 1 or block_size > 64 or block_size & (block_size - 1)
+        ):
+            raise ValueError("block_size must be a power of two in [1, 64].")
+        if (
+            isinstance(activation_bits, bool) or not isinstance(activation_bits, int)
+            or activation_bits < 2 or activation_bits > 8
+        ):
+            raise ValueError("activation_bits must be an integer in [2, 8].")
+        inputs = np.ascontiguousarray(raw)
+        scales = np.ascontiguousarray(scales_raw)
+        output = np.empty_like(inputs)
+        output_scales = np.empty(inputs.shape[0], dtype=np.float32)
+        status = self.hadamard_function(
+            inputs, scales, output, output_scales,
+            inputs.shape[0], inputs.shape[1], block_size, activation_bits,
+        )
+        if status:
+            raise RuntimeError(f"Native Hadamard kernel returned error {status}.")
+        return output, output_scales
 
     def octave_linear(
         self, activations_i8, packed_stream, row_offsets, bias_half_units=None,
