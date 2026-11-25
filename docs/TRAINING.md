@@ -28,4 +28,4 @@ Every run should retain the model configuration, exact tokenizer, train/validati
 
 CI runs unit/regression tests, synthetic learning proofs, small smoke training, package/native build checks and lexical evaluation fixtures. It does not run the full English pretraining or SFT recipe. A green CI run confirms tested software paths only; it does not establish real-world assistant quality.
 
-There is no active 5M/134M/152M/853M/5B/20B training target in this repository. Distributed FSDP/ZeRO, expert parallelism and a production Android runtime are not delivered by the current trainer.
+The trainers are single-process and single-device. Distributed training and production Android deployment are not delivered by the current code.
