@@ -345,6 +345,8 @@ class SparseTop1Experts(nn.Module):
         if not bool(torch.isfinite(load).all()) or bool((load < 0).any()):
             raise ValueError("observed_load must be finite and non-negative.")
         total = load.sum()
+        if not bool(torch.isfinite(total)):
+            raise ValueError("observed_load total must remain finite.")
         if not bool(total > 0):
             raise ValueError("observed_load must contain at least one routed token.")
         load = load / total
@@ -695,12 +697,48 @@ class AddSubLanguageModel(nn.Module):
         """
         if self.training:
             raise RuntimeError("Call model.eval() before using forward_step().")
-        if input_ids.ndim != 1 or input_ids.shape[0] < 1:
-            raise ValueError("forward_step input_ids must have non-empty [batch] shape.")
+        if torch.is_grad_enabled():
+            raise RuntimeError(
+                "forward_step is inference-only; call it under torch.inference_mode()."
+            )
+        if not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 1 or input_ids.shape[0] < 1:
+            raise ValueError("forward_step input_ids must have non-empty [batch] tensor shape.")
         if input_ids.dtype not in (torch.int32, torch.int64):
             raise TypeError("forward_step input_ids must use torch.int32 or torch.int64.")
-        if len(caches) != len(self.blocks):
-            raise ValueError("One convolution/state cache pair is required per block.")
+        parameter = self.token_embedding.weight
+        batch_size = input_ids.shape[0]
+        if input_ids.device != parameter.device:
+            raise ValueError("forward_step input_ids must be on the model device.")
+        if not isinstance(caches, (list, tuple)) or len(caches) != len(self.blocks):
+            raise ValueError("One cache tuple is required per Add/Sub block.")
+        for layer_index, (block, cache) in enumerate(zip(self.blocks, caches)):
+            padding = block.conv.dilation * (block.conv.kernel_size - 1)
+            expected_history = (batch_size, padding, self.config.d_model)
+            expected_state = (batch_size, self.config.d_model)
+            expected_items = 4 if self.wavebit_options is not None else 2
+            if not isinstance(cache, (tuple, list)) or len(cache) != expected_items:
+                raise ValueError(
+                    f"Cache for block {layer_index} must contain {expected_items} tensors."
+                )
+            for cache_index, value in enumerate(cache):
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(f"Cache tensor {cache_index} for block {layer_index} is invalid.")
+                if value.device != parameter.device:
+                    raise ValueError(f"Cache tensor {cache_index} for block {layer_index} is on the wrong device.")
+            if tuple(cache[0].shape) != expected_history:
+                raise ValueError(f"Convolution cache shape is invalid for block {layer_index}.")
+            if tuple(cache[2 if self.wavebit_options is not None else 1].shape) != expected_state:
+                raise ValueError(f"State-space cache shape is invalid for block {layer_index}.")
+            if cache[0].dtype != parameter.dtype:
+                raise TypeError(f"Convolution cache dtype is invalid for block {layer_index}.")
+            state_index = 2 if self.wavebit_options is not None else 1
+            if cache[state_index].dtype != torch.float32:
+                raise TypeError(f"State-space cache dtype must be float32 for block {layer_index}.")
+            if self.wavebit_options is not None:
+                if tuple(cache[1].shape) != expected_history or cache[1].dtype != parameter.dtype:
+                    raise ValueError(f"WaveBit context cache is invalid for block {layer_index}.")
+                if tuple(cache[3].shape) != expected_state or cache[3].dtype != parameter.dtype:
+                    raise ValueError(f"WaveBit recurrent cache is invalid for block {layer_index}.")
         if input_ids.numel() and (
             int(input_ids.min()) < 0 or int(input_ids.max()) >= self.config.vocab_size
         ):
