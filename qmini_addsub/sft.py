@@ -17,6 +17,7 @@ from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
 from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
+from .wavebit_hsra import validate_wavebit_options
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
@@ -225,6 +226,11 @@ def fine_tune_from_addsub_checkpoint(
     if base.get("format") != PRETRAIN_FORMAT:
         raise ValueError("SFT accepts only a Q-Mini Add/Sub v1 pretraining checkpoint.")
     config = AddSubConfig.from_dict(base["config"])
+    base_contract = base.get("run_contract", {})
+    wavebit_options = (
+        base_contract.get("wavebit_hsra") if isinstance(base_contract, dict) else None
+    )
+    wavebit_options = validate_wavebit_options(wavebit_options)
     if int(base.get("step", 0)) < 1:
         raise ValueError("SFT refuses a step-zero or random-only base checkpoint.")
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
@@ -289,8 +295,12 @@ def fine_tune_from_addsub_checkpoint(
         "save_every": save_every,
         "seed": seed,
     }
+    if wavebit_options is not None:
+        run_contract["wavebit_hsra"] = wavebit_options
 
-    model = AddSubLanguageModel(config, seed=seed).to(device)
+    model = AddSubLanguageModel(
+        config, seed=seed, wavebit_options=wavebit_options
+    ).to(device)
     model.load_state_dict(base["model"], strict=True)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     hashes = {

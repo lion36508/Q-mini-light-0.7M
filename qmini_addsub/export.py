@@ -69,6 +69,12 @@ def export_addsub_checkpoint(
         raise FileNotFoundError(source)
 
     checkpoint = torch.load(source, map_location="cpu", weights_only=True)
+    run_contract = checkpoint.get("run_contract", {})
+    if isinstance(run_contract, dict) and run_contract.get("wavebit_hsra") is not None:
+        raise ValueError(
+            "WaveBit-HSRA group-wise packing needs its dedicated archive/runtime format; "
+            "the legacy per-tensor exporter is intentionally blocked."
+        )
     checkpoint_format = checkpoint.get("format")
     if checkpoint_format not in ACCEPTED_CHECKPOINT_FORMATS:
         raise ValueError("Only known Q-Mini Add/Sub v1 checkpoints can be exported.")

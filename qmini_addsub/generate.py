@@ -250,7 +250,13 @@ def load_addsub_model(
                 "Tokenizer fingerprint does not match the selected model checkpoint."
             )
     config = AddSubConfig.from_dict(checkpoint["config"])
-    model = AddSubLanguageModel(config).to(device)
+    run_contract = checkpoint.get("run_contract", {})
+    wavebit_options = (
+        run_contract.get("wavebit_hsra") if isinstance(run_contract, dict) else None
+    )
+    model = AddSubLanguageModel(
+        config, wavebit_options=wavebit_options
+    ).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
 
     # The pre-scaled v1/v2 checkpoints used fixed, unscaled codebook thresholds.

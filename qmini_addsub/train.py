@@ -17,6 +17,7 @@ from .config import AddSubConfig
 from .model import AddSubLanguageModel
 from .data import escape_special_token_literals
 from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
+from .wavebit_hsra import validate_wavebit_options
 
 
 CHECKPOINT_FORMAT = "qmini-addsub-training-v5"
@@ -107,10 +108,12 @@ def train_from_scratch(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
+    wavebit_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
     config = config or AddSubConfig()
     config.validate()
+    wavebit_options = validate_wavebit_options(wavebit_options)
     for name, value in (
         ("steps", steps),
         ("batch_size", batch_size),
@@ -234,7 +237,11 @@ def train_from_scratch(
         "validate_every": validate_every,
         "seed": seed,
     }
-    model = AddSubLanguageModel(config, seed=seed).to(device)
+    if wavebit_options is not None:
+        run_contract["wavebit_hsra"] = wavebit_options
+    model = AddSubLanguageModel(
+        config, seed=seed, wavebit_options=wavebit_options
+    ).to(device)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     start_step = 0
     rng = random.Random(seed)
@@ -468,6 +475,12 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--seed", type=int, default=20261119)
+    parser.add_argument("--wavebit-hsra", action="store_true",
+                        help="Enable WaveBit-HSRA in the existing Add/Sub model (experimental).")
+    parser.add_argument("--wavebit-group-size", type=int, default=32)
+    parser.add_argument("--wavebit-rotation", type=int, default=1)
+    parser.add_argument("--wavebit-gamma", type=int, default=4)
+    parser.add_argument("--wavebit-ewgs-strength", type=float, default=0.5)
     args = parser.parse_args()
     config = None
     if args.config is not None:
@@ -490,6 +503,15 @@ def main() -> None:
         seed=args.seed,
         device_name=args.device,
         resume=args.resume,
+        wavebit_options=(
+            {
+                "group_size": args.wavebit_group_size,
+                "rotation": args.wavebit_rotation,
+                "gamma": args.wavebit_gamma,
+                "ewgs_strength": args.wavebit_ewgs_strength,
+            }
+            if args.wavebit_hsra else None
+        ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
