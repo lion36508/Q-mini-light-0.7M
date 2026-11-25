@@ -82,6 +82,13 @@ def main() -> None:
     config_path = output.with_name("model_config.json")
     tokenizer_temporary = output.with_suffix(output.suffix + ".tmp")
     config_temporary = config_path.with_suffix(config_path.suffix + ".tmp")
+    if output == config_path:
+        raise ValueError("Tokenizer output path must not be named model_config.json.")
+    if output.exists() or config_path.exists():
+        raise FileExistsError(
+            "Tokenizer or model_config.json already exists. Choose a fresh output "
+            "path; replacing a tokenizer used by existing checkpoints is forbidden."
+        )
     trainer_corpus.parent.mkdir(parents=True, exist_ok=True)
     pretrain_source_bytes = pretrain.stat().st_size
     sample_probability = min(1.0, args.pretrain_byte_budget / max(1, pretrain_source_bytes))
@@ -96,38 +103,30 @@ def main() -> None:
                 first_accepted = None
                 for line in source:
                     raw = line.strip()
-                    if not raw or rng.random() > sample_probability:
+                    if not raw:
                         continue
                     cleaned, reason = normalize_training_text(raw, min_chars=1)
                     if reason != "accepted":
                         continue
                     escaped = escape_special_token_literals(cleaned)
+                    if first_accepted is None:
+                        first_accepted = escaped
+                    if rng.random() > sample_probability:
+                        continue
                     count = len(escaped.encode("utf-8"))
                     if pretrain_sampled_bytes + count > args.pretrain_byte_budget:
                         continue
-                    if first_accepted is None:
-                        first_accepted = escaped
                     target.write(escaped + "\n")
                     pretrain_sampled_bytes += count
                 if pretrain_sampled_bytes == 0 and first_accepted is not None:
+                    first_count = len(first_accepted.encode("utf-8"))
+                    if first_count > args.pretrain_byte_budget:
+                        raise RuntimeError(
+                            "Pretraining byte budget is smaller than the first usable "
+                            "training line; increase --pretrain-byte-budget."
+                        )
                     target.write(first_accepted + "\n")
-                    pretrain_sampled_bytes = len(first_accepted.encode("utf-8"))
-            if sft_train_entry is not None:
-                with sft.open("r", encoding="utf-8") as source:
-                    for line_number, line in enumerate(source, 1):
-                        if not line.strip():
-                            continue
-                        try:
-                            record = json.loads(line)
-                        except json.JSONDecodeError as exc:
-                            raise ValueError(f"{sft}:{line_number}: invalid JSONL.") from exc
-                        for message in record.get("messages", []):
-                            content = str(message.get("content") or "").strip()
-                            cleaned, reason = normalize_training_text(content)
-                            if reason == "accepted":
-                                escaped = escape_special_token_literals(cleaned)
-                                target.write(escaped + "\n")
-                                sft_sampled_bytes += len(escaped.encode("utf-8"))
+                    pretrain_sampled_bytes = first_count
         if pretrain_sampled_bytes == 0:
             raise RuntimeError("Tokenizer sampling produced no usable pretraining text.")
 
@@ -160,8 +159,14 @@ def main() -> None:
             json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        tokenizer_temporary.replace(output)
+        # Publish the config first and tokenizer last; roll back the config
+        # if the tokenizer rename fails.
         config_temporary.replace(config_path)
+        try:
+            tokenizer_temporary.replace(output)
+        except Exception:
+            config_path.unlink(missing_ok=True)
+            raise
 
         trained_on = ["pretrain_train.txt"]
         if sft_train_entry is not None:
