@@ -299,3 +299,97 @@ def test_numpy_weight_quantizer_rejects_bool_and_non_numeric_arrays():
         quantize_to_codes(np.asarray(["1.0", "0.5"]))
     with pytest.raises(TypeError, match="boolean"):
         quantize_to_codes(np.asarray([1.0]), scale=True)
+
+
+def test_wavebit_integer_projection_rejects_sign_shift_and_bias_overflow():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_wavebit_projection
+
+    minimum = np.iinfo(np.int64).min
+    maximum = np.iinfo(np.int64).max
+    with pytest.raises(OverflowError, match="sign inversion"):
+        integer_wavebit_projection(
+            np.asarray([[minimum]], dtype=np.int64),
+            np.asarray([[0]], dtype=np.uint8),
+            np.asarray([[-1]], dtype=np.int8),
+        )
+    with pytest.raises(OverflowError, match="shifted contribution"):
+        integer_wavebit_projection(
+            np.asarray([[maximum]], dtype=np.int64),
+            np.asarray([[4]], dtype=np.uint8),
+            np.asarray([[1]], dtype=np.int8),
+        )
+    with pytest.raises(OverflowError, match="plus bias"):
+        integer_wavebit_projection(
+            np.asarray([[1]], dtype=np.int64),
+            np.asarray([[3]], dtype=np.uint8),
+            np.asarray([[0]], dtype=np.int8),
+            bias_half_units=np.asarray([maximum], dtype=np.int64),
+        )
+
+
+def test_wavebit_integer_projection_rejects_uint64_narrowing():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_wavebit_projection
+
+    with pytest.raises(OverflowError, match="outside the signed int64"):
+        integer_wavebit_projection(
+            np.asarray([[np.iinfo(np.uint64).max]], dtype=np.uint64),
+            np.asarray([[3]], dtype=np.uint8),
+            np.asarray([[0]], dtype=np.int8),
+        )
+
+
+def test_holographic_integer_state_checks_overflow_and_handles_int64_min():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import holographic_state_step_int
+
+    maximum = np.iinfo(np.int64).max
+    minimum = np.iinfo(np.int64).min
+    with pytest.raises(OverflowError, match="state update"):
+        holographic_state_step_int(
+            np.asarray([[maximum]], dtype=np.int64),
+            np.asarray([[maximum]], dtype=np.int64),
+            rotation=0,
+            gamma=1,
+        )
+
+    context, updated = holographic_state_step_int(
+        np.asarray([[minimum]], dtype=np.int64),
+        np.asarray([[0]], dtype=np.int64),
+        rotation=0,
+        gamma=4,
+        threshold=8,
+    )
+    assert context.tolist() == [[-1]]
+    assert int(updated[0, 0]) == minimum + (abs(minimum) >> 4)
+
+
+def test_capacitor_charge_validates_codes_and_does_not_mutate_on_overflow():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import CapacitorCharge
+
+    with pytest.raises(ValueError, match="codes must be in"):
+        CapacitorCharge(np.asarray([256], dtype=np.uint16))
+    with pytest.raises(TypeError, match="codes must be integers"):
+        CapacitorCharge(np.asarray([True], dtype=np.bool_))
+    with pytest.raises(ValueError, match="threshold"):
+        CapacitorCharge(np.asarray([1], dtype=np.uint8), threshold=True)
+
+    controller = CapacitorCharge(np.asarray([2], dtype=np.uint8), threshold=8)
+    controller.charge[0] = np.iinfo(np.int64).max
+    before_charge = controller.charge.copy()
+    before_codes = controller.codes.copy()
+    with pytest.raises(OverflowError, match="accumulator"):
+        controller.step(np.asarray([1], dtype=np.int64))
+    np.testing.assert_array_equal(controller.charge, before_charge)
+    np.testing.assert_array_equal(controller.codes, before_codes)
+
+
+def test_capacitor_charge_rejects_wide_unsigned_impulse_without_narrowing():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import CapacitorCharge
+
+    controller = CapacitorCharge(np.asarray([1], dtype=np.uint8))
+    with pytest.raises(OverflowError, match="outside the signed int64"):
+        controller.step(np.asarray([np.iinfo(np.uint64).max], dtype=np.uint64))
