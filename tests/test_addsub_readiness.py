@@ -4,6 +4,12 @@ from qmini_addsub.evaluate import _answer_diversity
 from qmini_addsub.readiness import assess_addsub_readiness
 
 
+def _assess(metrics, heldout, checkpoint_sha256="f" * 64):
+    return assess_addsub_readiness(
+        metrics, heldout, checkpoint_sha256=checkpoint_sha256
+    )
+
+
 def _metrics():
     identity = {
         "train_sha256": "a" * 64,
@@ -38,7 +44,7 @@ def _heldout():
 
 
 def test_addsub_readiness_requires_validation_learning_and_noncollapsed_heldout_answers():
-    result = assess_addsub_readiness(_metrics(), _heldout())
+    result = _assess(_metrics(), _heldout())
     assert result["ready"] is True
     assert result["status"] == "ready_for_review"
     assert result["checks_passed"] == result["checks_total"] == 3
@@ -63,7 +69,7 @@ def test_addsub_answer_diversity_detects_same_answer_with_punctuation_variants()
 def test_addsub_readiness_fails_for_constant_outputs_even_when_lexical_score_is_high():
     heldout = _heldout()
     heldout["output_diversity"] = _answer_diversity(["same answer"] * 50)
-    result = assess_addsub_readiness(_metrics(), heldout)
+    result = _assess(_metrics(), heldout)
     check = next(item for item in result["checks"] if item["name"] == "heldout_repetition_collapse")
     assert check["passed"] is False
     assert result["ready"] is False
@@ -75,7 +81,7 @@ def test_addsub_readiness_fails_for_phrase_loops_inside_unique_answers():
     answers = [repeated * 5 + f"unique ending {index}" for index in range(50)]
     heldout = _heldout()
     heldout["output_diversity"] = _answer_diversity(answers)
-    result = assess_addsub_readiness(_metrics(), heldout)
+    result = _assess(_metrics(), heldout)
     check = next(item for item in result["checks"] if item["name"] == "heldout_repetition_collapse")
     assert check["passed"] is False
     assert check["observed"]["max_repeated_4gram_count"] > 4
@@ -84,7 +90,7 @@ def test_addsub_readiness_fails_for_phrase_loops_inside_unique_answers():
 def test_addsub_readiness_fails_when_validation_response_loss_does_not_improve():
     metrics = _metrics()
     metrics[-1]["valid_response_loss"] = 3.1
-    result = assess_addsub_readiness(metrics, _heldout())
+    result = _assess(metrics, _heldout())
     check = next(item for item in result["checks"] if item["name"] == "sft_validation_learning")
     assert check["passed"] is False
     assert result["ready"] is False
@@ -95,7 +101,7 @@ def test_addsub_readiness_fails_on_generation_failure_and_insufficient_test_set(
     heldout["generation_failures"] = 1
     heldout["test_records"] = 10
     heldout["output_diversity"] = _answer_diversity([f"Answer {i}" for i in range(10)])
-    result = assess_addsub_readiness(_metrics(), heldout)
+    result = _assess(_metrics(), heldout)
     check = next(item for item in result["checks"] if item["name"] == "heldout_response_quality")
     assert check["passed"] is False
     assert result["ready"] is False
@@ -105,11 +111,16 @@ def test_addsub_readiness_rejects_heldout_test_split_hash_mismatch():
     heldout = _heldout()
     heldout["test_sha256"] = "9" * 64
     with pytest.raises(ValueError, match="test_sha256 does not match"):
-        assess_addsub_readiness(_metrics(), heldout)
+        _assess(_metrics(), heldout)
 
 
 def test_addsub_readiness_requires_two_validation_evaluations():
     with pytest.raises(ValueError, match="metrics"):
-        assess_addsub_readiness([], _heldout())
-    result = assess_addsub_readiness(_metrics()[:1], _heldout())
+        _assess([], _heldout())
+    result = _assess(_metrics()[:1], _heldout())
     assert result["ready"] is False
+
+
+def test_addsub_readiness_rejects_a_report_from_a_different_checkpoint():
+    with pytest.raises(ValueError, match="checkpoint_sha256 does not match"):
+        _assess(_metrics(), _heldout(), checkpoint_sha256="0" * 64)
