@@ -393,3 +393,107 @@ def test_capacitor_charge_rejects_wide_unsigned_impulse_without_narrowing():
     controller = CapacitorCharge(np.asarray([1], dtype=np.uint8))
     with pytest.raises(OverflowError, match="outside the signed int64"):
         controller.step(np.asarray([np.iinfo(np.uint64).max], dtype=np.uint64))
+
+
+def test_tokenizer_sampling_uses_first_valid_line_when_random_sample_is_empty(
+    tmp_path, monkeypatch, capsys
+):
+    import hashlib
+    import json
+    import sys
+
+    from scripts import train_qmini_addsub_tokenizer as builder
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source = data_dir / "pretrain_train.txt"
+    source.write_text("a\n", encoding="utf-8")
+    manifest = {
+        "format": "qmini-addsub-data-v1",
+        "language": "English",
+        "synthetic_training_records_included": 0,
+        "pretraining": {
+            "splits": {
+                "train": {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            }
+        },
+        "instruction_splits": {},
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+    class AlwaysSkip:
+        def random(self):
+            return 1.0
+
+    monkeypatch.setattr(builder.random, "Random", lambda seed: AlwaysSkip())
+    output = tmp_path / "artifacts" / "tokenizer.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_qmini_addsub_tokenizer",
+            "--data-dir", str(data_dir),
+            "--output", str(output),
+            "--vocab-size", "264",
+            "--pretrain-byte-budget", "1",
+        ],
+    )
+    builder.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["pretrain_sampled_bytes"] == 1
+    assert report["validation_test_used"] is False
+    assert output.is_file()
+    assert json.loads(output.with_name("model_config.json").read_text())["vocab_size"] == 264
+
+
+def test_tokenizer_sampling_rejects_budget_smaller_than_first_valid_line(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+    import sys
+
+    from scripts import train_qmini_addsub_tokenizer as builder
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source = data_dir / "pretrain_train.txt"
+    source.write_text("long\n", encoding="utf-8")
+    manifest = {
+        "format": "qmini-addsub-data-v1",
+        "language": "English",
+        "synthetic_training_records_included": 0,
+        "pretraining": {
+            "splits": {
+                "train": {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            }
+        },
+        "instruction_splits": {},
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+    class AlwaysSkip:
+        def random(self):
+            return 1.0
+
+    monkeypatch.setattr(builder.random, "Random", lambda seed: AlwaysSkip())
+    output = tmp_path / "artifacts" / "tokenizer.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_qmini_addsub_tokenizer",
+            "--data-dir", str(data_dir),
+            "--output", str(output),
+            "--vocab-size", "264",
+            "--pretrain-byte-budget", "1",
+        ],
+    )
+    with pytest.raises(RuntimeError, match="byte budget is smaller"):
+        builder.main()
+    assert not output.exists()
+    assert not output.with_name("model_config.json").exists()
