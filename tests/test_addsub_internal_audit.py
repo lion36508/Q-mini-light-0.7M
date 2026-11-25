@@ -158,3 +158,111 @@ def test_simplewiki_streams_batches_and_deduplicates_content(tmp_path, monkeypat
     report = module.prepare_simple_wikipedia(tmp_path / "cache", output)
     assert [report["splits"][x]["articles"] for x in ("train", "validation", "test")] == [1, 1, 1]
     assert report["dropped"]["duplicate_article"] == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"dropout": False},
+        {"moe_balance_coef": True},
+        {"router_z_loss_coef": False},
+        {"residual_init": "0.1"},
+        {"dropout": float("nan")},
+        {"moe_balance_coef": float("inf")},
+    ],
+)
+def test_addsub_config_rejects_boolean_string_and_nonfinite_scalars(kwargs):
+    from qmini_addsub.config import AddSubConfig
+
+    with pytest.raises((TypeError, ValueError)):
+        AddSubConfig(**kwargs).validate()
+
+
+@pytest.mark.parametrize(
+    "learning_rate,weight_decay",
+    [
+        (True, 0.01),
+        (1e-3, True),
+        ("0.001", 0.01),
+        (float("nan"), 0.01),
+    ],
+)
+def test_adamw_rejects_boolean_string_and_nonfinite_hyperparameters(
+    learning_rate, weight_decay
+):
+    import torch
+    from qmini_addsub.optim import build_adamw
+
+    model = torch.nn.Linear(2, 2)
+    with pytest.raises((TypeError, ValueError)):
+        build_adamw(model, learning_rate, weight_decay)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"peak_learning_rate": True},
+        {"peak_learning_rate": "0.001"},
+        {"warmup_fraction": True},
+        {"minimum_ratio": False},
+        {"minimum_ratio": float("nan")},
+    ],
+)
+def test_cosine_schedule_rejects_boolean_string_and_nonfinite_scalars(kwargs):
+    from qmini_addsub.optim import cosine_warmup_lr
+
+    values = {
+        "step": 1,
+        "total_steps": 100,
+        "peak_learning_rate": 1e-3,
+        "warmup_fraction": 0.03,
+        "minimum_ratio": 0.1,
+    }
+    values.update(kwargs)
+    with pytest.raises((TypeError, ValueError)):
+        cosine_warmup_lr(**values)
+
+
+def test_tokenizer_builder_refuses_to_replace_existing_tokenizer(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import sys
+
+    from scripts import train_qmini_addsub_tokenizer as builder
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source = data_dir / "pretrain_train.txt"
+    source.write_text("A valid English sentence.\n", encoding="utf-8")
+    manifest = {
+        "format": "qmini-addsub-data-v1",
+        "language": "English",
+        "synthetic_training_records_included": 0,
+        "pretraining": {
+            "splits": {
+                "train": {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            }
+        },
+        "instruction_splits": {},
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    output = tmp_path / "artifacts" / "tokenizer.json"
+    output.parent.mkdir()
+    output.write_text("previous-tokenizer", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_qmini_addsub_tokenizer",
+            "--data-dir", str(data_dir),
+            "--output", str(output),
+            "--vocab-size", "264",
+            "--pretrain-byte-budget", "1024",
+        ],
+    )
+    with pytest.raises(FileExistsError, match="already exists"):
+        builder.main()
+    assert output.read_text(encoding="utf-8") == "previous-tokenizer"
+    assert not output.with_name("model_config.json").exists()
