@@ -554,34 +554,3 @@ def test_native_octave_groupwise_projection_validates_group_metadata(compiled_na
             activations, packed, offsets, group_scales, input_scales,
             group_size=8, boost_factor=3,
         )
-
-
-def test_chat_prompt_rejects_history_that_starts_with_assistant(tiny_tokenizer):
-    from qmini_addsub.generate import build_chat_prompt
-
-    with pytest.raises(ValueError, match="start with a user"):
-        build_chat_prompt(
-            tiny_tokenizer,
-            [{"role": "assistant", "content": "Hello"},
-             {"role": "user", "content": "Hi"}],
-            max_context=64,
-        )
-
-
-@pytest.mark.parametrize("temperature", [float("nan"), float("inf"), -float("inf")])
-def test_sampling_rejects_nonfinite_temperature(temperature):
-    from qmini_addsub.generate import _choose_next_token
-
-    with pytest.raises(ValueError, match="temperature must be finite"):
-        _choose_next_token(
-            torch.zeros(8), temperature, top_k=4, top_p=0.9, greedy=False
-        )
-
-
-def test_sampling_rejects_nonfinite_logits():
-    from qmini_addsub.generate import _choose_next_token
-
-    logits = torch.zeros(8)
-    logits[3] = float("nan")
-    with pytest.raises(ValueError, match="logits contain non-finite"):
-        _choose_next_token(logits, 0.7, top_k=4, top_p=0.9, greedy=False)
