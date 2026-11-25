@@ -49,7 +49,7 @@ The progress state values include `not_started`, `checkpointed`, and `completed`
 - The architecture remains attention-free: causal convolution + gated diagonal state-space + sparse Top-1 MoE. No Transformer attention or Q/K/V attention is added.
 - No external pretrained model weights are downloaded or loaded.
 - Q2-v2 matrix symbols are 2-bit. Row scales are FP32, one-dimensional parameters are FP16, and current QAT master parameters and AdamW optimizer state are FP32. This is not an all-state 2-bit trainer.
-- The current single-device trainer is configured for the 0.7M Light model, subject to actual VRAM. The separate original Q-Mini 5B project is not modified or selected by this workflow. FSDP/ZeRO sharded optimizer/checkpoint support remains a separate implementation requirement.
+- The current single-device trainer is configured for the 0.7M Light model, subject to actual available memory. Distributed sharded training is not implemented and is outside this workflow.
 - A saved checkpoint proves resumable training state, not assistant quality. Language capability still requires real licensed data, training, and independent held-out evaluations.
 
 
