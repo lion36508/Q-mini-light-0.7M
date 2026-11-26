@@ -273,10 +273,11 @@ def test_model_first_and_training_colab_use_the_saved_source_bundle() -> None:
     ast.parse(model_code, filename=str(model_first_path))
     ast.parse(training_code, filename=str(training_path))
 
+    model_first_markdown = "".join(model_first["cells"][0].get("source", []))
     assert "source_root=REPO_DIR" in model_code
     assert "parameter_layout.json" in model_code
     assert "source_code" in model_code
-    assert "No dataset download" in model_first["cells"][0]["source"][0]
+    assert "No dataset download" in model_first_markdown
 
     assert "SOURCE_CODE_DIR = ARTIFACT_DIR / \"source_code\"" in training_code
     assert "shutil.copytree(SOURCE_CODE_DIR, REPO_DIR" in training_code
