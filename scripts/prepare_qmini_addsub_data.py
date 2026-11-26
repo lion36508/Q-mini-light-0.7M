@@ -215,6 +215,101 @@ def prepare_wikitext(cache: Path, output: Path) -> dict:
     }
 
 
+def _select_oasst_conversation_path(
+    messages: list[dict],
+) -> tuple[list[dict] | None, str | None, bool]:
+    """Select one deterministic, complete root-to-leaf path from an OASST tree.
+
+    OASST message trees can branch. Choosing children[0] makes the training
+    corpus depend on Parquet row order and can silently select a short or
+    incomplete branch. Instead, validate message identity/root structure and
+    choose the longest complete path; equal-length paths use message-ID order
+    as a stable tie-break. Cyclic paths and duplicate IDs are rejected.
+    """
+    by_id: dict[str, dict] = {}
+    for message in messages:
+        raw_id = message.get("message_id")
+        if not isinstance(raw_id, str) or not raw_id.strip():
+            return None, "invalid_message_id", False
+        message_id = raw_id.strip()
+        if message_id in by_id:
+            return None, "duplicate_message_id", False
+        by_id[message_id] = message
+
+    roots = [
+        message for message in messages
+        if message.get("parent_id") is None
+    ]
+    if len(roots) != 1:
+        return None, "invalid_root_count", False
+    root = roots[0]
+    if root.get("role") != "prompter":
+        return None, "invalid_root_role", False
+
+    children: dict[str, list[dict]] = defaultdict(list)
+    orphan_messages = 0
+    for message in messages:
+        parent_id = message.get("parent_id")
+        if parent_id is None:
+            continue
+        parent_key = str(parent_id)
+        if parent_key not in by_id:
+            # A parent may have been filtered out by OASST review/rank policy.
+            # Its descendants are not reachable from the accepted root.
+            orphan_messages += 1
+            continue
+        children[parent_key].append(message)
+
+    for child_list in children.values():
+        child_list.sort(key=lambda item: str(item["message_id"]))
+
+    branching = any(len(child_list) > 1 for child_list in children.values())
+    root_id = str(root["message_id"])
+    stack: list[tuple[dict, tuple[dict, ...], frozenset[str]]] = [
+        (root, (root,), frozenset((root_id,)))
+    ]
+    best_path: tuple[dict, ...] | None = None
+    best_key: tuple[int, tuple[str, ...]] | None = None
+
+    while stack:
+        current, path, path_ids = stack.pop()
+        current_id = str(current["message_id"])
+        available_children = children.get(current_id, [])
+        next_children = [
+            child for child in available_children
+            if str(child["message_id"]) not in path_ids
+        ]
+        has_cycle_edge = len(next_children) != len(available_children)
+
+        if next_children:
+            for child in reversed(next_children):
+                child_id = str(child["message_id"])
+                stack.append((
+                    child,
+                    (*path, child),
+                    path_ids | frozenset((child_id,)),
+                ))
+            continue
+
+        # A cyclic edge is not a valid leaf. Do not turn a malformed loop into
+        # a plausible-looking truncated training conversation.
+        if has_cycle_edge:
+            continue
+        if path[0].get("role") != "prompter" or path[-1].get("role") != "assistant":
+            continue
+
+        ids = tuple(str(item["message_id"]) for item in path)
+        key = (-len(path), ids)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_path = path
+
+    if best_path is None:
+        reason = "orphaned_or_cyclic_tree" if orphan_messages else "no_complete_assistant_path"
+        return None, reason, branching
+    return list(best_path), None, branching
+
+
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
     parquet_path = Path(
         hf_hub_download(
@@ -254,31 +349,16 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
 
     conversations = []
     incomplete_trees = 0
+    dropped_tree_reasons: dict[str, int] = defaultdict(int)
+    branching_trees = 0
     for tree_id, messages in by_tree.items():
-        by_id = {message["message_id"]: message for message in messages}
-        children: dict[str, list[dict]] = defaultdict(list)
-        root = None
-        for message in messages:
-            parent = message.get("parent_id")
-            if parent is None:
-                root = message
-            else:
-                children[str(parent)].append(message)
-        if root is None or root.get("role") != "prompter":
+        chain, reason, branching = _select_oasst_conversation_path(messages)
+        if branching:
+            branching_trees += 1
+        if reason is not None or chain is None:
             incomplete_trees += 1
+            dropped_tree_reasons[reason or "invalid_path"] += 1
             continue
-
-        chain = []
-        seen = set()
-        current = root
-        while current is not None:
-            message_id = str(current["message_id"])
-            if message_id in seen:
-                break
-            seen.add(message_id)
-            chain.append(current)
-            candidates = children.get(message_id, [])
-            current = candidates[0] if candidates else None
 
         turns = []
         invalid_text = False
@@ -327,6 +407,12 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
         "conversations": len(conversations),
         "dropped_messages": dict(sorted(dropped.items())),
         "dropped_incomplete_trees": incomplete_trees,
+        "dropped_tree_reasons": dict(sorted(dropped_tree_reasons.items())),
+        "branching_trees": branching_trees,
+        "branch_policy": (
+            "longest complete root-to-leaf path; equal-length paths are "
+            "tie-broken by lexicographically sorted message IDs"
+        ),
     }
     return conversations, info
 
