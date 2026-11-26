@@ -579,7 +579,12 @@ def initialize_model_artifacts(
     paths = _required_artifact_paths(artifact_dir)
     existing = [path for path in paths.values() if path.exists() or path.is_symlink()]
     if len(existing) == len(paths):
-        return verify_model_bundle(root)
+        verified_manifest = verify_model_bundle(root)
+        source_verification = verify_self_contained_model_source(root)
+        if source_verification["parameter_count"] != verified_manifest["parameter_count"]:
+            raise RuntimeError("Copied source verification loaded a different parameter count.")
+        verified_manifest["source_verification"] = source_verification
+        return verified_manifest
     if existing:
         names = ", ".join(sorted(path.name for path in existing))
         raise FileExistsError(
@@ -669,7 +674,7 @@ def initialize_model_artifacts(
                 "format": "qmini-addsub-parameter-layout-v1",
                 "parameter_count": parameter_count,
                 "parameters": parameter_layout,
-            }, ensure_ascii=False, indent=2, sort_keys=True) + "\\n",
+            }, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
@@ -709,7 +714,9 @@ def initialize_model_artifacts(
 - tokenizer.json: deterministic UTF-8 byte-level tokenizer with 256 byte symbols and eight Q-Mini control tokens; no corpus-trained merges
 - model_config.json: exact architecture dimensions and parameter budget
 - initial_model.pt: complete initialized PyTorch state dictionary and its config/tokenizer identity
-- model_manifest.json: file hashes, architecture, and lifecycle status
+- parameter_layout.json: every named parameter, shape, element count, and flat offset range
+- source_code/: complete Add/Sub Python/native source, training/inference modules, scripts, config template, and source hash manifest
+- model_manifest.json: file hashes, architecture, source snapshot identity, and lifecycle status
 
 ## Important limitations
 
@@ -739,6 +746,7 @@ This is a complete **initialized model graph**, not a trained assistant. It will
             "tokenizer_sha256": tokenizer_sha,
             "source_snapshot_sha256": source_snapshot["manifest_sha256"],
             "source_commit": source_commit,
+            "parameter_layout_sha256": sha256_file(parameter_layout_path),
         }
         report_path = staging / paths["report"].name
         report_path.write_text(
