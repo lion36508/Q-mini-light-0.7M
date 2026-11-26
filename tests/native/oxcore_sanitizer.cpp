@@ -175,6 +175,107 @@ int main() {
         return 1;
     }
 
+    const int32_t minimum_state[] = {
+        std::numeric_limits<int32_t>::min()
+    };
+    const int32_t zero_injection[] = {0};
+    const uint16_t full_decay[] = {32768u};
+    int32_t minimum_output[] = {17};
+    int32_t minimum_final[] = {19};
+    if (!check(
+            ox_ssm_scan_q15_i32(
+                minimum_state, zero_injection, full_decay,
+                1u, 1u, 1u, minimum_output, minimum_final
+            ) == OX_OK &&
+            minimum_output[0] == std::numeric_limits<int32_t>::min() &&
+            minimum_final[0] == std::numeric_limits<int32_t>::min(),
+            "Q15 SSM preserves INT32_MIN")) {
+        return 1;
+    }
+
+    const int32_t cancel_initial[] = {0};
+    const int32_t cancel_injection[] = {
+        std::numeric_limits<int32_t>::max(),
+        -std::numeric_limits<int32_t>::max()
+    };
+    const uint16_t cancel_decay[] = {0u, 32768u};
+    int32_t cancel_states[2] = {};
+    int32_t cancel_final[1] = {};
+    if (!check(
+            ox_ssm_scan_q15_i32(
+                cancel_initial, cancel_injection, cancel_decay,
+                2u, 1u, 1u, cancel_states, cancel_final
+            ) == OX_OK &&
+            cancel_states[0] == std::numeric_limits<int32_t>::max() &&
+            cancel_states[1] == 0 && cancel_final[0] == 0,
+            "Q15 SSM accepts safe decay/cancellation sequence")) {
+        return 1;
+    }
+
+    const int32_t overflow_initial[] = {0};
+    const int32_t overflow_injection[] = {
+        std::numeric_limits<int32_t>::max(), 1
+    };
+    const uint16_t overflow_decay[] = {32768u, 32768u};
+    int32_t untouched_states[] = {123, 456};
+    int32_t untouched_final[] = {789};
+    if (!check(
+            ox_ssm_scan_q15_i32(
+                overflow_initial, overflow_injection, overflow_decay,
+                2u, 1u, 1u, untouched_states, untouched_final
+            ) == OX_EOVERFLOW &&
+            untouched_states[0] == 123 && untouched_states[1] == 456 &&
+            untouched_final[0] == 789,
+            "Q15 SSM overflow preflight is transactional")) {
+        return 1;
+    }
+
+    alignas(8) uint8_t alias_storage[16] = {};
+    const uint8_t one_weight[] = {0u};
+    if (!check(
+            ox_linear_mirror63_acc_i8(
+                reinterpret_cast<const int8_t *>(alias_storage),
+                one_weight, 1u, 1u, 1u,
+                reinterpret_cast<int64_t *>(alias_storage)
+            ) == OX_EALIAS,
+            "linear projection rejects overlapping output")) {
+        return 1;
+    }
+
+    int32_t size_dummy = 0;
+    const size_t oversized_states =
+        std::numeric_limits<size_t>::max() / sizeof(int32_t) + 1u;
+    if (!check(
+            ox_ssm_scan_q15_i32(
+                &size_dummy, &size_dummy,
+                reinterpret_cast<const uint16_t *>(&size_dummy),
+                oversized_states, 1u, 1u, &size_dummy, &size_dummy
+            ) == OX_EOVERFLOW,
+            "SSM rejects byte-size overflow before dereference")) {
+        return 1;
+    }
+
+    int8_t tiny_input[] = {0};
+    int64_t tiny_output = 0;
+    const size_t oversized_outputs =
+        std::numeric_limits<size_t>::max() / sizeof(int64_t) + 1u;
+    if (!check(
+            ox_linear_mirror63_acc_i8(
+                tiny_input, one_weight, 1u, 1u, oversized_outputs,
+                &tiny_output
+            ) == OX_EOVERFLOW,
+            "linear rejects output byte-size overflow")) {
+        return 1;
+    }
+
+    const size_t oversized_fwht =
+        std::numeric_limits<size_t>::max() / sizeof(int64_t) + 1u;
+    if (!check(
+            ox_fwht_i64(&tiny_output, oversized_fwht) == OX_EOVERFLOW,
+            "FWHT rejects byte-size overflow before dereference")) {
+        return 1;
+    }
+
     int16_t activation_table[256] = {};
     for (size_t index = 0u; index < 256u; ++index) {
         activation_table[index] = static_cast<int16_t>(
