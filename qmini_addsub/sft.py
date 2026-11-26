@@ -218,6 +218,21 @@ def _collate(batch: list[tuple[list[int], list[int]]], pad_id: int):
     return inputs, labels
 
 
+def _require_response_targets(labels: torch.Tensor, step: int) -> int:
+    """Reject a batch with no supervised assistant targets; never burn an optimizer step."""
+    if not isinstance(labels, torch.Tensor):
+        raise TypeError("SFT labels must be a torch.Tensor.")
+    if labels.numel() == 0:
+        raise ValueError(f"SFT batch at step {step} contains no labels.")
+    count = int(labels.ne(-100).sum().item())
+    if count == 0:
+        raise ValueError(
+            f"SFT batch at step {step} contains no assistant response targets; "
+            "refusing to advance the optimizer schedule."
+        )
+    return count
+
+
 def fine_tune_from_addsub_checkpoint(
     base_checkpoint: str | Path,
     tokenizer_path: str | Path,
@@ -472,9 +487,7 @@ def fine_tune_from_addsub_checkpoint(
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad(set_to_none=True)
         result = model(inputs, attention_mask=inputs.ne(pad_id))
-        target_count = int((labels != -100).sum())
-        if target_count == 0:
-            continue
+        target_count = _require_response_targets(labels, step)
         loss = F.cross_entropy(
             result["logits"].float().reshape(-1, config.vocab_size),
             labels.reshape(-1),
