@@ -39,6 +39,21 @@ def test_config_rejects_profiles_that_exceed_two_million_parameters():
     assert MAX_PARAMETER_BUDGET == 2_000_000
 
 
+def test_active_two_million_profile_completes_a_real_cpu_optimizer_step():
+    path = ROOT / "configs" / "qmini_addsub_2m.json"
+    report = run_training_preflight(
+        path,
+        device_name="cpu",
+        num_threads=2,
+        batch_size=1,
+        sequence_length=16,
+    )
+    assert report["status"] == "training_engine_preflight_passed"
+    assert report["parameter_count"] == 1_985_684
+    assert report["optimizer_step_completed"] is True
+    assert report["device"] == "cpu"
+
+
 def test_training_preflight_runs_a_real_optimizer_step_without_writing_artifacts(tmp_path):
     config = AddSubConfig(
         vocab_size=300,
