@@ -23,6 +23,7 @@ from .optim import (
 )
 from .wavebit_hsra import validate_wavebit_options
 from .checkpoints import verify_completed_checkpoint
+from .initialize import load_initial_model_checkpoint
 
 
 CHECKPOINT_FORMAT = "qmini-addsub-training-v5"
@@ -129,6 +130,7 @@ def train_from_scratch(
     num_threads: int = 0,
     wavebit_options: dict[str, Any] | None = None,
     validate_only: bool = False,
+    initial_model: str | Path | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
     if not isinstance(validate_only, bool):
@@ -257,6 +259,15 @@ def train_from_scratch(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
+    initial_model_path = None if initial_model is None else Path(initial_model)
+    initial_model_sha256 = None
+    if initial_model_path is not None:
+        if not initial_model_path.is_file():
+            raise FileNotFoundError(f"Initial model checkpoint does not exist: {initial_model_path}")
+        if wavebit_options is not None:
+            raise ValueError("The standard initialized checkpoint cannot be used with WaveBit-HSRA.")
+        initial_model_sha256 = sha256_file(initial_model_path)
+
     run_contract = {
         "batch_size": batch_size,
         "sequence_length": sequence_length,
@@ -271,9 +282,17 @@ def train_from_scratch(
         run_contract["cpu_intraop_threads"] = num_threads
     if wavebit_options is not None:
         run_contract["wavebit_hsra"] = wavebit_options
+    if initial_model_sha256 is not None:
+        run_contract["initial_model_sha256"] = initial_model_sha256
     model = AddSubLanguageModel(
         config, seed=seed, wavebit_options=wavebit_options
     ).to(device)
+    if initial_model_path is not None:
+        loaded_initial_sha = load_initial_model_checkpoint(
+            model, initial_model_path, tokenizer_sha
+        )
+        if loaded_initial_sha != initial_model_sha256:
+            raise RuntimeError("Initial-model checkpoint changed while loading.")
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     start_step = 0
     schedule_total_steps = steps
@@ -580,6 +599,7 @@ def train_from_scratch(
         "requested_num_threads": num_threads,
         "output_dir": str(output),
         "data_manifest_sha256": manifest_sha,
+        "initial_model_sha256": initial_model_sha256,
         "note": "Throughput excludes validation time and is hardware/run-specific; training graph only, complete add/sub-only inference export is a separate gate.",
     }
 
@@ -599,6 +619,7 @@ def main() -> None:
     parser.add_argument("--validate-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--initial-model", default=None, help="Verified initialized model weights to use before the first training step; pass the same file when resuming this run.")
     parser.add_argument("--validate-only", action="store_true", help="Verify an existing checkpoint and its full data/run lineage without training or modifying files.")
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     parser.add_argument(
@@ -645,6 +666,7 @@ def main() -> None:
         seed=args.seed,
         device_name=args.device,
         resume=args.resume,
+        initial_model=args.initial_model,
         extend_schedule=args.extend_schedule,
         num_threads=args.threads,
         validate_only=args.validate_only,
