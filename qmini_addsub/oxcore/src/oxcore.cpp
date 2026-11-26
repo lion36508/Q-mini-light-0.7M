@@ -108,6 +108,41 @@ int64_t scale_by_small_integer_additive(int value, int8_t activation) {
     }
 }
 
+int64_t dot_decoded_triplet(
+    const int q[3], uint8_t octave, const int8_t activations[3]
+) {
+    int64_t sum = 0;
+    sum += scale_by_small_integer_additive(q[0], activations[0]);
+    sum += scale_by_small_integer_additive(q[1], activations[1]);
+    sum += scale_by_small_integer_additive(q[2], activations[2]);
+    if (octave != 0u) {
+        sum += sum;
+    }
+    return sum;
+}
+
+bool size_product_overflows(size_t left, size_t right) {
+    return right != 0u && left > std::numeric_limits<size_t>::max() / right;
+}
+
+ox_status validate_mirror63_weight_array(
+    const uint8_t *packed_weights, size_t count
+) {
+    if (count != 0u && packed_weights == nullptr) {
+        return OX_EINVAL;
+    }
+    for (size_t index = 0u; index < count; ++index) {
+        int q[3] = {0, 0, 0};
+        uint8_t octave = 0u;
+        const ox_status status =
+            decode_mirror63(packed_weights[index], q, &octave);
+        if (status != OX_OK && status != OX_SKIP) {
+            return status;
+        }
+    }
+    return OX_OK;
+}
+
 }  // namespace
 
 extern "C" {
@@ -369,6 +404,142 @@ ox_status ox_mirror63_dot_i8(
     }
 
     *out_scaled_accumulator = accumulator;
+    return OX_OK;
+}
+
+ox_status ox_linear_mirror63_acc_i8(
+    const int8_t *input,
+    const uint8_t *packed_weights,
+    size_t batch,
+    size_t in_features,
+    size_t out_features,
+    int64_t *output
+) {
+    if (batch == 0u || in_features == 0u || out_features == 0u ||
+        input == nullptr || packed_weights == nullptr || output == nullptr) {
+        return OX_EINVAL;
+    }
+    if (in_features > std::numeric_limits<size_t>::max() - 2u) {
+        return OX_EOVERFLOW;
+    }
+    const size_t blocks_per_row = (in_features + 2u) / 3u;
+    if (size_product_overflows(batch, in_features) ||
+        size_product_overflows(out_features, blocks_per_row) ||
+        size_product_overflows(batch, out_features) ||
+        in_features > static_cast<size_t>(
+            std::numeric_limits<int64_t>::max() / 512)) {
+        return OX_EOVERFLOW;
+    }
+
+    const size_t weight_count = out_features * blocks_per_row;
+    const ox_status validation =
+        validate_mirror63_weight_array(packed_weights, weight_count);
+    if (validation != OX_OK) {
+        return validation;
+    }
+
+    for (size_t row = 0u; row < batch; ++row) {
+        const size_t input_offset = row * in_features;
+        const size_t output_offset = row * out_features;
+        for (size_t output_index = 0u; output_index < out_features; ++output_index) {
+            int64_t accumulator = 0;
+            const size_t weight_offset = output_index * blocks_per_row;
+            for (size_t block = 0u; block < blocks_per_row; ++block) {
+                int q[3] = {0, 0, 0};
+                uint8_t octave = 0u;
+                const ox_status status = decode_mirror63(
+                    packed_weights[weight_offset + block], q, &octave
+                );
+                if (status == OX_SKIP) {
+                    continue;
+                }
+                if (status != OX_OK) {
+                    return status;
+                }
+
+                int8_t block_input[3] = {0, 0, 0};
+                const size_t feature_offset = block * 3u;
+                for (size_t lane = 0u; lane < 3u; ++lane) {
+                    const size_t feature = feature_offset + lane;
+                    if (feature < in_features) {
+                        block_input[lane] = input[input_offset + feature];
+                    }
+                }
+                accumulator += dot_decoded_triplet(q, octave, block_input);
+            }
+            output[output_offset + output_index] = accumulator;
+        }
+    }
+    return OX_OK;
+}
+
+ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
+    const int8_t *input,
+    size_t time_steps,
+    size_t channels,
+    const uint8_t *packed_weights,
+    size_t kernel_size,
+    int64_t *output
+) {
+    if (time_steps == 0u || channels == 0u || kernel_size == 0u ||
+        input == nullptr || packed_weights == nullptr || output == nullptr) {
+        return OX_EINVAL;
+    }
+    if (kernel_size > std::numeric_limits<size_t>::max() - 2u) {
+        return OX_EOVERFLOW;
+    }
+    const size_t blocks_per_channel = (kernel_size + 2u) / 3u;
+    if (size_product_overflows(time_steps, channels) ||
+        size_product_overflows(channels, blocks_per_channel) ||
+        kernel_size > static_cast<size_t>(
+            std::numeric_limits<int64_t>::max() / 512)) {
+        return OX_EOVERFLOW;
+    }
+
+    const size_t weight_count = channels * blocks_per_channel;
+    const ox_status validation =
+        validate_mirror63_weight_array(packed_weights, weight_count);
+    if (validation != OX_OK) {
+        return validation;
+    }
+
+    for (size_t time = 0u; time < time_steps; ++time) {
+        const size_t output_offset = time * channels;
+        for (size_t channel = 0u; channel < channels; ++channel) {
+            int64_t accumulator = 0;
+            const size_t weight_offset = channel * blocks_per_channel;
+            for (size_t block = 0u; block < blocks_per_channel; ++block) {
+                int q[3] = {0, 0, 0};
+                uint8_t octave = 0u;
+                const ox_status status = decode_mirror63(
+                    packed_weights[weight_offset + block], q, &octave
+                );
+                if (status == OX_SKIP) {
+                    continue;
+                }
+                if (status != OX_OK) {
+                    return status;
+                }
+
+                int8_t block_input[3] = {0, 0, 0};
+                const size_t tap_offset = block * 3u;
+                for (size_t lane = 0u; lane < 3u; ++lane) {
+                    const size_t tap = tap_offset + lane;
+                    if (tap >= kernel_size) {
+                        continue;
+                    }
+                    const size_t left_context = kernel_size - 1u - tap;
+                    if (time >= left_context) {
+                        const size_t source_time = time - left_context;
+                        block_input[lane] =
+                            input[source_time * channels + channel];
+                    }
+                }
+                accumulator += dot_decoded_triplet(q, octave, block_input);
+            }
+            output[output_offset + channel] = accumulator;
+        }
+    }
     return OX_OK;
 }
 
