@@ -161,3 +161,20 @@ def test_resume_rejects_dangling_workspace_symlinks(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="cannot be resolved"):
         resolve_workspace_root(version_root, resume_existing=True)
+
+
+
+def test_fresh_run_rejects_symlink_in_an_ancestor_of_version_root(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    version = real_parent / "version"
+    version.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="version root must not traverse symlinks"):
+        resolve_workspace_root(
+            linked_parent / "version",
+            force_fresh=True,
+            run_id="fresh-run",
+        )
