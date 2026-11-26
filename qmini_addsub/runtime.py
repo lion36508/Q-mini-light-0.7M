@@ -25,6 +25,18 @@ def build_contribution_table() -> np.ndarray:
 CONTRIBUTION_TABLE = build_contribution_table()
 
 
+def _check_projection_accumulator_bound(feature_count: int, max_abs_bias: int = 0) -> None:
+    """Reject shapes whose worst-case doubled five-symbol sum can overflow int64."""
+    if isinstance(feature_count, bool) or not isinstance(feature_count, int) or feature_count < 1:
+        raise ValueError("Projection feature_count must be a positive integer.")
+    if isinstance(max_abs_bias, bool) or not isinstance(max_abs_bias, int) or max_abs_bias < 0:
+        raise ValueError("Projection bias bound must be a non-negative integer.")
+    limit = np.iinfo(np.int64).max
+    maximum_contribution = 3 * 127
+    if max_abs_bias > limit or feature_count > (limit - max_abs_bias) // maximum_contribution:
+        raise OverflowError("Projection worst-case accumulator exceeds signed int64 range.")
+
+
 def additive_projection(
     activation_codes: np.ndarray,
     weight_codes: np.ndarray,
@@ -43,14 +55,26 @@ def additive_projection(
         raise TypeError("Activation codes must be integer values.")
     if activations.ndim < 1:
         raise ValueError("Activation tensor must have a feature dimension.")
-    if weights.ndim != 2:
-        raise ValueError("Weight codes must have shape [out_features, in_features].")
+    if weights.ndim != 2 or min(weights.shape) < 1:
+        raise ValueError("Weight codes must have non-empty [out_features, in_features] shape.")
     if activations.shape[-1] != weights.shape[-1]:
         raise ValueError("Input feature count does not match weight feature count.")
     if np.any(activations < -127) or np.any(activations > 127):
         raise ValueError("Activation codes must be in [-127, 127].")
     if weights.dtype.kind not in "iu" or np.any(weights < 0) or np.any(weights > 4):
         raise ValueError("Weight codes must be integers in [0, 4].")
+
+    max_abs_bias = 0
+    bias = None
+    if bias_accumulator is not None:
+        bias = np.asarray(bias_accumulator)
+        if bias.shape != (weights.shape[0],) or bias.dtype.kind not in "iu":
+            raise ValueError("Bias must be an integer vector matching out_features.")
+        int32 = np.iinfo(np.int32)
+        if np.any(bias < int32.min) or np.any(bias > int32.max):
+            raise ValueError("Bias accumulator values must fit in signed int32.")
+        max_abs_bias = max(abs(int(value)) for value in bias.flat)
+    _check_projection_accumulator_bound(activations.shape[-1], max_abs_bias)
 
     encoded = activations.astype(np.int16) + 128
     weights = weights.astype(np.uint8, copy=False)
@@ -64,13 +88,7 @@ def additive_projection(
         ]
         accumulator = np.add(accumulator, contribution, dtype=np.int64)
 
-    if bias_accumulator is not None:
-        bias = np.asarray(bias_accumulator)
-        if bias.shape != (weights.shape[0],) or bias.dtype.kind not in "iu":
-            raise ValueError("Bias must be an integer vector matching out_features.")
-        int32 = np.iinfo(np.int32)
-        if np.any(bias < int32.min) or np.any(bias > int32.max):
-            raise ValueError("Bias accumulator values must fit in signed int32.")
+    if bias is not None:
         accumulator = np.add(accumulator, bias.astype(np.int64), dtype=np.int64)
     return accumulator
 
