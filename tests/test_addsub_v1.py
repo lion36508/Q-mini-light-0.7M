@@ -12,7 +12,9 @@ from qmini_addsub.data import (
     normalize_training_text,
     stable_split,
 )
-from qmini_addsub.model import AddSubLanguageModel, AddSubLinear, SparseTop1Experts
+from qmini_addsub.model import (
+    AddSubLanguageModel, AddSubLinear, GatedDiagonalStateSpace, SparseTop1Experts,
+)
 from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
