@@ -74,6 +74,11 @@ def test_model_first_initialization_creates_complete_untrained_bundle(tmp_path: 
     assert result["source_verification"]["isolated_source_import"] is True
     assert result["source_verification"]["model_bundle_verified"] is True
     assert result["source_verification"]["source_package"].startswith(str(source_root))
+    persisted_manifest = json.loads(
+        (artifacts / "model_manifest.json").read_text(encoding="utf-8")
+    )
+    assert persisted_manifest["source_verification"]["isolated_source_import"] is True
+    assert len(list((source_root / "tests").glob("*.py"))) > 0
 
     layout = json.loads(
         (artifacts / "parameter_layout.json").read_text(encoding="utf-8")
@@ -240,3 +245,41 @@ def test_pretraining_loads_the_exact_saved_model_first_weights(tmp_path: Path) -
     assert result["initial_model_sha256"] == initial_sha
     assert checkpoint["run_contract"]["initial_model_sha256"] == initial_sha
     assert checkpoint["step"] == 1
+
+
+def test_model_first_and_training_colab_use_the_saved_source_bundle() -> None:
+    model_first_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab" / "QMini_AddSub_2M_Model_First.ipynb"
+    )
+    training_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab" / "QMini_AddSub_2M_One_Click.ipynb"
+    )
+    model_first = json.loads(model_first_path.read_text(encoding="utf-8"))
+    training = json.loads(training_path.read_text(encoding="utf-8"))
+
+    model_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in model_first["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    training_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in training["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    ast.parse(model_code, filename=str(model_first_path))
+    ast.parse(training_code, filename=str(training_path))
+
+    assert "source_root=REPO_DIR" in model_code
+    assert "parameter_layout.json" in model_code
+    assert "source_code" in model_code
+    assert "No dataset download" in model_first["cells"][0]["source"][0]
+
+    assert "SOURCE_CODE_DIR = ARTIFACT_DIR / \"source_code\"" in training_code
+    assert "shutil.copytree(SOURCE_CODE_DIR, REPO_DIR" in training_code
+    assert "git clone" not in training_code
+    assert "git fetch" not in training_code
+    assert "source_root=REPO_DIR" in training_code
+    assert "--initial-model" in training_code
