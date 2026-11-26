@@ -2,6 +2,7 @@ import pytest
 
 from qmini_addsub.evaluate import _answer_diversity
 from qmini_addsub.readiness import assess_addsub_readiness
+from qmini_addsub.sft import SFT_FORMAT
 
 
 def _assess(metrics, heldout, checkpoint_sha256="f" * 64):
@@ -39,7 +40,7 @@ def _metrics():
 def _heldout():
     return {
         "format": "qmini-addsub-heldout-eval-v1",
-        "checkpoint_format": "qmini-addsub-sft-v6",
+        "checkpoint_format": SFT_FORMAT,
         "checkpoint_sha256": "f" * 64,
         "base_checkpoint_sha256": "1" * 64,
         "tokenizer_sha256": "d" * 64,
