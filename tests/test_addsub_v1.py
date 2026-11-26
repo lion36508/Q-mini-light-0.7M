@@ -2164,3 +2164,82 @@ def test_pretraining_evaluation_windows_include_both_stream_ends_without_duplica
     assert starts == sorted(set(starts))
     with pytest.raises(ValueError, match="max_start"):
         evaluation_window_starts(-1)
+
+def test_gated_diagonal_ssm_parallel_scan_matches_sequential_recurrence():
+    import torch
+    from qmini_addsub.config import AddSubConfig
+    from qmini_addsub.model import GatedDiagonalStateSpace
+
+    torch.manual_seed(20261126)
+    batch, length, width = 2, 7, 8
+    decay = torch.rand(batch, length, width, dtype=torch.float32) * 0.98 + 0.01
+    injection = torch.randn(batch, length, width, dtype=torch.float32)
+
+    parallel = GatedDiagonalStateSpace.parallel_scan(decay, injection)
+    state = torch.zeros(batch, width, dtype=torch.float32)
+    sequential = []
+    for time in range(length):
+        state = decay[:, time, :] * state + injection[:, time, :]
+        sequential.append(state)
+    reference = torch.stack(sequential, dim=1)
+    torch.testing.assert_close(parallel, reference, rtol=2e-5, atol=2e-6)
+
+
+def test_gated_diagonal_ssm_full_sequence_matches_token_step_cache():
+    import torch
+    from qmini_addsub.config import AddSubConfig
+    from qmini_addsub.model import GatedDiagonalStateSpace
+
+    torch.manual_seed(20261127)
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=8,
+        d_hidden=16,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=8,
+        dropout=0.0,
+    )
+    module = GatedDiagonalStateSpace(config).eval()
+    inputs = torch.randn(2, 7, 8, dtype=torch.float32)
+
+    full_output = module(inputs)
+    state = torch.zeros(2, 8, dtype=torch.float32)
+    step_outputs = []
+    for time in range(inputs.shape[1]):
+        token_output, state = module.step(inputs[:, time:time + 1, :], state)
+        step_outputs.append(token_output)
+    step_output = torch.cat(step_outputs, dim=1)
+
+    torch.testing.assert_close(full_output, step_output, rtol=3e-5, atol=3e-6)
+    assert state.shape == (2, 8)
+    assert torch.isfinite(state).all()
+
+
+def test_gated_diagonal_ssm_training_gradients_are_finite():
+    import torch
+    from qmini_addsub.config import AddSubConfig
+    from qmini_addsub.model import GatedDiagonalStateSpace
+
+    torch.manual_seed(20261128)
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=8,
+        d_hidden=16,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=8,
+        dropout=0.0,
+    )
+    module = GatedDiagonalStateSpace(config).train()
+    inputs = torch.randn(2, 5, 8, dtype=torch.float32, requires_grad=True)
+    loss = module(inputs).square().mean()
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
+    for name, parameter in module.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+
