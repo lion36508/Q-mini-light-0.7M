@@ -103,12 +103,12 @@ value by (Sk\approx v), gradient descent on
 (\tfrac12\|Sk-v\|_2^2) gives the rank-one correction
 [
 S_t=\alpha_tS_{t-1}
-+\beta_t(v_t-S_{t-1}k_t)k_t^T
-=\alpha_tS_{t-1}(I-\bar\beta_t k_tk_t^T)
-+\bar\beta_t v_tk_t^T
++\eta_t(v_t-S_{t-1}k_t)k_t^T
+=\alpha_tS_{t-1}(I-(\eta_t/\alpha_t) k_tk_t^T)
++\eta_t v_tk_t^T
 ]
-when the decay/learning-rate convention is chosen consistently. In this
-column-vector convention the projection multiplies (S) on the **right**.
+for nonzero (alpha_t), with alpha_t and eta_t kept as separate coefficients.
+In this column-vector convention the projection multiplies (S) on the **right**.
 The proposed ((I-\beta kk^T)S) has the wrong side/dimensions for this
 definition. A different matrix convention is possible, but it must be stated
 before implementation.
