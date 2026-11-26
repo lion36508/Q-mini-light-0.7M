@@ -11,7 +11,7 @@ from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
 from tokenizers.trainers import BpeTrainer
 
-from qmini_addsub.config import AddSubConfig
+from qmini_addsub.config import AddSubConfig, MAX_PARAMETER_BUDGET
 from qmini_addsub.data import escape_special_token_literals, normalize_training_text
 from qmini_addsub.train import sha256_file
 
@@ -265,7 +265,7 @@ def main() -> None:
             "model_config": str(config_path),
             "vocab_size": actual_vocab_size,
             "estimated_parameter_count": model_config.estimated_parameter_count(),
-            "parameter_budget": model_config.parameter_budget,
+            "parameter_budget": MAX_PARAMETER_BUDGET,
             "special_tokens": {token: tokenizer.token_to_id(token) for token in SPECIAL_TOKENS},
             "trained_on": trained_on,
             "pretrain_source_bytes": pretrain_source_bytes,
