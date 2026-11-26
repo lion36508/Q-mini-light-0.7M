@@ -447,7 +447,7 @@ def test_static_arena_rejects_capacity_and_alignment_errors(oxcore):
         arena.alloc(0)
     with pytest.raises(ValueError, match="positive"):
         arena.alloc(-1)
-    with pytest.raises(OxCoreError, match="invalid argument"):
+    with pytest.raises(ValueError, match="between zero"):
         arena.rewind(arena.capacity + 1)
 
 
