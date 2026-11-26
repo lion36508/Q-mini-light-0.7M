@@ -106,6 +106,24 @@ OXCORE_API ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
     int64_t *output
 );
 
+/* Q15 diagonal SSM recurrence:
+ * state[t] = round_to_nearest_even(decay_q15[t] * state[t-1] / 32768)
+ *            + injection[t].
+ * All buffers are contiguous [time,batch,channels], except initial/final
+ * state [batch,channels]. Decay coefficients must be in [0,32768].
+ * Scaling uses shift-add only; no integer multiply is used by this operator.
+ */
+OXCORE_API ox_status ox_ssm_scan_q15_i32(
+    const int32_t *initial_state,
+    const int32_t *injection,
+    const uint16_t *decay_q15,
+    size_t time_steps,
+    size_t batch,
+    size_t channels,
+    int32_t *all_states,
+    int32_t *final_state
+);
+
 OXCORE_API ox_status ox_fwht_i64(int64_t *values, size_t length);
 OXCORE_API ox_status ox_sinkhorn4(
     const double logits[16], double out_matrix[16], uint32_t iterations
