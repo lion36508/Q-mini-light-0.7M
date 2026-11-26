@@ -25,16 +25,7 @@ def build_contribution_table() -> np.ndarray:
 CONTRIBUTION_TABLE = build_contribution_table()
 
 
-def _check_projection_accumulator_bound(feature_count: int, max_abs_bias: int = 0) -> None:
-    """Reject shapes whose worst-case doubled five-symbol sum can overflow int64."""
-    if isinstance(feature_count, bool) or not isinstance(feature_count, int) or feature_count < 1:
-        raise ValueError("Projection feature_count must be a positive integer.")
-    if isinstance(max_abs_bias, bool) or not isinstance(max_abs_bias, int) or max_abs_bias < 0:
-        raise ValueError("Projection bias bound must be a non-negative integer.")
-    limit = np.iinfo(np.int64).max
-    maximum_contribution = 3 * 127
-    if max_abs_bias > limit or feature_count > (limit - max_abs_bias) // maximum_contribution:
-        raise OverflowError("Projection worst-case accumulator exceeds signed int64 range.")
+_MAX_SAFE_FEATURES_WITH_INT32_BIAS = 24208325550412840
 
 
 def additive_projection(
@@ -64,7 +55,6 @@ def additive_projection(
     if weights.dtype.kind not in "iu" or np.any(weights < 0) or np.any(weights > 4):
         raise ValueError("Weight codes must be integers in [0, 4].")
 
-    max_abs_bias = 0
     bias = None
     if bias_accumulator is not None:
         bias = np.asarray(bias_accumulator)
@@ -73,8 +63,11 @@ def additive_projection(
         int32 = np.iinfo(np.int32)
         if np.any(bias < int32.min) or np.any(bias > int32.max):
             raise ValueError("Bias accumulator values must fit in signed int32.")
-        max_abs_bias = max(abs(int(value)) for value in bias.flat)
-    _check_projection_accumulator_bound(activations.shape[-1], max_abs_bias)
+    # Reserve the full signed-int32 bias range and cap the worst-case
+    # doubled weight contribution at 3*127 per input feature. The precomputed
+    # ceiling keeps the actual inference module free of multiply/divide ops.
+    if activations.shape[-1] > _MAX_SAFE_FEATURES_WITH_INT32_BIAS:
+        raise OverflowError("Projection worst-case accumulator exceeds signed int64 range.")
 
     encoded = activations.astype(np.int16) + 128
     weights = weights.astype(np.uint8, copy=False)
