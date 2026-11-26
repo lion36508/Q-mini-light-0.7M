@@ -56,6 +56,9 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "IMPORT_USER_DATA = False" in all_code
     assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
     assert "START_PRETRAIN = False" in all_code
+    assert "PRETRAIN_EXTEND_SCHEDULE = False" in all_code
+    assert "SFT_EXTEND_SCHEDULE = False" in all_code
+    assert all_code.count("['--extend-schedule']") == 2
     assert "START_SFT = False" in all_code
     assert "EXPORT_PACKED_WEIGHTS = False" in all_code
     assert "RUN_HELDOUT_EVAL = False" in all_code
