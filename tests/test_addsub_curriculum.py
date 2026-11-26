@@ -115,3 +115,27 @@ def test_sampler_rejects_resume_state_with_invalid_ema_loss():
     state["ema_loss"][0] = float("nan")
     with pytest.raises(ValueError, match="invalid loss"):
         sampler.load_state_dict(state)
+
+
+def test_sampler_rejects_step_beyond_saved_schedule_when_resumed_extended():
+    original = _sampler(total_steps=20, warmup_steps=2)
+    state = original.state_dict()
+    state["step"] = 21
+
+    extended = _sampler(total_steps=30, warmup_steps=2)
+    with pytest.raises(ValueError, match="saved schedule horizon"):
+        extended.load_state_dict(state)
+
+
+def test_uniform_control_path_matches_random_sample_and_does_not_scan_ema():
+    sampler = _sampler(total_steps=20, warmup_steps=2, uniform_fraction=1.0)
+    rng = random.Random(123)
+    expected_rng = random.Random(123)
+    expected = expected_rng.sample(range(sampler.dataset_size), k=3)
+
+    indices, info = sampler.sample(3, rng)
+
+    assert indices == expected
+    assert info["mode"] == "uniform_control"
+    assert info["seen_fraction"] == 0.0
+    assert sampler.step == 1
