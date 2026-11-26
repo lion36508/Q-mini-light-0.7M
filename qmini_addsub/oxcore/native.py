@@ -144,6 +144,18 @@ class OxCoreNative:
             ctypes.c_size_t, ctypes.POINTER(ctypes.c_int64)
         ]
         lib.ox_mirror63_dot_i8.restype = ctypes.c_int
+        lib.ox_linear_mirror63_acc_i8.argtypes = [
+            ctypes.POINTER(ctypes.c_int8), ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64)
+        ]
+        lib.ox_linear_mirror63_acc_i8.restype = ctypes.c_int
+        lib.ox_causal_depthwise_conv_mirror63_acc_i8.argtypes = [
+            ctypes.POINTER(ctypes.c_int8), ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64)
+        ]
+        lib.ox_causal_depthwise_conv_mirror63_acc_i8.restype = ctypes.c_int
 
         lib.ox_fwht_i64.argtypes = [
             ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t
@@ -218,6 +230,81 @@ class OxCoreNative:
         )
         self._check(status, "Mirror-63 dot")
         return int(output.value)
+
+    def linear_mirror63_acc_i8(
+        self,
+        inputs: Sequence[Sequence[int]],
+        packed_weights: Sequence[Sequence[int]],
+    ) -> list[list[int]]:
+        """Compute [batch, out] integer numerators from Mirror-63 packed rows.
+
+        Inputs are signed int8. Each output row stores ceil(in_features/3)
+        Mirror-63 bytes; the final byte's unused activation lanes are zero.
+        """
+        if not inputs or not packed_weights:
+            raise ValueError("Linear projection needs a non-empty batch and output matrix.")
+        in_features = len(inputs[0])
+        if in_features < 1 or any(len(row) != in_features for row in inputs):
+            raise ValueError("Linear inputs must be a non-empty rectangular matrix.")
+        blocks_per_row = (in_features + 2) // 3
+        if any(len(row) != blocks_per_row for row in packed_weights):
+            raise ValueError(
+                "Each packed linear weight row must contain ceil(in_features/3) bytes."
+            )
+        batch = len(inputs)
+        out_features = len(packed_weights)
+        source = _as_int8([value for row in inputs for value in row])
+        weights = _as_uint8([value for row in packed_weights for value in row])
+        output = (ctypes.c_int64 * (batch * out_features))()
+        status = self._lib.ox_linear_mirror63_acc_i8(
+            source, weights, batch, in_features, out_features, output
+        )
+        self._check(status, "Mirror-63 linear projection")
+        return [
+            [int(output[row * out_features + column]) for column in range(out_features)]
+            for row in range(batch)
+        ]
+
+    def causal_depthwise_conv_mirror63_acc_i8(
+        self,
+        inputs: Sequence[Sequence[int]],
+        packed_weights: Sequence[Sequence[int]],
+        kernel_size: int,
+    ) -> list[list[int]]:
+        """Causal depthwise convolution numerators for [time, channels] int8 input.
+
+        Weight rows are per channel and contain ceil(kernel_size/3) Mirror-63
+        bytes. Tap zero is oldest and the final tap uses the current token.
+        Missing left context is zero padded.
+        """
+        if not inputs or not packed_weights:
+            raise ValueError("Causal convolution needs input timesteps and channels.")
+        if isinstance(kernel_size, bool) or not isinstance(kernel_size, int):
+            raise TypeError("Causal convolution kernel_size must be an integer.")
+        if kernel_size < 1:
+            raise ValueError("Causal convolution kernel_size must be positive.")
+        time_steps = len(inputs)
+        channels = len(inputs[0])
+        if channels < 1 or any(len(row) != channels for row in inputs):
+            raise ValueError("Causal convolution inputs must be a non-empty rectangular matrix.")
+        if len(packed_weights) != channels:
+            raise ValueError("Causal convolution needs exactly one packed weight row per channel.")
+        blocks_per_channel = (kernel_size + 2) // 3
+        if any(len(row) != blocks_per_channel for row in packed_weights):
+            raise ValueError(
+                "Each channel weight row must contain ceil(kernel_size/3) bytes."
+            )
+        source = _as_int8([value for row in inputs for value in row])
+        weights = _as_uint8([value for row in packed_weights for value in row])
+        output = (ctypes.c_int64 * (time_steps * channels))()
+        status = self._lib.ox_causal_depthwise_conv_mirror63_acc_i8(
+            source, time_steps, channels, weights, kernel_size, output
+        )
+        self._check(status, "Mirror-63 causal depthwise convolution")
+        return [
+            [int(output[time * channels + channel]) for channel in range(channels)]
+            for time in range(time_steps)
+        ]
 
     def fwht_i64(self, values: Sequence[int]) -> list[int]:
         if not values:
