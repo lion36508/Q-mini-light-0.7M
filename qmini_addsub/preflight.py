@@ -9,7 +9,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from .config import AddSubConfig
+from .config import AddSubConfig, MAX_PARAMETER_BUDGET
 from .model import AddSubLanguageModel
 from .optim import assert_finite_training_state, build_adamw
 
@@ -53,9 +53,9 @@ def run_training_preflight(
             f"Parameter estimator mismatch: expected {expected_parameters:,}, "
             f"constructed {actual_parameters:,}."
         )
-    if actual_parameters > 2_000_000:
+    if actual_parameters > MAX_PARAMETER_BUDGET:
         raise RuntimeError(
-            f"Model has {actual_parameters:,} parameters; the absolute cap is 2,000,000."
+            f"Model has {actual_parameters:,} parameters; the absolute cap is {MAX_PARAMETER_BUDGET:,}."
         )
 
     token_count = batch_size * sequence_length
@@ -95,7 +95,7 @@ def run_training_preflight(
         "torch_version": torch.__version__,
         "precision": "float32",
         "parameter_count": actual_parameters,
-        "parameter_budget": config.parameter_budget,
+        "parameter_budget": MAX_PARAMETER_BUDGET,
         "estimated_parameter_count": expected_parameters,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
