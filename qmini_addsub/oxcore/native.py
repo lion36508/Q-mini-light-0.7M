@@ -51,17 +51,25 @@ class _TensorView(ctypes.Structure):
 
 
 def _as_int8(values: Sequence[int]) -> ctypes.Array:
-    try:
-        return (ctypes.c_int8 * len(values))(*values)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("Activations must be integers in the int8 range.") from exc
+    checked = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("Activations must be integers.")
+        if not -128 <= value <= 127:
+            raise ValueError("Activations must be in the int8 range [-128, 127].")
+        checked.append(value)
+    return (ctypes.c_int8 * len(checked))(*checked)
 
 
 def _as_uint8(values: Sequence[int]) -> ctypes.Array:
-    try:
-        return (ctypes.c_uint8 * len(values))(*values)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("Packed bytes must be integers in the uint8 range.") from exc
+    checked = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("Packed bytes must be integers.")
+        if not 0 <= value <= 255:
+            raise ValueError("Packed bytes must be in the uint8 range [0, 255].")
+        checked.append(value)
+    return (ctypes.c_uint8 * len(checked))(*checked)
 
 
 class OxCoreNative:
