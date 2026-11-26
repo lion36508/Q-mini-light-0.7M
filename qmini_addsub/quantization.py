@@ -87,7 +87,14 @@ def quantize_to_codes(weight: np.ndarray, scale: float | None = None) -> np.ndar
         scale_value = float(scale)
         if not math.isfinite(scale_value) or scale_value <= 0:
             raise ValueError("Scale must be finite and positive.")
-        values = values / np.float32(scale_value)
+        with np.errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
+            scale32 = np.float32(scale_value)
+        if not np.isfinite(scale32) or scale32 <= 0.0:
+            raise ValueError("Scale must be representable as a positive finite float32.")
+        with np.errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
+            values = values / scale32
+        if not np.isfinite(values).all():
+            raise ValueError("Normalized weights overflowed float32 during quantization.")
     clipped = np.clip(values, -1.5, 1.5)
     levels = np.asarray(WEIGHT_SYMBOLS, dtype=np.float32)
     return np.argmin(np.abs(clipped[..., None] - levels), axis=-1).astype(np.uint8)
