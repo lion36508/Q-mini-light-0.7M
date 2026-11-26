@@ -544,3 +544,32 @@ def test_additive_projection_rejects_empty_weight_dimensions():
             np.zeros((1, 1), dtype=np.int8),
             np.empty((1, 0), dtype=np.uint8),
         )
+
+
+
+def test_additive_projection_feature_ceiling_is_mathematically_safe_and_tight():
+    import numpy as np
+    from qmini_addsub.runtime import _MAX_SAFE_FEATURES_WITH_INT32_BIAS
+
+    int64_max = int(np.iinfo(np.int64).max)
+    worst_bias_magnitude = 1 << 31
+    worst_per_feature = 3 * 127
+    assert _MAX_SAFE_FEATURES_WITH_INT32_BIAS * worst_per_feature + worst_bias_magnitude <= int64_max
+    assert (_MAX_SAFE_FEATURES_WITH_INT32_BIAS + 1) * worst_per_feature + worst_bias_magnitude > int64_max
+
+
+def test_octave_integer_reference_supports_wide_integer_activations_without_narrowing():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_octave_projection, pack_octave_stream
+
+    codes = np.asarray([[4, 2, 2]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    stream, offsets = pack_octave_stream(codes, modes)
+    result = integer_octave_projection(
+        np.asarray([[200]], dtype=np.int16),
+        stream,
+        offsets,
+        input_features=1,
+    )
+    assert result.dtype == np.int64
+    assert result.tolist() == [[400]]
