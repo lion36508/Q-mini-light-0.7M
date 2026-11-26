@@ -147,9 +147,9 @@ def _hard_octave_symbol(normalized: torch.Tensor) -> torch.Tensor:
     x = normalized.clamp(-1.0, 1.0)
     return torch.where(
         x <= -0.75, -1.0,
-        torch.where(x < -0.25, -0.5,
+        torch.where(x <= -0.25, -0.5,
                     torch.where(x <= 0.25, 0.0,
-                                torch.where(x < 0.75, 0.5, 1.0))),
+                                torch.where(x <= 0.75, 0.5, 1.0))),
     )
 
 
