@@ -23,6 +23,7 @@ qmini-addsub-chat = "qmini_addsub.generate:main"
 qmini-addsub-export = "qmini_addsub.export:main"
 qmini-addsub-eval = "qmini_addsub.evaluate:main"
 qmini-addsub-conditioning = "qmini_addsub.conditioning:main"
+qmini-addsub-quantization-audit = "qmini_addsub.quantization_audit:main"
 qmini-addsub-prepare = "scripts.prepare_qmini_addsub_data:main"
 qmini-addsub-import = "scripts.import_qmini_addsub_dataset:main"
 
