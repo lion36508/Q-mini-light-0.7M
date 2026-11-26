@@ -31,6 +31,13 @@ The first release is a small C ABI library with a Python `ctypes` bridge:
   preflight runs before output writes.
 - In-place, unnormalized integer FWHT with overflow preflight.
 - Stable 4x4 Sinkhorn projection and float32 L2 normalization.
+- A caller-supplied 256-entry int16 activation/gate LUT addressed by uint8.
+  This is a lookup primitive only; calibrated tanh/sigmoid/SiLU tables and
+  quantization scales still need to be generated, versioned and parity-tested.
+- Deterministic int16 Top-1 expert-score selection. Equal scores choose the
+  lowest expert index, matching across C++ and Python backends. This is only
+  the selection primitive, not the router projection, capacity handling,
+  expert MLP, dispatch or combine path.
 - Python bridge with no ML framework dependency and no import-time compilation.
 
 Build the shared library:
