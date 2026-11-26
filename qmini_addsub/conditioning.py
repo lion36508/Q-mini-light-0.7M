@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -41,10 +42,18 @@ def total_variation_distance(
         raise ValueError("TVD inputs must contain only finite values.")
     if bool((p < 0).any()) or bool((q < 0).any()):
         raise ValueError("TVD inputs must be non-negative.")
+    p_max = float(p.max().item())
+    q_max = float(q.max().item())
+    if p_max <= 0.0 or q_max <= 0.0:
+        raise ValueError("TVD inputs must each have positive total mass.")
+    # Scale before summing: two finite values near float64 max must not make
+    # a valid distribution look like an infinite-mass/zero-mass distribution.
+    p = p / p_max
+    q = q / q_max
     p_sum = float(p.sum().item())
     q_sum = float(q.sum().item())
-    if p_sum <= 0.0 or q_sum <= 0.0:
-        raise ValueError("TVD inputs must each have positive total mass.")
+    if not math.isfinite(p_sum) or not math.isfinite(q_sum) or p_sum <= 0.0 or q_sum <= 0.0:
+        raise ValueError("TVD input normalization produced invalid total mass.")
     p = p / p_sum
     q = q / q_sum
     return float((0.5 * torch.abs(p - q).sum()).item())
