@@ -32,6 +32,21 @@ from tokenizers.processors import TemplateProcessing
 from qmini_addsub.sft import ConversationDataset, _load_conversations
 
 
+def test_sft_cpu_thread_control_is_validated_before_loading_files(tmp_path):
+    from qmini_addsub.sft import fine_tune_from_addsub_checkpoint
+
+    with pytest.raises(ValueError, match="num_threads must be a non-negative integer"):
+        fine_tune_from_addsub_checkpoint(
+            base_checkpoint=tmp_path / "missing-base.pt",
+            tokenizer_path=tmp_path / "missing-tokenizer.json",
+            train_jsonl=tmp_path / "missing-train.jsonl",
+            valid_jsonl=tmp_path / "missing-valid.jsonl",
+            test_jsonl=tmp_path / "missing-test.jsonl",
+            output_dir=tmp_path / "sft",
+            num_threads=-1,
+        )
+
+
 def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     import json
 
