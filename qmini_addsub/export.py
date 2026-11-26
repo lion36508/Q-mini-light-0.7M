@@ -24,15 +24,15 @@ from .quantization import (
     weight_scale,
     LEGACY_FORMAT_NAME,
 )
-from .sft import SFT_FORMAT
+from .sft import LEGACY_SFT_FORMAT, SFT_FORMAT
 from .train import CHECKPOINT_FORMAT, sha256_file
 
 
 EXPORT_FORMAT_V1 = "qmini-addsub-packed-weights-v1"
 EXPORT_FORMAT = "qmini-addsub-packed-weights-v2"
-SCALED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT, SFT_FORMAT}
+SCALED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT, SFT_FORMAT, LEGACY_SFT_FORMAT}
 ACCEPTED_CHECKPOINT_FORMATS = {
-    CHECKPOINT_FORMAT, SFT_FORMAT,
+    CHECKPOINT_FORMAT, SFT_FORMAT, LEGACY_SFT_FORMAT,
     "qmini-addsub-training-v4", "qmini-addsub-sft-v5",
     "qmini-addsub-training-v3", "qmini-addsub-sft-v4",
     "qmini-addsub-sft-v3", "qmini-addsub-sft-v2",
