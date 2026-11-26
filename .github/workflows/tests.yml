@@ -84,18 +84,30 @@ jobs:
           PY
       - name: Run tests
         run: pytest -q
-      - name: Prove random-initialized Q-Mini can learn
+      - name: Prove legacy Q-Mini can learn a controlled alternating-token pattern
         run: |
           python scripts/learning_proof.py \
             --config configs/qmini_smoke.json \
             --output-dir /tmp/qmini-learning-proof \
             --steps 80 \
             --minimum-nll-improvement 0.15
-      - name: Upload controlled learning proof
+      - name: Upload legacy controlled learning proof
         uses: actions/upload-artifact@v7
         with:
-          name: qmini-learning-proof
+          name: qmini-legacy-learning-proof
           path: /tmp/qmini-learning-proof/learning-proof.json
+          if-no-files-found: error
+      - name: Prove random-initialized Add/Sub can learn held-out token transitions
+        run: |
+          python scripts/addsub_learning_proof.py \
+            --output /tmp/qmini-addsub-learning-proof/learning-proof.json \
+            --steps 100 \
+            --minimum-nll-improvement 0.10
+      - name: Upload controlled Add/Sub learning proof
+        uses: actions/upload-artifact@v7
+        with:
+          name: qmini-addsub-learning-proof
+          path: /tmp/qmini-addsub-learning-proof/learning-proof.json
           if-no-files-found: error
       # Informational inventory only: current QAT intentionally retains FP32
       # master weights and AdamW state; making this category a CI failure would
@@ -285,7 +297,7 @@ jobs:
             /tmp/qmini-trained-cpu-native.json
             /tmp/qmini-trained-cpu-fallback.json
           if-no-files-found: error
-      - name: Compare quantization formats and exercise structured conversation evaluation
+      - name: Compare quantization formats and collect diagnostic-only task/chat scores
         run: |
           python scripts/quantization_ablation.py \
             --checkpoint /tmp/qmini-trained-smoke/run/latest.pt \
@@ -322,6 +334,18 @@ jobs:
           assert conversations["conversations"] == 3
           assert conversations["turns"] == 6
           assert conversations["dataset_sha256"]
+          print(json.dumps({
+              "diagnostic_only": True,
+              "legacy_smoke_model_parameters": tasks["model_parameters"],
+              "task_pass_rate": tasks["task_pass_rate"],
+              "conversation_pass_rate": conversations["task_pass_rate"],
+              "task_examples": tasks["examples"],
+              "conversation_turns": conversations["turns"],
+          }, indent=2, sort_keys=True))
+          print(
+              "These short legacy smoke scores are diagnostic only; they are not "
+              "a release-quality gate or evidence of English assistant capability."
+          )
           print("All quantization and evaluation smoke reports validated.")
           PY
       - name: Upload quantization and evaluation smoke reports
