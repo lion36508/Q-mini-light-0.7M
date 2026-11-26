@@ -1826,7 +1826,7 @@ def test_addsub_colab_uses_main_and_does_not_hide_cuda_or_restart_from_zero():
         if cell.get("cell_type") == "code"
     ]
     setup = code[0]
-    all_code = "\\n".join(code)
+    all_code = "\n".join(code)
     assert "REPO_BRANCH = 'main'" in setup
     assert "CUDA_VISIBLE_DEVICES" not in all_code
     assert "os.environ" not in setup
@@ -1850,7 +1850,7 @@ def test_addsub_tokenizer_includes_approved_sft_training_messages(tmp_path):
             {"role": "assistant", "content": "It stores information as bits in memory."},
         ],
     }
-    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     output = io.StringIO()
     stats = append_sft_training_text(output, sft_path, {"reviewed-source"})
     corpus = output.getvalue()
@@ -1877,12 +1877,12 @@ def test_addsub_tokenizer_rejects_unapproved_or_synthetic_sft_text(tmp_path):
             {"role": "assistant", "content": "A sufficiently clear assistant response."},
         ],
     }
-    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="not approved"):
         append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
 
     record["source"] = "reviewed-source"
     record["synthetic"] = True
-    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="synthetic or unverified"):
         append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
