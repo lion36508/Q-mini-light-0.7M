@@ -7,6 +7,40 @@ from pathlib import Path
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
+def _reject_symlink_components(path: str | Path, *, label: str) -> Path:
+    """Reject any symlink in the requested path before canonicalizing it."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+
+    current = Path(candidate.anchor)
+    for part in candidate.parts[1:]:
+        if part in ("", "."):
+            continue
+        current = current / part
+        try:
+            if current.is_symlink():
+                raise ValueError(
+                    f"{label} must not traverse symlinks: {current}"
+                )
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot safely inspect {label} component: {current}"
+            ) from exc
+    return candidate
+
+
+def _reject_workspace_symlink_entries(root: Path) -> None:
+    """Reject root or nested symlinks even when explicit resume is requested."""
+    if root.is_symlink():
+        raise ValueError(f"Workspace root must not be a symlink: {root}")
+    if not root.exists():
+        return
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"Workspace contains a symlinked entry: {path}")
+
+
 def _contains_files(root: Path) -> bool:
     """Return True when a workspace contains files, without following symlinks."""
     if root.is_symlink():
@@ -34,7 +68,10 @@ def resolve_workspace_root(
     if not isinstance(resume_existing, bool):
         raise TypeError("resume_existing must be a boolean.")
 
-    base = Path(version_root).expanduser().resolve()
+    requested_base = _reject_symlink_components(
+        version_root, label="Add/Sub version root"
+    )
+    base = requested_base.resolve()
     if force_fresh:
         if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id):
             raise ValueError(
@@ -43,8 +80,9 @@ def resolve_workspace_root(
             )
         fresh_runs_root = base / "fresh_runs"
         root = fresh_runs_root / run_id
-        if fresh_runs_root.is_symlink() or root.is_symlink():
-            raise ValueError("Fresh-run workspace paths must not traverse symlinks.")
+        _reject_symlink_components(
+            root, label="Fresh-run workspace path"
+        )
         resolved = root.resolve()
         if base != resolved and base not in resolved.parents:
             raise ValueError("Fresh-run workspace escaped the version root.")
@@ -53,6 +91,9 @@ def resolve_workspace_root(
             raise ValueError("run_id is valid only when force_fresh=True.")
         root = base
 
+    # Symlinks are never an acceptable resume target: opt-in resume
+    # authorizes reusing this run's files, not writing through another path.
+    _reject_workspace_symlink_entries(root)
     has_files = _contains_files(root)
     if has_files and not resume_existing:
         mode = "fresh-run workspace" if force_fresh else "existing Add/Sub workspace"
