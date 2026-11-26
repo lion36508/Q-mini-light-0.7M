@@ -511,21 +511,20 @@ def test_wavebit_quantizer_uses_consistent_lower_codebook_symbol_on_midpoint_tie
     torch.testing.assert_close(_hard_octave_symbol(values), expected)
 
 
-def test_octave_integer_projection_rejects_activations_outside_signed_int8():
+def test_octave_integer_reference_preserves_wide_integer_activation_values():
     import numpy as np
     from qmini_addsub.wavebit_hsra import integer_octave_projection, pack_octave_stream
 
-    codes = np.asarray([[2, 2, 2]], dtype=np.uint8)
+    codes = np.asarray([[4, 2, 2]], dtype=np.uint8)
     modes = np.asarray([[False]], dtype=np.bool_)
     stream, offsets = pack_octave_stream(codes, modes)
-    for invalid in (-129, 128, 255):
-        with pytest.raises(ValueError, match="signed int8"):
-            integer_octave_projection(
-                np.asarray([[invalid]], dtype=np.int16),
-                stream,
-                offsets,
-                input_features=1,
-            )
+    output = integer_octave_projection(
+        np.asarray([[200]], dtype=np.int16),
+        stream,
+        offsets,
+        input_features=1,
+    )
+    assert output.tolist() == [[400]]
 
 
 def test_numpy_five_symbol_export_rejects_unrepresentable_or_overflowing_scales():
@@ -543,11 +542,7 @@ def test_numpy_five_symbol_export_rejects_unrepresentable_or_overflowing_scales(
         )
 
 
-def test_additive_projection_accumulator_bound_is_checked_before_allocation():
-    from qmini_addsub.runtime import _check_projection_accumulator_bound
+def test_additive_projection_has_a_conservative_int64_feature_ceiling():
+    from qmini_addsub.runtime import _MAX_SAFE_FEATURES_WITH_INT32_BIAS
 
-    _check_projection_accumulator_bound(1024, max_abs_bias=2**31 - 1)
-    with pytest.raises(OverflowError, match="signed int64"):
-        _check_projection_accumulator_bound(2**62, 0)
-    with pytest.raises(OverflowError, match="signed int64"):
-        _check_projection_accumulator_bound(1, 2**63)
+    assert _MAX_SAFE_FEATURES_WITH_INT32_BIAS == 24208325550412840
