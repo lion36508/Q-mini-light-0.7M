@@ -409,12 +409,31 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
         "validate_every": 1,
         "device_name": "cpu",
         "seed": 42,
+        "num_threads": 1,
     }
     first = train_from_scratch(steps=2, **common)
     checkpoint = output_dir / "checkpoint-step-000000001.pt"
     assert checkpoint.is_file()
     assert first["steps"] == 2
     assert first["heldout_test_token_loss"] > 0
+    assert first["torch_num_threads"] == 1
+    assert first["requested_num_threads"] == 1
+    assert first["session_train_steps"] == 2
+    assert first["session_target_tokens"] == 16
+    assert first["session_train_step_seconds"] > 0
+    assert first["session_train_tokens_per_second_excluding_validation"] > 0
+    metric_rows = [
+        json.loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert metric_rows
+    assert metric_rows[0]["train_steps_since_last_validation"] == 1
+    assert metric_rows[0]["train_target_tokens_since_last_validation"] == 8
+    assert metric_rows[0]["train_tokens_per_second_excluding_validation"] > 0
+    assert metric_rows[0]["torch_num_threads"] == 1
+
+    with pytest.raises(ValueError, match="num_threads must be a non-negative integer"):
+        train_from_scratch(**{**common, "output_dir": tmp_path / "bad-threads", "num_threads": -1}, steps=1)
 
     import shutil
 
