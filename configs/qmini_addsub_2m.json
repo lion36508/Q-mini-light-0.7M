@@ -1,0 +1,18 @@
+{
+  "vocab_size": 1024,
+  "d_model": 128,
+  "d_hidden": 448,
+  "n_layers": 4,
+  "n_experts": 2,
+  "kernel_size": 7,
+  "max_context": 512,
+  "dropout": 0.05,
+  "residual_init": 0.1,
+  "moe_balance_coef": 0.01,
+  "router_z_loss_coef": 0.001,
+  "moe_loss_free_bias": false,
+  "moe_bias_update_rate": 0.001,
+  "moe_bias_max_abs": 2,
+  "seed": 20261119,
+  "parameter_budget": 2000000
+}
