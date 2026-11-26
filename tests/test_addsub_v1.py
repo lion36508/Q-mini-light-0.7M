@@ -586,6 +586,63 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     for name, tensor in full_sft_state["model"].items():
         assert torch.equal(tensor, resumed_sft_state["model"][name]), name
 
+    # SFT v6 had the same uniform sampler but no curriculum state. It remains
+    # exactly resumable in baseline mode; opting into curriculum requires new
+    # per-record loss history and is rejected by the trainer.
+    legacy_sft_dir = tmp_path / "sft-legacy-v6"
+    legacy_sft_dir.mkdir()
+    legacy_checkpoint = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
+    legacy_checkpoint["format"] = "qmini-addsub-sft-v6"
+    legacy_checkpoint.pop("curriculum")
+    legacy_sft_path = legacy_sft_dir / sft_checkpoint.name
+    torch.save(legacy_checkpoint, legacy_sft_path)
+    shutil.copy2(tmp_path / "sft" / "sft_metrics.jsonl", legacy_sft_dir / "sft_metrics.jsonl")
+    legacy_resumed = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
+        output_dir=legacy_sft_dir,
+        steps=2,
+        batch_size=1,
+        save_every=1,
+        device_name="cpu",
+        seed=43,
+        resume=legacy_sft_path,
+    )
+    assert legacy_resumed["steps"] == 2
+    legacy_final = torch.load(
+        legacy_sft_dir / "sft-checkpoint-step-000000002.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    for name, tensor in full_sft_state["model"].items():
+        assert torch.equal(tensor, legacy_final["model"][name]), name
+
+    legacy_curriculum_dir = tmp_path / "sft-legacy-curriculum"
+    legacy_curriculum_dir.mkdir()
+    legacy_curriculum_checkpoint = legacy_curriculum_dir / sft_checkpoint.name
+    torch.save(legacy_checkpoint, legacy_curriculum_checkpoint)
+    shutil.copy2(tmp_path / "sft" / "sft_metrics.jsonl", legacy_curriculum_dir / "sft_metrics.jsonl")
+    with pytest.raises(ValueError, match="Legacy v6 SFT checkpoints"):
+        fine_tune_from_addsub_checkpoint(
+            base_checkpoint=final_pretrain_checkpoint,
+            tokenizer_path=tokenizer_path,
+            train_jsonl=sft_train,
+            valid_jsonl=sft_valid,
+            test_jsonl=sft_test,
+            output_dir=legacy_curriculum_dir,
+            steps=2,
+            batch_size=1,
+            save_every=1,
+            device_name="cpu",
+            seed=43,
+            resume=legacy_curriculum_checkpoint,
+            curriculum_uniform_fraction=0.35,
+            curriculum_warmup_steps=1,
+        )
+
     extended_sft_dir = tmp_path / "sft-extended"
     extended_sft_dir.mkdir()
     step_two_sft = resumed_sft_dir / "sft-checkpoint-step-000000002.pt"
