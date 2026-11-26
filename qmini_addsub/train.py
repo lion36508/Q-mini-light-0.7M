@@ -22,6 +22,7 @@ from .optim import (
     reconcile_metrics_file, resolve_schedule_total_steps,
 )
 from .wavebit_hsra import validate_wavebit_options
+from .checkpoints import verify_completed_checkpoint
 
 
 CHECKPOINT_FORMAT = "qmini-addsub-training-v5"
@@ -127,8 +128,13 @@ def train_from_scratch(
     extend_schedule: bool = False,
     num_threads: int = 0,
     wavebit_options: dict[str, Any] | None = None,
+    validate_only: bool = False,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
+    if not isinstance(validate_only, bool):
+        raise TypeError("validate_only must be a boolean.")
+    if validate_only and resume is None:
+        raise ValueError("validate_only requires an explicit compatible resume checkpoint.")
     config = config or AddSubConfig()
     config.validate()
     wavebit_options = validate_wavebit_options(wavebit_options)
@@ -305,13 +311,45 @@ def train_from_scratch(
             )
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
-        start_step = int(checkpoint["step"])
+        raw_step = checkpoint.get("step")
+        if isinstance(raw_step, bool) or not isinstance(raw_step, int) or raw_step < 1:
+            raise ValueError("Pretraining checkpoint has an invalid optimizer step.")
+        start_step = raw_step
         saved_horizon = checkpoint.get(
             "schedule_total_steps",
             saved_contract.get("planned_steps", checkpoint.get("planned_steps")),
         )
-        if isinstance(saved_horizon, bool) or not isinstance(saved_horizon, int):
+        if (
+            isinstance(saved_horizon, bool)
+            or not isinstance(saved_horizon, int)
+            or saved_horizon < start_step
+        ):
             raise ValueError("Pretraining checkpoint has no valid saved schedule horizon.")
+        if validate_only:
+            validation = verify_completed_checkpoint(
+                checkpoint,
+                checkpoint_path,
+                prefix="checkpoint",
+                metrics_path=output / "metrics.jsonl",
+                expected_checkpoint=expected,
+                expected_metrics={
+                    "train_sha256": train_sha,
+                    "valid_sha256": valid_sha,
+                    "test_sha256": test_sha,
+                    "tokenizer_sha256": tokenizer_sha,
+                    "data_manifest_sha256": manifest_sha,
+                },
+                expected_run_contract=run_contract,
+                run_name="Pretraining",
+            )
+            return {
+                **validation,
+                "format": CHECKPOINT_FORMAT,
+                "parameter_count": model.parameter_count(),
+                "train_tokens": len(train_tokens),
+                "validation_tokens": len(valid_tokens),
+                "test_tokens": len(test_tokens),
+            }
         schedule_total_steps = resolve_schedule_total_steps(
             steps, start_step, saved_horizon, extend_schedule, "Pretraining"
         )
@@ -561,6 +599,7 @@ def main() -> None:
     parser.add_argument("--validate-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--validate-only", action="store_true", help="Verify an existing checkpoint and its full data/run lineage without training or modifying files.")
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     parser.add_argument(
         "--threads", type=int, default=0,
@@ -608,6 +647,7 @@ def main() -> None:
         resume=args.resume,
         extend_schedule=args.extend_schedule,
         num_threads=args.threads,
+        validate_only=args.validate_only,
         wavebit_options=(
             {
                 "group_size": args.wavebit_group_size,
