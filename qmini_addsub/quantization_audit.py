@@ -24,6 +24,14 @@ def audit_model_quantization(model: torch.nn.Module) -> dict[str, Any]:
     if not quantized_names:
         raise ValueError("No quantized model parameters were found.")
 
+    fixed_scale_names = [
+        name for name in quantized_names
+        if getattr(parameters[name], "_qmini_fixed_scale", None) is not None
+    ]
+    if fixed_scale_names and len(fixed_scale_names) != len(quantized_names):
+        raise ValueError("A model cannot mix legacy fixed scales and dynamic per-tensor scales.")
+    scale_mode = "legacy-fixed" if fixed_scale_names else "dynamic-per-tensor"
+
     tensor_reports = []
     total_histogram = np.zeros(len(WEIGHT_SYMBOLS), dtype=np.int64)
     total_elements = 0
@@ -68,7 +76,12 @@ def audit_model_quantization(model: torch.nn.Module) -> dict[str, Any]:
 
     return {
         "format": "qmini-addsub-quantization-audit-v1",
-        "weight_format": "scaled-five-symbol-q3",
+        "weight_format": (
+            "legacy-fixed-scale-five-symbol-q3"
+            if scale_mode == "legacy-fixed"
+            else "scaled-five-symbol-q3"
+        ),
+        "quantization_scale_mode": scale_mode,
         "bits_per_weight": 3,
         "symbol_values": [float(value) for value in WEIGHT_SYMBOLS],
         "quantized_parameter_count": len(quantized_names),
