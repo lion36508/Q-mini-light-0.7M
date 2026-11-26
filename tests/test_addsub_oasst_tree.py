@@ -83,7 +83,7 @@ def test_oasst_tree_drops_orphaned_or_incomplete_paths_instead_of_fabricating_tu
     ]
     path, reason, branching = _select_oasst_conversation_path(orphaned)
     assert path is None
-    assert reason == "no_complete_assistant_path"
+    assert reason == "orphaned_or_cyclic_tree"
     assert branching is False
 
     incomplete = [
