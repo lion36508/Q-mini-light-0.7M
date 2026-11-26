@@ -99,3 +99,7 @@ def test_one_click_colab_notebook_is_single_cell_and_syntax_valid():
     assert "SFT_STEPS = 2_000" in code_cells[0]
     assert 'Type exactly I ACCEPT' in code_cells[0]
     assert "qmini_addsub.preflight" in code_cells[0]
+    assert 'sys.path.insert(0, repo_import_path)' in code_cells[0]
+    assert 'import qmini_addsub' in code_cells[0]
+    assert 'package_origin' in code_cells[0]
+    assert 'REPO_DIR not in package_origin.parents' in code_cells[0]
