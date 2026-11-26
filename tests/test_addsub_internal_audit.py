@@ -497,3 +497,50 @@ def test_tokenizer_sampling_rejects_budget_smaller_than_first_valid_line(
         builder.main()
     assert not output.exists()
     assert not output.with_name("model_config.json").exists()
+
+
+
+def test_wavebit_quantizer_uses_consistent_lower_symbol_on_midpoint_ties():
+    import torch
+    from qmini_addsub.wavebit_hsra import _hard_octave_symbol
+
+    values = torch.tensor(
+        [-0.75, -0.250001, -0.25, 0.0, 0.25, 0.250001, 0.75, 0.750001],
+        dtype=torch.float32,
+    )
+    expected = torch.tensor([-1.0, -0.5, -0.5, 0.0, 0.0, 0.5, 0.5, 1.0])
+    torch.testing.assert_close(_hard_octave_symbol(values), expected)
+
+
+def test_numpy_five_symbol_export_rejects_unrepresentable_or_overflowing_scales():
+    import numpy as np
+    from qmini_addsub.quantization import quantize_to_codes
+
+    weights = np.asarray([0.5], dtype=np.float32)
+    for scale in (1e-100, 1e100):
+        with pytest.raises(ValueError, match="float32"):
+            quantize_to_codes(weights, scale=scale)
+    with pytest.raises(ValueError, match="overflowed float32"):
+        quantize_to_codes(np.asarray([3.0e38], dtype=np.float32), scale=1.0e-40)
+
+
+def test_additive_projection_rejects_unsafe_feature_count_before_accumulation(monkeypatch):
+    import numpy as np
+    import qmini_addsub.runtime as runtime
+
+    monkeypatch.setattr(runtime, "_MAX_SAFE_FEATURES_WITH_INT32_BIAS", 1)
+    activations = np.asarray([[1, 1]], dtype=np.int8)
+    weights = np.asarray([[4, 4]], dtype=np.uint8)
+    with pytest.raises(OverflowError, match="signed int64"):
+        runtime.additive_projection(activations, weights)
+
+
+def test_additive_projection_rejects_empty_weight_dimensions():
+    import numpy as np
+    from qmini_addsub.runtime import additive_projection
+
+    with pytest.raises(ValueError, match="non-empty"):
+        additive_projection(
+            np.zeros((1, 1), dtype=np.int8),
+            np.empty((1, 0), dtype=np.uint8),
+        )
