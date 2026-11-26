@@ -34,7 +34,7 @@ def test_active_two_million_profile_is_under_the_hard_cap():
 
 
 def test_config_rejects_profiles_that_exceed_two_million_parameters():
-    with pytest.raises(ValueError, match="exceeding its"):
+    with pytest.raises(ValueError, match="parameter ceiling"):
         AddSubConfig(d_model=128, d_hidden=500, n_layers=4).validate()
     assert MAX_PARAMETER_BUDGET == 2_000_000
 
