@@ -8,6 +8,7 @@ QMINI_OXCORE_LIBRARY to its path.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 from pathlib import Path
 from typing import Sequence
@@ -17,6 +18,7 @@ _OX_OK = 0
 _OX_SKIP = 1
 _OX_EINVAL = 2
 _OX_ECAPACITY = 3
+_EXPECTED_ABI_VERSION = 1
 _DTYPE_CODES = {"f32": 1, "i8": 2, "i32": 3, "i64": 4, "u8": 5}
 _DTYPE_CTYPES = {
     "f32": ctypes.c_float,
@@ -116,9 +118,25 @@ class OxCoreNative:
             raise FileNotFoundError(f"OxCore library does not exist: {path}")
         self.path = path
         self._lib = ctypes.CDLL(str(path))
-        self._configure_signatures()
+        try:
+            self._configure_signatures()
+            actual_abi = int(self._lib.oxcore_abi_version())
+        except AttributeError as exc:
+            raise OxCoreError(
+                f"OxCore library is missing a required C ABI symbol: {exc}"
+            ) from exc
+        if actual_abi != _EXPECTED_ABI_VERSION:
+            raise OxCoreError(
+                f"Incompatible OxCore ABI: library reports {actual_abi}, "
+                f"Python bridge requires {_EXPECTED_ABI_VERSION}."
+            )
         version = self._lib.oxcore_version()
-        self.version = version.decode("utf-8") if version else "unknown"
+        if not version:
+            raise OxCoreError("OxCore library returned an empty version string.")
+        try:
+            self.version = version.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise OxCoreError("OxCore version string is not valid UTF-8.") from exc
 
     @classmethod
     def load(cls, library_path: str | os.PathLike[str] | None = None) -> "OxCoreNative":
@@ -480,6 +498,8 @@ class OxCoreNative:
             raise ValueError("Sinkhorn input must be a 4 by 4 matrix.")
         if isinstance(iterations, bool) or not isinstance(iterations, int):
             raise TypeError("Sinkhorn iterations must be an integer.")
+        if not 1 <= iterations <= 10000:
+            raise ValueError("Sinkhorn iterations must be between 1 and 10000.")
         try:
             flat = [float(value) for row in logits for value in row]
             source = (ctypes.c_double * 16)(*flat)
@@ -498,13 +518,24 @@ class OxCoreNative:
     ) -> list[float]:
         if not values:
             raise ValueError("Normalization input must be non-empty.")
+        if isinstance(epsilon, bool):
+            raise TypeError("Normalization epsilon must be a real number.")
+        try:
+            epsilon_value = float(epsilon)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Normalization epsilon must be a finite positive number.") from exc
+        if not math.isfinite(epsilon_value) or epsilon_value <= 0.0:
+            raise ValueError("Normalization epsilon must be a finite positive number.")
+        epsilon_f32 = ctypes.c_float(epsilon_value).value
+        if not math.isfinite(epsilon_f32) or epsilon_f32 <= 0.0:
+            raise ValueError("Normalization epsilon must remain positive and finite in float32.")
         try:
             source = (ctypes.c_float * len(values))(*values)
             output = (ctypes.c_float * len(values))()
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("Normalization values must be float32-compatible.") from exc
         status = self._lib.ox_normalize_f32(
-            source, output, len(values), ctypes.c_float(epsilon)
+            source, output, len(values), ctypes.c_float(epsilon_f32)
         )
         self._check(status, "nGPT L2 normalization")
         return [float(value) for value in output]
@@ -521,8 +552,12 @@ class OxCoreNative:
             raise ValueError(f"Unsupported OxCore dtype: {dtype}")
         if len(shape) > 8 or (strides_bytes is not None and len(strides_bytes) != len(shape)):
             raise ValueError("Tensor rank and stride metadata must fit the 8-axis ABI.")
-        if isinstance(offset_bytes, bool) or not isinstance(offset_bytes, int) or offset_bytes < 0:
-            raise ValueError("Tensor storage offset must be a non-negative integer.")
+        if (
+            isinstance(offset_bytes, bool)
+            or not isinstance(offset_bytes, int)
+            or not 0 <= offset_bytes <= ctypes.c_size_t(-1).value
+        ):
+            raise ValueError("Tensor storage offset must fit a non-negative size_t.")
         scalar_type = _DTYPE_CTYPES[dtype]
         storage = (scalar_type * len(values))(*values)
         view = _TensorView()
@@ -532,8 +567,12 @@ class OxCoreNative:
         view.dtype = _DTYPE_CODES[dtype]
         view.rank = len(shape)
         for axis, dimension in enumerate(shape):
-            if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 0:
-                raise ValueError("Tensor dimensions must be non-negative integers.")
+            if (
+                isinstance(dimension, bool)
+                or not isinstance(dimension, int)
+                or not 0 <= dimension < 2**64
+            ):
+                raise ValueError("Tensor dimensions must fit an unsigned 64-bit integer.")
             view.shape[axis] = dimension
         if strides_bytes is None:
             stride = ctypes.sizeof(scalar_type)
@@ -545,8 +584,12 @@ class OxCoreNative:
         else:
             strides = list(strides_bytes)
         for axis, stride_value in enumerate(strides):
-            if isinstance(stride_value, bool) or not isinstance(stride_value, int):
-                raise ValueError("Tensor byte strides must be integers.")
+            if (
+                isinstance(stride_value, bool)
+                or not isinstance(stride_value, int)
+                or not -(2**63) <= stride_value < 2**63
+            ):
+                raise ValueError("Tensor byte strides must fit signed int64.")
             view.strides_bytes[axis] = stride_value
         status = self._lib.ox_tensor_view_validate(ctypes.byref(view))
         if status == _OX_OK:
@@ -595,6 +638,10 @@ class StaticArena:
         return int(self._core._lib.ox_arena_mark(ctypes.byref(self._arena)))
 
     def rewind(self, mark: int) -> None:
+        if isinstance(mark, bool) or not isinstance(mark, int):
+            raise TypeError("Arena mark must be an integer.")
+        if not 0 <= mark <= self.used:
+            raise ValueError("Arena mark must be between zero and the current used size.")
         self._core._check(
             self._core._lib.ox_arena_rewind(ctypes.byref(self._arena), mark),
             "Arena rewind",
@@ -608,6 +655,10 @@ class StaticArena:
             raise TypeError("Arena allocation size must be an integer.")
         if isinstance(alignment, bool) or not isinstance(alignment, int):
             raise TypeError("Arena alignment must be an integer.")
+        if size <= 0:
+            raise ValueError("Arena allocation size must be positive.")
+        if alignment <= 0 or alignment > 4096 or alignment & (alignment - 1):
+            raise ValueError("Arena alignment must be a power of two from 1 to 4096.")
         output = ctypes.c_void_p()
         self._core._check(
             self._core._lib.ox_arena_alloc(

@@ -27,8 +27,10 @@ The first release is a small C ABI library with a Python `ctypes` bridge:
 - Q15 diagonal SSM scan over int32 state and injection. The decay scale is
   implemented with binary shift-add accumulation (no integer multiply in that
   scaling kernel), nearest-even rounding, a caller-supplied initial cache,
-  per-token states and a returned final cache. A conservative int32 overflow
-  preflight runs before output writes.
+  per-token states and a returned final cache. An exact dry-run validates the
+  full recurrence before either output is modified, including INT32_MIN cases.
+- Size-overflow checks and explicit output/input alias rejection protect the
+  C ABI; the Python loader checks the shared-library ABI version before use.
 - In-place, unnormalized integer FWHT with overflow preflight.
 - Stable 4x4 Sinkhorn projection and float32 L2 normalization.
 - Python bridge with no ML framework dependency and no import-time compilation.
@@ -69,7 +71,7 @@ before replacing any existing training or inference operation.
 
 1. **Native CPU ABI (implemented v0.2):** tensor descriptors, fixed arena,
    Mirror-63 dot/linear/causal-depthwise operators, Q15 SSM scan, FWHT, Sinkhorn and L2 normalization.
-2. **Python facade (implemented v0.1):** explicit library loading and typed
+2. **Python facade (implemented v0.2): explicit library loading and typed
    wrappers. The shared library is built separately; importing this package
    does not import PyTorch or compile code.
 3. **Graph/autograd (not implemented):** lazy IR, kernel fusion, reverse-mode

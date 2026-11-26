@@ -98,8 +98,11 @@ The native SSM cache primitive accepts precomputed Q15 decay coefficients
 s_t=\\operatorname{round}_{\\mathrm{even}}(a_t s_{t-1}/2^{15})+b_t.
 ]
 Its scaling routine decomposes the coefficient into binary shifts and sums,
-then applies explicit nearest-even rounding; a conservative range bound is
-checked before output writes. It returns all token states and the final cache.
+then applies explicit nearest-even rounding. The implementation first runs an
+exact no-write simulation of every state transition, then performs the output
+pass only when every transition is representable; this accepts safe cancellation
+patterns and preserves INT32_MIN when the selected decay permits it. It returns
+all token states and the final cache.
 This is only the diagonal recurrence/update kernel. It does not compute the
 model's drive/decay/gate projections, tanh/sigmoid lookup tables, the
 (1-a_t)drive injection, output projection or residual gating; those tensors
