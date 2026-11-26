@@ -28,7 +28,8 @@ typedef enum ox_status {
     OX_ECAPACITY = 3,
     OX_EOVERFLOW = 4,
     OX_ERESERVED = 5,
-    OX_ENUMERIC = 6
+    OX_ENUMERIC = 6,
+    OX_EALIAS = 7
 } ox_status;
 
 typedef enum ox_dtype {
@@ -84,7 +85,8 @@ OXCORE_API ox_status ox_mirror63_dot_i8(
 );
 
 /* Input: [batch, in_features]. Packed rows: [out_features, ceil(in_features/3)].
- * Output: [batch, out_features]. Returns the unscaled integer numerator. */
+ * Output: [batch, out_features]. Returns the unscaled integer numerator.
+ * Output storage must not overlap either input buffer. */
 OXCORE_API ox_status ox_linear_mirror63_acc_i8(
     const int8_t *input,
     const uint8_t *packed_weights,
@@ -96,7 +98,8 @@ OXCORE_API ox_status ox_linear_mirror63_acc_i8(
 
 /* Causal depthwise input/output: contiguous [time_steps, channels].
  * Weight bytes: [channels, ceil(kernel_size/3)]. Tap 0 is oldest; final tap
- * multiplies the current time step. Missing left-context is exact zero pad. */
+ * multiplies the current time step. Missing left-context is exact zero pad.
+ * Output storage must not overlap either input buffer. */
 OXCORE_API ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
     const int8_t *input,
     size_t time_steps,
@@ -112,6 +115,7 @@ OXCORE_API ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
  * All buffers are contiguous [time,batch,channels], except initial/final
  * state [batch,channels]. Decay coefficients must be in [0,32768].
  * Scaling uses shift-add only; no integer multiply is used by this operator.
+ * Output buffers must not overlap each other or any input buffer.
  */
 OXCORE_API ox_status ox_ssm_scan_q15_i32(
     const int32_t *initial_state,
