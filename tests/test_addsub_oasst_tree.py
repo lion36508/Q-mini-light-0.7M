@@ -104,3 +104,55 @@ def test_prepare_data_module_import_does_not_require_optional_network_parquet_pa
 
     assert callable(prepare.load_oasst_conversations)
     assert callable(prepare.load_dolly_conversations)
+
+
+
+def test_oasst_tree_dynamic_program_selects_longest_suffix_across_many_branches():
+    root = _message("u-root", None, "prompter")
+    messages = [root]
+    expected_path = ["u-root"]
+
+    # Add many assistant branches with different lengths. The best branch is
+    # deliberately not first in input order, and the path is long enough to
+    # exercise the non-recursive post-order traversal.
+    for branch_index in range(96):
+        assistant_id = f"a-{branch_index:03d}"
+        messages.append(_message(assistant_id, "u-root", "assistant"))
+        parent_id = assistant_id
+        branch_length = (branch_index % 19) + 1
+        for depth in range(branch_length):
+            user_id = f"u-{branch_index:03d}-{depth:02d}"
+            assistant_reply_id = f"r-{branch_index:03d}-{depth:02d}"
+            messages.append(_message(user_id, parent_id, "prompter"))
+            messages.append(_message(assistant_reply_id, user_id, "assistant"))
+            parent_id = assistant_reply_id
+
+        if branch_index == 18:
+            expected_path = ["u-root", assistant_id]
+            for depth in range(branch_length):
+                expected_path.extend([
+                    f"u-{branch_index:03d}-{depth:02d}",
+                    f"r-{branch_index:03d}-{depth:02d}",
+                ])
+
+    path, reason, branching = _select_oasst_conversation_path(messages)
+
+    assert _ids(path) == expected_path
+    assert reason is None
+    assert branching is True
+
+
+def test_oasst_tree_dynamic_program_uses_lexicographic_tie_break_at_first_divergence():
+    root = _message("u0", None, "prompter")
+    messages = [root]
+    for branch_id in ("z-branch", "a-branch", "m-branch"):
+        messages.extend([
+            _message(branch_id, "u0", "assistant"),
+            _message(f"u-{branch_id}", branch_id, "prompter"),
+            _message(f"r-{branch_id}", f"u-{branch_id}", "assistant"),
+        ])
+
+    path, reason, branching = _select_oasst_conversation_path(list(reversed(messages)))
+    assert _ids(path) == ["u0", "a-branch", "u-a-branch", "r-a-branch"]
+    assert reason is None
+    assert branching is True
