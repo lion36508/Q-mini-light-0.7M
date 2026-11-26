@@ -499,11 +499,16 @@ def integer_octave_projection(
                         raise ValueError("Invalid Octave half-unit coefficient.")
                     term = int(activations[batch, feature]) << shift
                     contribution = term if coefficient > 0 else -term
-                    accumulator = checked_int64_add(
-                        accumulator,
-                        contribution,
-                        "Octave projection accumulator",
-                    )
+                    try:
+                        accumulator = checked_int64_add(
+                            accumulator,
+                            contribution,
+                            "Octave projection accumulator",
+                        )
+                    except OverflowError as exc:
+                        raise OverflowError(
+                            "Octave projection accumulator exceeds int64 range."
+                        ) from exc
                 group += 1
             if group != required_groups or cursor != end:
                 raise ValueError("Octave stream row does not match declared input width.")
