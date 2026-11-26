@@ -215,6 +215,41 @@ int main() {
         return 1;
     }
 
+    uint8_t lut_indices[] = {0u, 128u, 255u, 10u};
+    int16_t lut_table[256] = {};
+    int16_t lut_output[4] = {};
+    for (size_t index = 0u; index < 256u; ++index) {
+        lut_table[index] = static_cast<int16_t>(static_cast<int>(index) - 128);
+    }
+    if (!check(
+            ox_lut_u8_i16(lut_indices, lut_table, 4u, lut_output) == OX_OK,
+            "activation LUT")) {
+        return 1;
+    }
+    if (!check(
+            lut_output[0] == -128 && lut_output[1] == 0 &&
+            lut_output[2] == 127 && lut_output[3] == -118,
+            "activation LUT values")) {
+        return 1;
+    }
+
+    const int16_t router_scores[] = {-3, 7, 7, -1, 32767, -32768, 0, 32766};
+    uint16_t selected_experts[2] = {};
+    int16_t selected_scores[2] = {};
+    if (!check(
+            ox_top1_i16(
+                router_scores, 2u, 4u, selected_experts, selected_scores
+            ) == OX_OK,
+            "stable Top-1 router")) {
+        return 1;
+    }
+    if (!check(
+            selected_experts[0] == 1u && selected_scores[0] == 7 &&
+            selected_experts[1] == 0u && selected_scores[1] == 32767,
+            "stable Top-1 values")) {
+        return 1;
+    }
+
     int64_t fwht[] = {3, -1, 4, 2};
     if (!check(ox_fwht_i64(fwht, 4u) == OX_OK, "integer FWHT")) {
         return 1;
