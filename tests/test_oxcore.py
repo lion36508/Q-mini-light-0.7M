@@ -256,7 +256,7 @@ def test_q15_ssm_scan_uses_round_to_nearest_even_for_positive_and_negative_ties(
 
 def test_q15_ssm_scan_rejects_bad_shape_or_decay_before_execution(oxcore):
     with pytest.raises(ValueError, match="batch dimension"):
-        oxcore.ssm_scan_q15_i32([[0]], [[[1, 2]]], [[[32768, 32768]]])
+        oxcore.ssm_scan_q15_i32([[0]], [[[1], [2]]], [[[32768], [32768]]])
     with pytest.raises(OxCoreError, match="invalid argument"):
         oxcore.ssm_scan_q15_i32([[0]], [[[1]]], [[[32769]]])
 
