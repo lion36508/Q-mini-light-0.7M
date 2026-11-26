@@ -254,11 +254,11 @@ def fine_tune_from_addsub_checkpoint(
     save_every: int = 100,
     seed: int = 20261119,
     device_name: str = "cpu",
-    num_threads: int = 0,
     resume: str | Path | None = None,
     extend_schedule: bool = False,
     curriculum_uniform_fraction: float = 1.0,
     curriculum_warmup_steps: int = 50,
+    num_threads: int = 0,
 ) -> dict[str, Any]:
     if not isinstance(extend_schedule, bool):
         raise TypeError("extend_schedule must be a boolean.")
