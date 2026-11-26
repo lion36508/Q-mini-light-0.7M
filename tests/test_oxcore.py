@@ -237,6 +237,39 @@ def test_mirror63_causal_depthwise_convolution_rejects_bad_weights_and_shapes(ox
         )
 
 
+def test_q15_ssm_scan_matches_sequential_reference_and_returns_final_cache(oxcore):
+    initial = [[100, -100]]
+    injection = [[[10, 5]], [[-5, 10]], [[20, -10]]]
+    decay = [[[16384, 32768]], [[32768, 16384]], [[0, 32768]]]
+    states, final = oxcore.ssm_scan_q15_i32(initial, injection, decay)
+    assert states == [[[60, -95]], [[55, -38]], [[20, -48]]]
+    assert final == [[20, -48]]
+
+
+def test_q15_ssm_scan_uses_round_to_nearest_even_for_positive_and_negative_ties(oxcore):
+    initial = [[1, 3, -3, 5, -5]]
+    injection = [[[0, 0, 0, 0, 0]]]
+    decay = [[[16384, 16384, 16384, 16384, 16384]]]
+    states, _ = oxcore.ssm_scan_q15_i32(initial, injection, decay)
+    assert states == [[[0, 2, -2, 2, -2]]]
+
+
+def test_q15_ssm_scan_rejects_bad_shape_or_decay_before_execution(oxcore):
+    with pytest.raises(ValueError, match="batch dimension"):
+        oxcore.ssm_scan_q15_i32([[0]], [[[1, 2]]], [[[32768, 32768]]])
+    with pytest.raises(OxCoreError, match="invalid argument"):
+        oxcore.ssm_scan_q15_i32([[0]], [[[1]]], [[[32769]]])
+
+
+def test_q15_ssm_scan_fails_closed_on_conservative_int32_overflow(oxcore):
+    with pytest.raises(OxCoreError, match="overflow"):
+        oxcore.ssm_scan_q15_i32(
+            [[2**31 - 1]],
+            [[[1]]],
+            [[[32768]]],
+        )
+
+
 def test_fwht_is_unnormalized_and_invertible_up_to_length(oxcore):
     values = [3, -1, 4, 2, 0, 7, -5, 9]
     transformed = oxcore.fwht_i64(values)
