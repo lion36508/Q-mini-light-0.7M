@@ -74,3 +74,26 @@ def test_fresh_workspace_rejects_unsafe_run_ids(tmp_path: Path, run_id: str) -> 
 def test_run_id_is_rejected_when_fresh_mode_is_disabled(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="run_id is valid only"):
         resolve_workspace_root(tmp_path / "version", run_id="unused")
+
+
+
+def test_symlinked_workspace_entry_blocks_implicit_reuse(tmp_path: Path) -> None:
+    version_root = tmp_path / "version"
+    external = tmp_path / "external"
+    external.mkdir()
+    version_root.mkdir()
+    (version_root / "selected_dataset").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(FileExistsError, match="No existing files were deleted"):
+        resolve_workspace_root(version_root)
+
+
+def test_fresh_workspace_rejects_symlinked_parent(tmp_path: Path) -> None:
+    version_root = tmp_path / "version"
+    external = tmp_path / "external"
+    version_root.mkdir()
+    external.mkdir()
+    (version_root / "fresh_runs").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not traverse symlinks"):
+        resolve_workspace_root(version_root, force_fresh=True, run_id="safe-run")
