@@ -1366,7 +1366,7 @@ def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
     import zipfile
 
     from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
-    from qmini_addsub.train import CHECKPOINT_FORMAT
+    from qmini_addsub.sft import SFT_FORMAT
 
     config = AddSubConfig(
         vocab_size=300,
@@ -1383,8 +1383,9 @@ def test_packed_addsub_export_rejects_tampered_weight_payload(tmp_path):
     checkpoint = tmp_path / "base.pt"
     torch.save(
         {
-            "format": CHECKPOINT_FORMAT,
+            "format": SFT_FORMAT,
             "step": 1,
+            "base_sha256": "1" * 64,
             "config": config.to_dict(),
             "model": model.state_dict(),
             "tokenizer_sha256": "c" * 64,
