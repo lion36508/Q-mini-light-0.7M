@@ -30,6 +30,7 @@ include = ["qmini*", "scripts*"]
 
 [tool.setuptools.package-data]
 qmini = ["native_kernel.cpp"]
+qmini_addsub = ["oxcore/include/*.h", "oxcore/src/*.cpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
