@@ -17,6 +17,11 @@ except ImportError:
     # Keep a patchable module attribute while allowing pure helper imports
     # without the optional network/data dependencies installed.
     hf_hub_download = None
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    # Keep the optional module patchable for deterministic source-prep tests.
+    pq = None
 
 
 from qmini_addsub.data import (
@@ -88,13 +93,15 @@ def _require_hf_hub_download():
 def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
     hf_hub_download_fn = _require_hf_hub_download()
-    try:
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError(
-            "Add/Sub dataset preparation requires the optional data dependencies. "
-            "Install with: python -m pip install 'qmini[addsub-data]'."
-        ) from exc
+    parquet_reader = pq
+    if parquet_reader is None:
+        try:
+            import pyarrow.parquet as parquet_reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
     parquet_path = Path(hf_hub_download_fn(
         repo_id=SIMPLE_WIKI_REPOSITORY,
         filename=SIMPLE_WIKI_FILE,
@@ -109,7 +116,7 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
             "Simple English Wikipedia file failed pinned size/SHA-256 verification."
         )
 
-    parquet_file = pq.ParquetFile(parquet_path)
+    parquet_file = parquet_reader.ParquetFile(parquet_path)
     split_paths = {
         name: output / f"pretrain_{name}.txt"
         for name in ("train", "validation", "test")
@@ -338,13 +345,15 @@ def _select_oasst_conversation_path(
 
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
     hf_hub_download_fn = _require_hf_hub_download()
-    try:
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError(
-            "Add/Sub dataset preparation requires the optional data dependencies. "
-            "Install with: python -m pip install 'qmini[addsub-data]'."
-        ) from exc
+    parquet_reader = pq
+    if parquet_reader is None:
+        try:
+            import pyarrow.parquet as parquet_reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
     parquet_path = Path(
         hf_hub_download_fn(
             repo_id=OASST_REPOSITORY,
@@ -362,7 +371,7 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
             "refusing to prepare an unverified corpus."
         )
 
-    table = pq.read_table(parquet_path)
+    table = parquet_reader.read_table(parquet_path)
     rows = table.to_pylist()
     if not rows:
         raise ValueError("OASST1 source parquet is empty.")
