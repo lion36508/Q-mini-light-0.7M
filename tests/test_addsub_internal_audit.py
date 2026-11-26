@@ -643,3 +643,15 @@ def test_wavebit_hadamard_activation_scale_rejects_float32_underflow_and_overflo
             block_size=1,
             activation_bits=2,
         )
+
+
+
+def test_wavebit_groupwise_scale_rejects_finite_weights_that_overflow_the_scale():
+    import torch
+    from qmini_addsub.wavebit_hsra import groupwise_scale
+
+    maximum = torch.finfo(torch.float32).max
+    weights = torch.full((1, 3), maximum, dtype=torch.float32)
+    assert torch.isfinite(weights).all()
+    with pytest.raises(OverflowError, match="group-wise scale"):
+        groupwise_scale(weights, group_size=3, multiplier=1.4)
