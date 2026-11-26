@@ -174,12 +174,9 @@ class OxCoreNative:
         return int(self._lib.oxcore_abi_version())
 
     def mirror63_pack(self, q: Sequence[int], octave: int = 0) -> int:
-        if (
-            len(q) != 3
-            or isinstance(octave, bool)
-            or not isinstance(octave, int)
-            or octave not in (0, 1)
-        ):
+        if isinstance(octave, bool) or not isinstance(octave, int):
+            raise TypeError("Mirror-63 octave must be an integer.")
+        if len(q) != 3 or octave not in (0, 1):
             raise ValueError("Mirror-63 needs three balanced digits and octave 0 or 1.")
         output = ctypes.c_uint8()
         values = []
