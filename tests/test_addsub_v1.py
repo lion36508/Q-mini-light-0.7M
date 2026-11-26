@@ -1877,7 +1877,7 @@ def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
         / "QMini_AddSub_V1_From_Scratch.ipynb"
     )
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
-    code = "\\n".join(
+    code = "\n".join(
         "".join(cell.get("source", []))
         for cell in notebook["cells"]
         if cell.get("cell_type") == "code"
@@ -1891,3 +1891,86 @@ def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
     assert "metrics_filename='metrics.jsonl'" in code
     assert "sorted(PRETRAIN_DIR.glob" not in code
     assert "sorted(SFT_DIR.glob" not in code
+
+
+def test_addsub_colab_keeps_cuda_visible_and_uses_the_actual_sft_metrics_filename():
+    import json
+    from pathlib import Path
+
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_AddSub_V1_From_Scratch.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    all_code = "\n".join(code)
+    assert "REPO_BRANCH = 'main'" in code[0]
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in code[0]
+    assert "CUDA_VISIBLE_DEVICES" not in all_code
+    assert "os.environ" not in code[0]
+    assert "if DEVICE.startswith('cuda') and not torch.cuda.is_available():" in all_code
+    assert "metrics_path = SFT_DIR / 'sft_metrics.jsonl'" in all_code
+    assert all_code.count("metrics_filename='sft_metrics.jsonl'") >= 4
+    assert "metrics_path = SFT_DIR / 'metrics.jsonl'" not in all_code
+
+
+def test_addsub_tokenizer_includes_approved_sft_training_messages(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "reviewed-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "How does a small computer store information?"},
+            {"role": "assistant", "content": "It stores information as bits in memory."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    output = io.StringIO()
+    stats = append_sft_training_text(output, sft_path, {"reviewed-source"})
+    corpus = output.getvalue()
+    assert stats["conversations"] == 1
+    assert stats["messages"] == 2
+    assert stats["bytes"] > 0
+    assert "small computer store information" in corpus
+    assert "bits in memory" in corpus
+    assert "You are Q-Mini." in corpus
+
+
+def test_addsub_tokenizer_rejects_unapproved_or_synthetic_sft_text(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "unapproved-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "A sufficiently clear user message."},
+            {"role": "assistant", "content": "A sufficiently clear assistant response."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not approved"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
+
+    record["source"] = "reviewed-source"
+    record["synthetic"] = True
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="synthetic or unverified"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
+
+
+def test_addsub_checkpoint_resolver_uses_sft_metrics_filename_and_fails_closed(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    (tmp_path / "sft_metrics.jsonl").write_text('{"step": 10}\\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="metrics file exists but no checkpoint"):
+        resolve_checkpoint(tmp_path, "sft-checkpoint", "sft_metrics.jsonl")
