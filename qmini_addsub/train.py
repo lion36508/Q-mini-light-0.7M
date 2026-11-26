@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +113,7 @@ def train_from_scratch(
     device_name: str = "cpu",
     resume: str | Path | None = None,
     extend_schedule: bool = False,
+    num_threads: int = 0,
     wavebit_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
@@ -120,6 +122,11 @@ def train_from_scratch(
     wavebit_options = validate_wavebit_options(wavebit_options)
     if not isinstance(extend_schedule, bool):
         raise TypeError("extend_schedule must be a boolean.")
+    if isinstance(num_threads, bool) or not isinstance(num_threads, int) or num_threads < 0:
+        raise ValueError("num_threads must be a non-negative integer; 0 preserves the PyTorch default.")
+    if num_threads > 0:
+        # Explicit opt-in: PyTorch intra-op threads are process-global.
+        torch.set_num_threads(num_threads)
     for name, value in (
         ("steps", steps),
         ("batch_size", batch_size),
@@ -242,6 +249,8 @@ def train_from_scratch(
         "validate_every": validate_every,
         "seed": seed,
     }
+    if num_threads > 0:
+        run_contract["cpu_intraop_threads"] = num_threads
     if wavebit_options is not None:
         run_contract["wavebit_hsra"] = wavebit_options
     model = AddSubLanguageModel(
@@ -401,7 +410,17 @@ def train_from_scratch(
 
     model.train()
     last_loss = None
+    session_started_at = time.perf_counter()
+    window_train_seconds = 0.0
+    window_train_steps = 0
+    window_target_tokens = 0
+    session_train_seconds = 0.0
+    session_train_steps = 0
+    session_target_tokens = 0
     for step in range(start_step + 1, steps + 1):
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        step_started_at = time.perf_counter()
         current_lr = cosine_warmup_lr(step, schedule_total_steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
@@ -428,6 +447,16 @@ def train_from_scratch(
         optimizer.step()
         model.update_loss_free_router_bias(result["router_load"])
         assert_finite_training_state(model, optimizer, step)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        step_seconds = time.perf_counter() - step_started_at
+        target_tokens = int(targets.numel())
+        window_train_seconds += step_seconds
+        window_train_steps += 1
+        window_target_tokens += target_tokens
+        session_train_seconds += step_seconds
+        session_train_steps += 1
+        session_target_tokens += target_tokens
         last_loss = float(token_loss.detach())
 
         if step % validate_every == 0 or step == steps:
@@ -450,10 +479,23 @@ def train_from_scratch(
                 "data_manifest_sha256": manifest_sha,
                 "run_contract": run_contract,
                 "schedule_total_steps": schedule_total_steps,
+                "train_steps_since_last_validation": window_train_steps,
+                "train_target_tokens_since_last_validation": window_target_tokens,
+                "train_step_seconds_since_last_validation": window_train_seconds,
+                "train_steps_per_second_excluding_validation": (
+                    window_train_steps / window_train_seconds if window_train_seconds > 0 else 0.0
+                ),
+                "train_tokens_per_second_excluding_validation": (
+                    window_target_tokens / window_train_seconds if window_train_seconds > 0 else 0.0
+                ),
+                "torch_num_threads": torch.get_num_threads(),
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
             print(json.dumps(record, sort_keys=True))
+            window_train_seconds = 0.0
+            window_train_steps = 0
+            window_target_tokens = 0
         else:
             valid_loss = None
 
@@ -479,9 +521,21 @@ def train_from_scratch(
         ),
         "heldout_test_tokens_per_byte": len(test_tokens) / test_source_bytes,
         "heldout_test_sha256": sha256_file(test_path),
+        "session_train_steps": session_train_steps,
+        "session_target_tokens": session_target_tokens,
+        "session_train_step_seconds": session_train_seconds,
+        "session_train_steps_per_second_excluding_validation": (
+            session_train_steps / session_train_seconds if session_train_seconds > 0 else 0.0
+        ),
+        "session_train_tokens_per_second_excluding_validation": (
+            session_target_tokens / session_train_seconds if session_train_seconds > 0 else 0.0
+        ),
+        "session_wall_clock_seconds": time.perf_counter() - session_started_at,
+        "torch_num_threads": torch.get_num_threads(),
+        "requested_num_threads": num_threads,
         "output_dir": str(output),
         "data_manifest_sha256": manifest_sha,
-        "note": "Training graph only; complete add/sub-only inference export is a separate gate.",
+        "note": "Throughput excludes validation time and is hardware/run-specific; training graph only, complete add/sub-only inference export is a separate gate.",
     }
 
 
@@ -501,6 +555,10 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
+    parser.add_argument(
+        "--threads", type=int, default=0,
+        help="Explicit PyTorch intra-op CPU thread count; 0 keeps the current PyTorch default.",
+    )
     parser.add_argument("--seed", type=int, default=20261119)
     parser.add_argument("--wavebit-hsra", action="store_true",
                         help="Enable WaveBit-HSRA in the existing Add/Sub model (experimental).")
@@ -542,6 +600,7 @@ def main() -> None:
         device_name=args.device,
         resume=args.resume,
         extend_schedule=args.extend_schedule,
+        num_threads=args.threads,
         wavebit_options=(
             {
                 "group_size": args.wavebit_group_size,
