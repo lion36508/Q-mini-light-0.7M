@@ -9,9 +9,11 @@ _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 def _contains_files(root: Path) -> bool:
     """Return True when a workspace contains files, without following symlinks."""
+    if root.is_symlink():
+        return True
     if not root.exists():
         return False
-    return any(path.is_file() and not path.is_symlink() for path in root.rglob("*"))
+    return any(path.is_symlink() or path.is_file() for path in root.rglob("*"))
 
 
 def resolve_workspace_root(
@@ -24,7 +26,7 @@ def resolve_workspace_root(
     """Resolve a safe Colab workspace without deleting or silently reusing artifacts.
 
     The default workspace preserves the existing Add/Sub v1 layout. A fresh run
-    gets its own immutable subdirectory under fresh_runs/<run_id>. Existing
+    gets its own isolated subdirectory under fresh_runs/<run_id>. Existing
     files are reusable only after the caller explicitly opts into resume.
     """
     if not isinstance(force_fresh, bool):
@@ -39,7 +41,10 @@ def resolve_workspace_root(
                 "A fresh run requires run_id containing 1-64 letters, digits, dots, "
                 "underscores or hyphens and starting with a letter or digit."
             )
-        root = base / "fresh_runs" / run_id
+        fresh_runs_root = base / "fresh_runs"
+        root = fresh_runs_root / run_id
+        if fresh_runs_root.is_symlink() or root.is_symlink():
+            raise ValueError("Fresh-run workspace paths must not traverse symlinks.")
         resolved = root.resolve()
         if base != resolved and base not in resolved.parents:
             raise ValueError("Fresh-run workspace escaped the version root.")
