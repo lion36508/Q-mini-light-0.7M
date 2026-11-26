@@ -392,6 +392,9 @@ def test_tensor_view_checks_dtype_rank_strides_and_storage_bounds(oxcore):
     assert not oxcore.validate_tensor_view(
         values, "i32", (2,), strides_bytes=(2,)
     )
+    assert not oxcore.validate_tensor_view(
+        values, "i32", (1,), offset_bytes=1
+    )
     assert oxcore.validate_tensor_view([], "i32", (0,))
 
 
