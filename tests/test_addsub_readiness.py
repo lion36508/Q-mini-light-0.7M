@@ -17,19 +17,31 @@ def _metrics():
         "test_sha256": "c" * 64,
         "tokenizer_sha256": "d" * 64,
         "data_manifest_sha256": "e" * 64,
+        "base_sha256": "1" * 64,
+    }
+    run_contract = {
+        "batch_size": 1,
+        "learning_rate": 5e-5,
+        "matrix_weight_decay": 0.01,
+        "quantization": "scaled-five-symbol-v2",
+        "system_prompt": "You are Q-Mini.",
+        "save_every": 100,
+        "seed": 20261119,
     }
     return [
         {"step": 50, "train_loss": 4.0, "valid_response_loss": 3.0,
-         "learning_rate": 1e-5, **identity},
+         "learning_rate": 1e-5, "run_contract": run_contract, **identity},
         {"step": 100, "train_loss": 3.5, "valid_response_loss": 2.9,
-         "learning_rate": 1e-6, **identity},
+         "learning_rate": 1e-6, "run_contract": run_contract, **identity},
     ]
 
 
 def _heldout():
     return {
         "format": "qmini-addsub-heldout-eval-v1",
+        "checkpoint_format": "qmini-addsub-sft-v6",
         "checkpoint_sha256": "f" * 64,
+        "base_checkpoint_sha256": "1" * 64,
         "tokenizer_sha256": "d" * 64,
         "dataset_manifest_sha256": "e" * 64,
         "test_sha256": "c" * 64,
@@ -124,3 +136,42 @@ def test_addsub_readiness_requires_two_validation_evaluations():
 def test_addsub_readiness_rejects_a_report_from_a_different_checkpoint():
     with pytest.raises(ValueError, match="checkpoint_sha256 does not match"):
         _assess(_metrics(), _heldout(), checkpoint_sha256="0" * 64)
+
+
+def test_addsub_readiness_does_not_mix_validation_curves_from_different_base_checkpoints():
+    metrics = _metrics()
+    metrics[-1]["base_sha256"] = "2" * 64
+    heldout = _heldout()
+    heldout["base_checkpoint_sha256"] = "2" * 64
+    result = _assess(metrics, heldout)
+    check = next(item for item in result["checks"] if item["name"] == "sft_validation_learning")
+    assert check["observed"]["evaluation_points"] == 1
+    assert check["passed"] is False
+    assert result["ready"] is False
+
+
+def test_addsub_readiness_does_not_mix_validation_curves_from_different_run_contracts():
+    metrics = _metrics()
+    metrics[-1]["run_contract"] = {
+        **metrics[-1]["run_contract"],
+        "learning_rate": 9e-5,
+    }
+    result = _assess(metrics, _heldout())
+    check = next(item for item in result["checks"] if item["name"] == "sft_validation_learning")
+    assert check["observed"]["evaluation_points"] == 1
+    assert check["passed"] is False
+    assert result["ready"] is False
+
+
+def test_addsub_readiness_rejects_heldout_checkpoint_with_different_parent():
+    heldout = _heldout()
+    heldout["base_checkpoint_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="base checkpoint does not match"):
+        _assess(_metrics(), heldout)
+
+
+def test_addsub_readiness_rejects_non_sft_checkpoint_reports():
+    heldout = _heldout()
+    heldout["checkpoint_format"] = "qmini-addsub-training-v7"
+    with pytest.raises(ValueError, match="current Q-Mini Add/Sub SFT checkpoint"):
+        _assess(_metrics(), heldout)
