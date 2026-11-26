@@ -47,11 +47,11 @@ class _DeterministicProbeModel(torch.nn.Module):
         return torch.zeros((), dtype=torch.long, device=device)
 
     def forward_step(self, input_ids, caches):
-        token = int(input_ids[0].item())
-        phase = token % 13
+        updated = caches + input_ids.to(dtype=torch.long).sum()
+        phase = int(updated.item()) % 13
         positions = torch.arange(self.config.vocab_size, device=input_ids.device)
         logits = torch.sin((positions.float() + phase) * 0.071).unsqueeze(0)
-        return logits, caches
+        return logits, updated
 
 
 def test_total_variation_distance_is_symmetric_and_bounded():
@@ -91,7 +91,9 @@ def test_conditioning_report_measures_question_and_context_sensitivity():
     assert report["question_prompt_count"] == 3
     assert report["question_pairwise_tvd_summary"]["pair_count"] == 3
     assert len(report["question_pairwise_tvd"]) == 3
+    assert report["question_pairwise_tvd_summary"]["maximum"] > 0.0
     assert len(report["context_distance_probe"]) == 2
+    assert all(row["tvd"] > 0.0 for row in report["context_distance_probe"])
     for row in report["context_distance_probe"]:
         assert row["left_distance"]["tokens_after_changed_word_to_assistant_boundary"] >= 2
         assert row["right_distance"]["tokens_after_changed_word_to_assistant_boundary"] >= 2
