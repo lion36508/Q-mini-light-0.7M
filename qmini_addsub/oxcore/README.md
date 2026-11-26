@@ -24,6 +24,11 @@ The first release is a small C ABI library with a Python `ctypes` bridge:
   per-channel Mirror-63 kernels. Tap zero is oldest, the final tap is current,
   and missing left context is exact zero padding. It returns int64 numerators
   without intermediate shifts.
+- Q15 diagonal SSM scan over int32 state and injection. The decay scale is
+  implemented with binary shift-add accumulation (no integer multiply in that
+  scaling kernel), nearest-even rounding, a caller-supplied initial cache,
+  per-token states and a returned final cache. A conservative int32 overflow
+  preflight runs before output writes.
 - In-place, unnormalized integer FWHT with overflow preflight.
 - Stable 4x4 Sinkhorn projection and float32 L2 normalization.
 - Python bridge with no ML framework dependency and no import-time compilation.
@@ -57,7 +62,7 @@ before replacing any existing training or inference operation.
 ## Architecture boundaries
 
 1. **Native CPU ABI (implemented v0.2):** tensor descriptors, fixed arena,
-   Mirror-63 dot/linear/causal-depthwise operators, FWHT, Sinkhorn and L2 normalization.
+   Mirror-63 dot/linear/causal-depthwise operators, Q15 SSM scan, FWHT, Sinkhorn and L2 normalization.
 2. **Python facade (implemented v0.1):** explicit library loading and typed
    wrappers. The shared library is built separately; importing this package
    does not import PyTorch or compile code.
@@ -71,7 +76,9 @@ before replacing any existing training or inference operation.
 
 - OxCore is not yet a replacement for PyTorch training or the Add/Sub model.
 - It does not yet implement a full tensor algebra, graph compiler, optimizer,
-  recurrent-thinking engine or end-to-end model runtime.
+  recurrent-thinking engine or end-to-end model runtime. The Q15 SSM primitive
+  accepts precomputed decay and injection tensors; it does not yet replace the
+  model's drive/decay/gate projections or full GatedDiagonalStateSpace block.
 - It does not establish a speedup, lower training memory, stronger reasoning,
   or improved English quality. Those require matched, reproducible benchmarks.
 - The packed Mirror-63 primitive is experimental and does not change the
