@@ -43,6 +43,14 @@ jobs:
           aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++17 -fPIC -shared \
             qmini/native_kernel.cpp -o /tmp/libqmini_kernel_aarch64.so
           file /tmp/libqmini_kernel_aarch64.so
+      - name: Build standalone OxCore CPU library
+        run: bash scripts/build_oxcore.sh /tmp/libqmini_oxcore.so
+      - name: Cross-compile OxCore ARM64 library
+        run: |
+          aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++20 -fPIC -shared -Wall -Wextra -Wpedantic -Werror -Iqmini_addsub/oxcore/include qmini_addsub/oxcore/src/oxcore.cpp -o /tmp/libqmini_oxcore_aarch64.so
+          file /tmp/libqmini_oxcore_aarch64.so
+      - name: Run OxCore native ASan and UBSan tests
+        run: bash scripts/test_oxcore_sanitizers.sh
       - name: Validate Colab notebook Python syntax
         run: |
           python - <<'PY'
@@ -83,6 +91,8 @@ jobs:
           print(f"Syntax-checked {total} code cells across {len(active_notebooks)} active notebooks; validated JSON structure for {len(paths) - len(active_notebooks)} archived notebooks.")
           PY
       - name: Run tests
+        env:
+          QMINI_OXCORE_LIBRARY: /tmp/libqmini_oxcore.so
         run: pytest -q
       - name: Prove legacy Q-Mini can learn a controlled alternating-token pattern
         run: |
@@ -132,8 +142,11 @@ jobs:
           wheels = glob.glob("/tmp/qmini-wheel/qmini-*.whl")
           assert len(wheels) == 1, wheels
           with zipfile.ZipFile(wheels[0]) as archive:
-              assert "qmini/native_kernel.cpp" in archive.namelist()
-          print("Wheel includes qmini/native_kernel.cpp")
+              names = set(archive.namelist())
+              assert "qmini/native_kernel.cpp" in names
+              assert "qmini_addsub/oxcore/include/oxcore.h" in names
+              assert "qmini_addsub/oxcore/src/oxcore.cpp" in names
+          print("Wheel includes legacy and OxCore native kernel sources")
           PY
           python -m venv --system-site-packages /tmp/qmini-wheel-venv
           /tmp/qmini-wheel-venv/bin/pip install --no-deps /tmp/qmini-wheel/qmini-*.whl

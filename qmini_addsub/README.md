@@ -11,6 +11,25 @@ Q-Mini Add/Sub is the repository's **one experimental new-model implementation**
 
 This is an experimental model size, not a quality score. The public repository does not establish that this model has learned useful general-purpose conversation.
 
+## OxCore experimental native core
+
+A standalone native CPU primitive layer for this same Add/Sub implementation
+lives under `qmini_addsub/oxcore/`. It provides a C++20 ABI, a caller-owned
+fixed-capacity arena, bounded tensor views, Mirror-63 packing and integer
+projection/convolution, a Q15 diagonal SSM scan, integer FWHT, Sinkhorn-4 and
+L2 normalization. Build and run its native sanitizer checks with:
+
+```bash
+bash scripts/build_oxcore.sh /tmp/libqmini_oxcore.so
+bash scripts/test_oxcore_sanitizers.sh
+```
+
+OxCore is not yet wired into the Add/Sub model forward pass, trainer,
+checkpoint or export path. It does not replace the PyTorch reference graph,
+and it is not a complete integer-only model runtime. See
+[`oxcore/README.md`](oxcore/README.md) and
+[`oxcore/MATH_AUDIT.md`](oxcore/MATH_AUDIT.md) for scope and deferred work.
+
 ## Training and data
 
 The implementation has its own tokenizer, data manifest, pretraining checkpoints, SFT checkpoints, evaluation and export path. The standard training model uses PyTorch floating-point operations and autograd.
