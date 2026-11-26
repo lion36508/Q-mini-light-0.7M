@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from qmini_addsub.config import AddSubConfig
+from qmini_addsub.export import _quantized_parameter_names
 from qmini_addsub.model import AddSubLanguageModel
 from qmini_addsub.quantization_audit import audit_model_quantization
 
@@ -61,3 +62,16 @@ def test_quantization_audit_rejects_non_finite_quantized_parameters():
         model.token_embedding.weight[0, 0] = float("nan")
     with pytest.raises(ValueError, match="empty or non-finite"):
         audit_model_quantization(model)
+
+
+
+def test_quantization_audit_labels_legacy_fixed_scale_models_correctly():
+    model = _tiny_model()
+    parameters = dict(model.named_parameters())
+    with torch.no_grad():
+        for name in _quantized_parameter_names(model):
+            parameters[name]._qmini_fixed_scale = 1.0
+
+    report = audit_model_quantization(model)
+    assert report["quantization_scale_mode"] == "legacy-fixed"
+    assert report["weight_format"] == "legacy-fixed-scale-five-symbol-q3"
