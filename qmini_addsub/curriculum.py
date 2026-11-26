@@ -75,6 +75,20 @@ class SelfPacedCurriculumSampler:
         if not isinstance(rng, random.Random):
             raise TypeError("rng must be an instance of random.Random for exact resume.")
         self.step += 1
+        if self.uniform_fraction >= 1.0:
+            # Keep the default baseline O(batch_size), not O(dataset_size), and
+            # preserve the exact rng.sample call used by legacy SFT v6.
+            self.last_focus_quantile = self.start_quantile
+            selected = rng.sample(range(self.dataset_size), k=batch_size)
+            return selected, {
+                "mode": "uniform_control",
+                "focus_quantile": self.last_focus_quantile,
+                "uniform_fraction": 1.0,
+                "requested_uniform_fraction": self.uniform_fraction,
+                "uniform_samples": batch_size,
+                "focused_samples": 0,
+                "seen_fraction": 0.0,
+            }
         seen = [index for index, value in enumerate(self.ema_loss) if value is not None]
 
         def uniform_batch(mode: str, focus_quantile: float | None = None) -> tuple[list[int], dict[str, Any]]:
@@ -90,8 +104,6 @@ class SelfPacedCurriculumSampler:
                 "seen_fraction": len(seen) / self.dataset_size,
             }
 
-        if self.uniform_fraction >= 1.0:
-            return uniform_batch("uniform_control")
         if self.step <= self.warmup_steps:
             return uniform_batch("uniform_warmup")
 
@@ -253,9 +265,16 @@ class SelfPacedCurriculumSampler:
                 raise ValueError("Curriculum EMA state contains an invalid loss.")
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in update_count):
             raise ValueError("Curriculum update counts must be non-negative integers.")
+        if any((loss is None) != (count == 0) for loss, count in zip(ema_loss, update_count)):
+            raise ValueError("Curriculum EMA losses and update counts are inconsistent.")
         step = state.get("step")
-        if isinstance(step, bool) or not isinstance(step, int) or step < 0 or step > self.total_steps:
-            raise ValueError("Curriculum step is outside the configured schedule.")
+        if (
+            isinstance(step, bool)
+            or not isinstance(step, int)
+            or step < 0
+            or step > saved_total_steps
+        ):
+            raise ValueError("Curriculum step is outside its saved schedule horizon.")
         self.step = step
         self.ema_loss = [None if value is None else float(value) for value in ema_loss]
         self.update_count = list(update_count)
