@@ -526,13 +526,16 @@ class OxCoreNative:
             raise ValueError("Normalization epsilon must be a finite positive number.") from exc
         if not math.isfinite(epsilon_value) or epsilon_value <= 0.0:
             raise ValueError("Normalization epsilon must be a finite positive number.")
+        epsilon_f32 = ctypes.c_float(epsilon_value).value
+        if not math.isfinite(epsilon_f32) or epsilon_f32 <= 0.0:
+            raise ValueError("Normalization epsilon must remain positive and finite in float32.")
         try:
             source = (ctypes.c_float * len(values))(*values)
             output = (ctypes.c_float * len(values))()
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("Normalization values must be float32-compatible.") from exc
         status = self._lib.ox_normalize_f32(
-            source, output, len(values), ctypes.c_float(epsilon_value)
+            source, output, len(values), ctypes.c_float(epsilon_f32)
         )
         self._check(status, "nGPT L2 normalization")
         return [float(value) for value in output]
@@ -635,6 +638,10 @@ class StaticArena:
         return int(self._core._lib.ox_arena_mark(ctypes.byref(self._arena)))
 
     def rewind(self, mark: int) -> None:
+        if isinstance(mark, bool) or not isinstance(mark, int):
+            raise TypeError("Arena mark must be an integer.")
+        if not 0 <= mark <= self.used:
+            raise ValueError("Arena mark must be between zero and the current used size.")
         self._core._check(
             self._core._lib.ox_arena_rewind(ctypes.byref(self._arena), mark),
             "Arena rewind",
@@ -648,6 +655,10 @@ class StaticArena:
             raise TypeError("Arena allocation size must be an integer.")
         if isinstance(alignment, bool) or not isinstance(alignment, int):
             raise TypeError("Arena alignment must be an integer.")
+        if size <= 0:
+            raise ValueError("Arena allocation size must be positive.")
+        if alignment <= 0 or alignment > 4096 or alignment & (alignment - 1):
+            raise ValueError("Arena alignment must be a power of two from 1 to 4096.")
         output = ctypes.c_void_p()
         self._core._check(
             self._core._lib.ox_arena_alloc(
