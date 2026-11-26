@@ -11,8 +11,18 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
-import pyarrow.parquet as pq
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    # Keep a patchable module attribute while allowing pure helper imports
+    # without the optional network/data dependencies installed.
+    hf_hub_download = None
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    # Keep the optional module patchable for deterministic source-prep tests.
+    pq = None
+
 
 from qmini_addsub.data import (
     accept_oasst1_message,
@@ -67,9 +77,32 @@ def download_verified(url: str, destination: Path, sha256: str, size: int) -> Pa
     return destination
 
 
+def _require_hf_hub_download():
+    downloader = hf_hub_download
+    if downloader is None:
+        try:
+            from huggingface_hub import hf_hub_download as downloader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
+    return downloader
+
+
 def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
-    parquet_path = Path(hf_hub_download(
+    hf_hub_download_fn = _require_hf_hub_download()
+    parquet_reader = pq
+    if parquet_reader is None:
+        try:
+            import pyarrow.parquet as parquet_reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
+    parquet_path = Path(hf_hub_download_fn(
         repo_id=SIMPLE_WIKI_REPOSITORY,
         filename=SIMPLE_WIKI_FILE,
         repo_type="dataset",
@@ -83,7 +116,7 @@ def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
             "Simple English Wikipedia file failed pinned size/SHA-256 verification."
         )
 
-    parquet_file = pq.ParquetFile(parquet_path)
+    parquet_file = parquet_reader.ParquetFile(parquet_path)
     split_paths = {
         name: output / f"pretrain_{name}.txt"
         for name in ("train", "validation", "test")
@@ -215,9 +248,131 @@ def prepare_wikitext(cache: Path, output: Path) -> dict:
     }
 
 
+def _select_oasst_conversation_path(
+    messages: list[dict],
+) -> tuple[list[dict] | None, str | None, bool]:
+    """Select the longest complete branch in O(nodes + edges) time.
+
+    OASST trees can branch. Selecting the first child depends on Parquet row
+    order, while enumerating every root-to-leaf path can be exponential.
+    This post-order dynamic program computes one best assistant-ending suffix
+    per message. Equal-length branches are tie-broken by the next message ID,
+    which is sufficient because message IDs are unique.
+    """
+    by_id: dict[str, dict] = {}
+    for message in messages:
+        raw_id = message.get("message_id")
+        if not isinstance(raw_id, str) or not raw_id.strip():
+            return None, "invalid_message_id", False
+        message_id = raw_id.strip()
+        if message_id in by_id:
+            return None, "duplicate_message_id", False
+        by_id[message_id] = message
+
+    roots = [
+        message for message in messages
+        if message.get("parent_id") is None
+    ]
+    if len(roots) != 1:
+        return None, "invalid_root_count", False
+    root = roots[0]
+    if root.get("role") != "prompter":
+        return None, "invalid_root_role", False
+
+    children: dict[str, list[str]] = defaultdict(list)
+    orphan_messages = 0
+    for message in messages:
+        parent_id = message.get("parent_id")
+        if parent_id is None:
+            continue
+        parent_key = str(parent_id)
+        if parent_key not in by_id:
+            orphan_messages += 1
+            continue
+        children[parent_key].append(str(message["message_id"]))
+
+    for child_ids in children.values():
+        child_ids.sort()
+
+    branching = any(len(child_ids) > 1 for child_ids in children.values())
+    root_id = str(root["message_id"])
+
+    # state: 1 = visiting, 2 = complete. The graph is expected to be a tree
+    # (each row carries one parent_id); visiting checks still fail closed on
+    # malformed cyclic edges.
+    state: dict[str, int] = {}
+    best_length: dict[str, int] = {}
+    best_child: dict[str, str | None] = {}
+    stack: list[tuple[str, bool]] = [(root_id, False)]
+
+    while stack:
+        message_id, expanded = stack.pop()
+        if not expanded:
+            if state.get(message_id, 0) in (1, 2):
+                continue
+            state[message_id] = 1
+            stack.append((message_id, True))
+            for child_id in reversed(children.get(message_id, [])):
+                if state.get(child_id, 0) != 2 and state.get(child_id, 0) != 1:
+                    stack.append((child_id, False))
+            continue
+
+        child_ids = children.get(message_id, [])
+        selected_child = None
+        selected_length = 0
+        for child_id in child_ids:
+            # A child still being visited is a cycle edge; do not use it.
+            if state.get(child_id) != 2:
+                continue
+            suffix_length = best_length.get(child_id, 0)
+            if suffix_length == 0:
+                continue
+            candidate_length = 1 + suffix_length
+            if (
+                candidate_length > selected_length
+                or (
+                    candidate_length == selected_length
+                    and (selected_child is None or child_id < selected_child)
+                )
+            ):
+                selected_length = candidate_length
+                selected_child = child_id
+
+        if not child_ids and by_id[message_id].get("role") == "assistant":
+            selected_length = 1
+            selected_child = None
+
+        best_length[message_id] = selected_length
+        best_child[message_id] = selected_child
+        state[message_id] = 2
+
+    if best_length.get(root_id, 0) == 0:
+        reason = "orphaned_or_cyclic_tree" if orphan_messages else "no_complete_assistant_path"
+        return None, reason, branching
+
+    selected_path = []
+    cursor: str | None = root_id
+    while cursor is not None:
+        selected_path.append(by_id[cursor])
+        cursor = best_child.get(cursor)
+
+    if selected_path[0].get("role") != "prompter" or selected_path[-1].get("role") != "assistant":
+        return None, "no_complete_assistant_path", branching
+    return selected_path, None, branching
+
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
+    hf_hub_download_fn = _require_hf_hub_download()
+    parquet_reader = pq
+    if parquet_reader is None:
+        try:
+            import pyarrow.parquet as parquet_reader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
     parquet_path = Path(
-        hf_hub_download(
+        hf_hub_download_fn(
             repo_id=OASST_REPOSITORY,
             filename=OASST_FILE,
             repo_type="dataset",
@@ -233,7 +388,7 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
             "refusing to prepare an unverified corpus."
         )
 
-    table = pq.read_table(parquet_path)
+    table = parquet_reader.read_table(parquet_path)
     rows = table.to_pylist()
     if not rows:
         raise ValueError("OASST1 source parquet is empty.")
@@ -254,31 +409,16 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
 
     conversations = []
     incomplete_trees = 0
+    dropped_tree_reasons: dict[str, int] = defaultdict(int)
+    branching_trees = 0
     for tree_id, messages in by_tree.items():
-        by_id = {message["message_id"]: message for message in messages}
-        children: dict[str, list[dict]] = defaultdict(list)
-        root = None
-        for message in messages:
-            parent = message.get("parent_id")
-            if parent is None:
-                root = message
-            else:
-                children[str(parent)].append(message)
-        if root is None or root.get("role") != "prompter":
+        chain, reason, branching = _select_oasst_conversation_path(messages)
+        if branching:
+            branching_trees += 1
+        if reason is not None or chain is None:
             incomplete_trees += 1
+            dropped_tree_reasons[reason or "invalid_path"] += 1
             continue
-
-        chain = []
-        seen = set()
-        current = root
-        while current is not None:
-            message_id = str(current["message_id"])
-            if message_id in seen:
-                break
-            seen.add(message_id)
-            chain.append(current)
-            candidates = children.get(message_id, [])
-            current = candidates[0] if candidates else None
 
         turns = []
         invalid_text = False
@@ -327,13 +467,20 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
         "conversations": len(conversations),
         "dropped_messages": dict(sorted(dropped.items())),
         "dropped_incomplete_trees": incomplete_trees,
+        "dropped_tree_reasons": dict(sorted(dropped_tree_reasons.items())),
+        "branching_trees": branching_trees,
+        "branch_policy": (
+            "longest complete root-to-leaf path; equal-length paths are "
+            "tie-broken by lexicographically sorted message IDs"
+        ),
     }
     return conversations, info
 
 
 def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
+    hf_hub_download_fn = _require_hf_hub_download()
     jsonl_path = Path(
-        hf_hub_download(
+        hf_hub_download_fn(
             repo_id=DOLLY_REPOSITORY,
             filename=DOLLY_FILE,
             repo_type="dataset",
