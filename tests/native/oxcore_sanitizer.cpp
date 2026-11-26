@@ -175,6 +175,46 @@ int main() {
         return 1;
     }
 
+    int16_t activation_table[256] = {};
+    for (size_t index = 0u; index < 256u; ++index) {
+        activation_table[index] = static_cast<int16_t>(
+            static_cast<int>(index) - 128
+        );
+    }
+    const uint8_t activation_indices[] = {0u, 128u, 255u};
+    int16_t activation_values[3] = {};
+    if (!check(
+            ox_lut_u8_i16(
+                activation_indices, activation_table, 3u, activation_values
+            ) == OX_OK,
+            "activation LUT")) {
+        return 1;
+    }
+    if (!check(
+            activation_values[0] == -128 &&
+            activation_values[1] == 0 &&
+            activation_values[2] == 127,
+            "activation LUT values")) {
+        return 1;
+    }
+
+    const int16_t router_scores[] = {2, 5, 5, -1, 7, 7, 1, 7};
+    uint16_t selected_experts[2] = {};
+    int16_t selected_scores[2] = {};
+    if (!check(
+            ox_top1_i16(
+                router_scores, 2u, 4u, selected_experts, selected_scores
+            ) == OX_OK,
+            "Top-1 router")) {
+        return 1;
+    }
+    if (!check(
+            selected_experts[0] == 1u && selected_scores[0] == 5 &&
+            selected_experts[1] == 0u && selected_scores[1] == 7,
+            "stable Top-1 router values")) {
+        return 1;
+    }
+
     int64_t fwht[] = {3, -1, 4, 2};
     if (!check(ox_fwht_i64(fwht, 4u) == OX_OK, "integer FWHT")) {
         return 1;
