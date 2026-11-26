@@ -143,6 +143,85 @@ def test_mirror63_causal_depthwise_convolution_matches_reference(oxcore):
     assert actual == [[4, -10], [6, -20], [10, -10], [14, 0]]
 
 
+def test_mirror63_linear_and_causal_convolution_match_reference_over_multiple_shapes(oxcore):
+    import random
+
+    rng = random.Random(20261126)
+
+    batch, in_features, out_features = 3, 7, 5
+    inputs = [
+        [rng.randint(-128, 127) for _ in range(in_features)]
+        for _ in range(batch)
+    ]
+    q_rows = []
+    packed_rows = []
+    for _ in range(out_features):
+        q_blocks = []
+        packed_blocks = []
+        for _ in range((in_features + 2) // 3):
+            q = tuple(rng.randint(-2, 2) for _ in range(3))
+            octave = rng.randint(0, 1)
+            q_blocks.append((q, octave))
+            packed_blocks.append(oxcore.mirror63_pack(q, octave))
+        q_rows.append(q_blocks)
+        packed_rows.append(packed_blocks)
+
+    expected_linear = []
+    for input_row in inputs:
+        expected_row = []
+        for q_blocks in q_rows:
+            total = 0
+            for block_index, (q, octave) in enumerate(q_blocks):
+                for lane in range(3):
+                    feature = block_index * 3 + lane
+                    activation = input_row[feature] if feature < in_features else 0
+                    total += q[lane] * activation * (2 if octave else 1)
+            expected_row.append(total)
+        expected_linear.append(expected_row)
+    assert oxcore.linear_mirror63_acc_i8(inputs, packed_rows) == expected_linear
+
+    time_steps, channels, kernel_size = 4, 3, 5
+    conv_inputs = [
+        [rng.randint(-128, 127) for _ in range(channels)]
+        for _ in range(time_steps)
+    ]
+    conv_q = []
+    conv_packed = []
+    for _ in range(channels):
+        q_blocks = []
+        packed_blocks = []
+        for _ in range((kernel_size + 2) // 3):
+            q = tuple(rng.randint(-2, 2) for _ in range(3))
+            octave = rng.randint(0, 1)
+            q_blocks.append((q, octave))
+            packed_blocks.append(oxcore.mirror63_pack(q, octave))
+        conv_q.append(q_blocks)
+        conv_packed.append(packed_blocks)
+
+    expected_conv = []
+    for time in range(time_steps):
+        row = []
+        for channel in range(channels):
+            total = 0
+            for block_index, (q, octave) in enumerate(conv_q[channel]):
+                for lane in range(3):
+                    tap = block_index * 3 + lane
+                    if tap >= kernel_size:
+                        continue
+                    source_time = time - (kernel_size - 1 - tap)
+                    activation = (
+                        conv_inputs[source_time][channel]
+                        if source_time >= 0
+                        else 0
+                    )
+                    total += q[lane] * activation * (2 if octave else 1)
+            row.append(total)
+        expected_conv.append(row)
+    assert oxcore.causal_depthwise_conv_mirror63_acc_i8(
+        conv_inputs, conv_packed, kernel_size
+    ) == expected_conv
+
+
 def test_mirror63_causal_depthwise_convolution_rejects_bad_weights_and_shapes(oxcore):
     with pytest.raises(ValueError, match="one packed weight row"):
         oxcore.causal_depthwise_conv_mirror63_acc_i8(
