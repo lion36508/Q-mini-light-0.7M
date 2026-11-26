@@ -7,7 +7,7 @@ as engineering requirements.
 
 ## Formula 1 — Mirror-63 and deferred split accumulator
 
-**Status: implemented and exhaustively tested for the scalar code mapping.**
+**Status: implemented and exhaustively tested for the scalar code mapping, row-wise linear projections, and causal depthwise convolution.**
 
 For each triplet (q_j \in \{-2,-1,0,1,2\}),
 
@@ -30,8 +30,13 @@ N=\sum_j q_j x_j 2^o
 without an intermediate right shift. It returns integer (N); the caller
 forms (\alpha_w\alpha_xN/2) once. This removes truncation caused by
 per-term integer halving. It does **not** prove every later floating-point
-conversion or quantization step is unbiased. The C++ dot kernel is scalar
-portable code, not yet an optimized SIMD implementation.
+conversion or quantization step is unbiased. The native linear projection
+returns one numerator for every batch/output pair; partial input triplets are
+zero-padded. The causal depthwise convolution uses per-channel weights,
+tap-zero-oldest ordering and zero left padding, returning an int64 numerator
+for each timestep/channel. Both operators validate all packed weight bytes
+and conservative int64 accumulator bounds before writing outputs. These
+implementations are portable scalar C++ kernels, not optimized SIMD.
 
 ## Formula 2 — FWHT incoherence transform
 
