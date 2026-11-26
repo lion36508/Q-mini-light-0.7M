@@ -40,7 +40,9 @@ class _Arena(ctypes.Structure):
 
 class _TensorView(ctypes.Structure):
     _fields_ = [
-        ("data", ctypes.c_void_p),
+        ("storage", ctypes.c_void_p),
+        ("storage_bytes", ctypes.c_size_t),
+        ("offset_bytes", ctypes.c_size_t),
         ("dtype", ctypes.c_uint32),
         ("rank", ctypes.c_uint32),
         ("shape", ctypes.c_uint64 * 8),
@@ -258,15 +260,20 @@ class OxCoreNative:
         dtype: str,
         shape: Sequence[int],
         strides_bytes: Sequence[int] | None = None,
+        offset_bytes: int = 0,
     ) -> bool:
         if dtype not in _DTYPE_CODES:
             raise ValueError(f"Unsupported OxCore dtype: {dtype}")
         if len(shape) > 8 or (strides_bytes is not None and len(strides_bytes) != len(shape)):
             raise ValueError("Tensor rank and stride metadata must fit the 8-axis ABI.")
+        if isinstance(offset_bytes, bool) or not isinstance(offset_bytes, int) or offset_bytes < 0:
+            raise ValueError("Tensor storage offset must be a non-negative integer.")
         scalar_type = _DTYPE_CTYPES[dtype]
         storage = (scalar_type * len(values))(*values)
         view = _TensorView()
-        view.data = ctypes.cast(storage, ctypes.c_void_p) if values else None
+        view.storage = ctypes.cast(storage, ctypes.c_void_p) if values else None
+        view.storage_bytes = ctypes.sizeof(storage)
+        view.offset_bytes = offset_bytes
         view.dtype = _DTYPE_CODES[dtype]
         view.rank = len(shape)
         for axis, dimension in enumerate(shape):
