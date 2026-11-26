@@ -10,7 +10,7 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals
 from .model import AddSubLanguageModel
-from .sft import SFT_FORMAT, SYSTEM_TEXT
+from .sft import LEGACY_SFT_FORMAT, SFT_FORMAT, SYSTEM_TEXT
 from .train import CHECKPOINT_FORMAT, sha256_file
 
 
@@ -22,9 +22,13 @@ LEGACY_UNSCALED_CHECKPOINT_FORMATS = {
     "qmini-addsub-sft-v3",
     "qmini-addsub-sft-v2",
 }
+LEGACY_SCALED_CHECKPOINT_FORMATS = {
+    LEGACY_SFT_FORMAT,
+}
 ACCEPTED_CHECKPOINT_FORMATS = {
     CHECKPOINT_FORMAT,
     SFT_FORMAT,
+    *LEGACY_SCALED_CHECKPOINT_FORMATS,
     *LEGACY_UNSCALED_CHECKPOINT_FORMATS,
 }
 
