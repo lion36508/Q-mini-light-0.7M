@@ -79,3 +79,23 @@ def test_training_preflight_runs_a_real_optimizer_step_without_writing_artifacts
     assert report["parameter_count"] == config.estimated_parameter_count()
     assert report["synthetic_preflight_tokens_are_not_training_data"] is True
     assert {path.name for path in tmp_path.iterdir()} == {"profile.json"}
+
+
+def test_one_click_colab_notebook_is_single_cell_and_syntax_valid():
+    import ast
+
+    path = ROOT / "colab" / "QMini_AddSub_2M_One_Click.ipynb"
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    code_cells = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    assert len(code_cells) == 1
+    ast.parse(code_cells[0], filename=str(path))
+    assert "drive.mount(\"/content/drive\")" in code_cells[0]
+    assert "trainability_addsub_2m_v1" in code_cells[0]
+    assert "PRETRAIN_STEPS = 20_000" in code_cells[0]
+    assert "SFT_STEPS = 2_000" in code_cells[0]
+    assert 'Type exactly I ACCEPT' in code_cells[0]
+    assert "qmini_addsub.preflight" in code_cells[0]
