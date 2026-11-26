@@ -22,6 +22,7 @@ from .optim import (
     reconcile_metrics_file, resolve_schedule_total_steps,
 )
 from .wavebit_hsra import validate_wavebit_options
+from .checkpoints import verify_completed_checkpoint
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
@@ -259,7 +260,12 @@ def fine_tune_from_addsub_checkpoint(
     curriculum_uniform_fraction: float = 1.0,
     curriculum_warmup_steps: int = 50,
     num_threads: int = 0,
+    validate_only: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(validate_only, bool):
+        raise TypeError("validate_only must be a boolean.")
+    if validate_only and resume is None:
+        raise ValueError("validate_only requires an explicit compatible SFT checkpoint.")
     if not isinstance(extend_schedule, bool):
         raise TypeError("extend_schedule must be a boolean.")
     if isinstance(num_threads, bool) or not isinstance(num_threads, int) or num_threads < 0:
@@ -446,16 +452,20 @@ def fine_tune_from_addsub_checkpoint(
             raise ValueError("Incompatible Add/Sub SFT resume: " + ", ".join(mismatch))
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
-        start_step = int(checkpoint["step"])
+        raw_step = checkpoint.get("step")
+        if isinstance(raw_step, bool) or not isinstance(raw_step, int) or raw_step < 1:
+            raise ValueError("SFT checkpoint has an invalid optimizer step.")
+        start_step = raw_step
         saved_horizon = checkpoint.get(
             "schedule_total_steps",
             saved_contract.get("planned_steps", checkpoint.get("planned_steps")),
         )
-        if isinstance(saved_horizon, bool) or not isinstance(saved_horizon, int):
+        if (
+            isinstance(saved_horizon, bool)
+            or not isinstance(saved_horizon, int)
+            or saved_horizon < start_step
+        ):
             raise ValueError("SFT checkpoint has no valid saved schedule horizon.")
-        schedule_total_steps = resolve_schedule_total_steps(
-            steps, start_step, saved_horizon, extend_schedule, "SFT"
-        )
         if "torch_rng" not in checkpoint or "python_rng" not in checkpoint:
             raise ValueError(
                 "This SFT checkpoint predates exact RNG resume; start a new v4 SFT run."
@@ -476,6 +486,31 @@ def fine_tune_from_addsub_checkpoint(
             # Legacy v6 used rng.sample(range(N), k) for uniform batches. The
             # sampler's uniform-control path makes the exact same RNG call.
             sampler.step = start_step
+        if validate_only:
+            validation = verify_completed_checkpoint(
+                checkpoint,
+                resume,
+                prefix="sft-checkpoint",
+                metrics_path=output / "sft_metrics.jsonl",
+                expected_checkpoint={
+                    "config": config.to_dict(),
+                    **hashes,
+                },
+                expected_metrics=hashes,
+                expected_run_contract=run_contract,
+                run_name="SFT",
+            )
+            return {
+                **validation,
+                "format": checkpoint_format,
+                "parameter_count": model.parameter_count(),
+                "train_records": len(train_data),
+                "validation_records": len(valid_data),
+                "test_records": len(test_data),
+            }
+        schedule_total_steps = resolve_schedule_total_steps(
+            steps, start_step, saved_horizon, extend_schedule, "SFT"
+        )
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "sft_metrics.jsonl"
     if resume is None and (
@@ -697,6 +732,7 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--threads", type=int, default=0, help="Optional PyTorch intra-op CPU thread count; 0 keeps the current default.")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--validate-only", action="store_true", help="Verify an existing checkpoint and its full data/run lineage without training or modifying files.")
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     parser.add_argument(
         "--curriculum-uniform-fraction",
@@ -728,6 +764,7 @@ def main() -> None:
         extend_schedule=args.extend_schedule,
         curriculum_uniform_fraction=args.curriculum_uniform_fraction,
         curriculum_warmup_steps=args.curriculum_warmup_steps,
+        validate_only=args.validate_only,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
