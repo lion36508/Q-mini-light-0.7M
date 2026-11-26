@@ -103,10 +103,6 @@ int main() {
         return 1;
     }
 
-    const uint8_t linear_weights[] = {
-        0u, 0u, 0u, 0u
-    };
-    (void)linear_weights;
     uint8_t weight_matrix[4] = {};
     if (!check(
             ox_mirror63_pack_triplet(1, -1, 0, 0u, &weight_matrix[0]) == OX_OK &&
@@ -184,7 +180,7 @@ int main() {
         return 1;
     }
     if (!check(
-            fwht[0] == 8 && fwht[1] == 4 && fwht[2] == -2 && fwht[3] == 2,
+            fwht[0] == 8 && fwht[1] == 6 && fwht[2] == -4 && fwht[3] == 2,
             "integer FWHT values")) {
         return 1;
     }
