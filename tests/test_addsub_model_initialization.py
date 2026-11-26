@@ -277,7 +277,7 @@ def test_model_first_and_training_colab_use_the_saved_source_bundle() -> None:
     assert "source_root=REPO_DIR" in model_code
     assert "parameter_layout.json" in model_code
     assert "source_code" in model_code
-    assert "No dataset download" in model_first_markdown
+    assert "does not download datasets" in model_first_markdown
 
     assert "SOURCE_CODE_DIR = ARTIFACT_DIR / \"source_code\"" in training_code
     assert "shutil.copytree(SOURCE_CODE_DIR, REPO_DIR" in training_code
