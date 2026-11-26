@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,55 @@ def test_model_first_initialization_is_idempotent_and_preserves_existing_bundle(
 
     assert second["initial_model_sha256"] == first["initial_model_sha256"]
     assert checkpoint.read_bytes() == original_bytes
+
+
+
+def test_legacy_six_file_bundle_is_upgraded_without_reinitializing_weights(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    first = initialize_model_artifacts(root, PROFILE, threads=2)
+    artifacts = root / "artifacts"
+    checkpoint = artifacts / "initial_model.pt"
+    tokenizer = artifacts / "tokenizer.json"
+    config = artifacts / "model_config.json"
+    report = artifacts / "initialization_report.json"
+    model_card = artifacts / "MODEL_CARD.md"
+    protected_bytes = {
+        path.name: path.read_bytes()
+        for path in (checkpoint, tokenizer, config, report, model_card)
+    }
+
+    # Recreate the exact six-file layout written by the earlier model-first
+    # bootstrap. Its original files and hashes remain the migration inputs.
+    manifest_path = artifacts / "model_manifest.json"
+    legacy_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy_manifest.pop("source_snapshot")
+    legacy_manifest.pop("parameter_layout")
+    legacy_manifest.pop("source_verification", None)
+    legacy_manifest["files"].pop("parameter_layout.json")
+    manifest_path.write_text(
+        json.dumps(legacy_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (artifacts / "parameter_layout.json").unlink()
+    shutil.rmtree(artifacts / "source_code")
+
+    migrated = initialize_model_artifacts(
+        root,
+        PROFILE,
+        threads=2,
+        source_root=Path(__file__).resolve().parents[1],
+        source_commit="legacy-migration-test",
+    )
+
+    assert migrated["stage"] == "initialized_untrained"
+    assert migrated["parameter_count"] == first["parameter_count"] == 1_887_644
+    assert migrated["migration"]["weights_reused_without_reinitialization"] is True
+    for name, original in protected_bytes.items():
+        assert (artifacts / name).read_bytes() == original
+    assert (artifacts / "parameter_layout.json").is_file()
+    assert (artifacts / "source_code" / "qmini_addsub" / "model.py").is_file()
+    assert verify_model_bundle(root)["parameter_count"] == 1_887_644
+    assert migrated["source_verification"]["isolated_source_import"] is True
 
 
 def test_partial_model_bundle_is_never_overwritten(tmp_path: Path) -> None:
