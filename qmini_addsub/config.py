@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
+MAX_PARAMETER_BUDGET = 2_000_000
+
+
 @dataclass(frozen=True)
 class AddSubConfig:
     """Configuration for the independent Q-Mini Add/Sub v1 model.
@@ -92,6 +95,29 @@ class AddSubConfig:
             raise ValueError("seed must be a non-negative integer.")
         if self.n_experts < 2:
             raise ValueError("n_experts must be at least 2 for sparse Top-1 routing.")
+        estimated = self.estimated_parameter_count()
+        if estimated > MAX_PARAMETER_BUDGET:
+            raise ValueError(
+                f"Model profile requires {estimated:,} parameters, exceeding the "
+                f"hard {MAX_PARAMETER_BUDGET:,} parameter ceiling."
+            )
+
+    def estimated_parameter_count(self) -> int:
+        """Exact parameter count for the standard Add/Sub graph (no WaveBit memory)."""
+        d = self.d_model
+        h = self.d_hidden
+        experts = self.n_experts
+        per_block = (
+            7 * d * d
+            + d * self.kernel_size
+            + 11 * d
+            + experts * (3 * d * h + 2 * h + d)
+            + d * experts
+            + experts
+            + 3
+        )
+        # Token/output weights are tied; only the output bias is additional.
+        return self.vocab_size * d + self.n_layers * per_block + d + self.vocab_size
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()

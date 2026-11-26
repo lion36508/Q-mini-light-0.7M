@@ -51,7 +51,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     all_code = "\n".join(code)
     assert "Q mini 2 light" in all_code
     assert "REPO_BRANCH = 'main'" in all_code
-    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in all_code
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_2m_v1'" in all_code
     assert "REPO_COMMIT = subprocess.check_output" in all_code
     assert "algorithm/addsub-stability-routing-v2" not in all_code
     assert "trainability_v2" not in all_code
@@ -74,6 +74,10 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
+    assert "--config-template" in all_code
+    assert "qmini_addsub_2m.json" in all_code
+    assert "qmini_addsub.preflight" in all_code
+    assert "SEQUENCE_LENGTH = 512" in all_code
 
 
 def test_addsub_config_is_independent_and_validates():
@@ -2184,7 +2188,7 @@ def test_addsub_colab_keeps_cuda_visible_and_uses_the_actual_sft_metrics_filenam
     ]
     all_code = "\n".join(code)
     assert "REPO_BRANCH = 'main'" in code[0]
-    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in code[0]
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_2m_v1'" in code[0]
     assert "CUDA_VISIBLE_DEVICES" not in all_code
     assert "os.environ" not in code[0]
     assert "if DEVICE.startswith('cuda') and not torch.cuda.is_available():" in all_code

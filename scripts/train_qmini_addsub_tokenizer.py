@@ -11,7 +11,7 @@ from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
 from tokenizers.trainers import BpeTrainer
 
-from qmini_addsub.config import AddSubConfig
+from qmini_addsub.config import AddSubConfig, MAX_PARAMETER_BUDGET
 from qmini_addsub.data import escape_special_token_literals, normalize_training_text
 from qmini_addsub.train import sha256_file
 
@@ -96,6 +96,11 @@ def main() -> None:
     parser.add_argument("--data-dir", default="data/qmini_addsub_v1")
     parser.add_argument("--output", default="artifacts/qmini_addsub_v1/tokenizer.json")
     parser.add_argument("--vocab-size", type=int, default=1024)
+    parser.add_argument(
+        "--config-template",
+        default=None,
+        help="Optional Add/Sub model-profile JSON; the actual tokenizer vocabulary size replaces vocab_size.",
+    )
     parser.add_argument("--pretrain-byte-budget", type=int, default=64 * 1024 * 1024)
     parser.add_argument("--seed", type=int, default=20261123)
     args = parser.parse_args()
@@ -225,7 +230,19 @@ def main() -> None:
                 f"[264, {args.vocab_size}]."
             )
 
-        model_config = AddSubConfig(vocab_size=actual_vocab_size)
+        if args.config_template:
+            template_path = Path(args.config_template)
+            if not template_path.is_file():
+                raise FileNotFoundError(f"Add/Sub model profile not found: {template_path}")
+            template = AddSubConfig.from_dict(
+                json.loads(template_path.read_text(encoding="utf-8"))
+            )
+            model_values = template.to_dict()
+            model_values["vocab_size"] = actual_vocab_size
+            model_config = AddSubConfig.from_dict(model_values)
+        else:
+            # Backward-compatible compact profile for historical tokenizer runs.
+            model_config = AddSubConfig(vocab_size=actual_vocab_size)
         tokenizer.save(str(tokenizer_temporary))
         config_temporary.write_text(
             json.dumps(model_config.to_dict(), indent=2, sort_keys=True) + "\n",
@@ -247,6 +264,8 @@ def main() -> None:
             "tokenizer": str(output),
             "model_config": str(config_path),
             "vocab_size": actual_vocab_size,
+            "estimated_parameter_count": model_config.estimated_parameter_count(),
+            "parameter_budget": MAX_PARAMETER_BUDGET,
             "special_tokens": {token: tokenizer.token_to_id(token) for token in SPECIAL_TOKENS},
             "trained_on": trained_on,
             "pretrain_source_bytes": pretrain_source_bytes,
