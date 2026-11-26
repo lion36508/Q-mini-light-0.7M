@@ -125,6 +125,49 @@ bool size_product_overflows(size_t left, size_t right) {
     return right != 0u && left > std::numeric_limits<size_t>::max() / right;
 }
 
+uint64_t absolute_i32(int32_t value) {
+    const int64_t wide = static_cast<int64_t>(value);
+    return wide < 0 ? static_cast<uint64_t>(-wide)
+                    : static_cast<uint64_t>(wide);
+}
+
+ox_status scale_q15_shift_add_round_even(
+    int32_t value, uint16_t coefficient, int32_t *out
+) {
+    if (out == nullptr || coefficient > 32768u) {
+        return OX_EINVAL;
+    }
+
+    const bool negative = value < 0;
+    const uint64_t magnitude = absolute_i32(value);
+    uint64_t accumulator = 0u;
+    for (uint32_t bit = 0u; bit <= 15u; ++bit) {
+        if ((coefficient & static_cast<uint16_t>(1u << bit)) != 0u) {
+            accumulator += magnitude << bit;
+        }
+    }
+
+    uint64_t quotient = accumulator >> 15u;
+    const uint64_t remainder = accumulator & 0x7fffu;
+    constexpr uint64_t half = 0x4000u;
+    if (remainder > half || (remainder == half && (quotient & 1u) != 0u)) {
+        ++quotient;
+    }
+
+    if (quotient > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+        return OX_EOVERFLOW;
+    }
+    const int64_t signed_value = negative
+        ? -static_cast<int64_t>(quotient)
+        : static_cast<int64_t>(quotient);
+    if (signed_value < std::numeric_limits<int32_t>::min() ||
+        signed_value > std::numeric_limits<int32_t>::max()) {
+        return OX_EOVERFLOW;
+    }
+    *out = static_cast<int32_t>(signed_value);
+    return OX_OK;
+}
+
 ox_status validate_mirror63_weight_array(
     const uint8_t *packed_weights, size_t count
 ) {
@@ -538,6 +581,93 @@ ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
                 accumulator += dot_decoded_triplet(q, octave, block_input);
             }
             output[output_offset + channel] = accumulator;
+        }
+    }
+    return OX_OK;
+}
+
+ox_status ox_ssm_scan_q15_i32(
+    const int32_t *initial_state,
+    const int32_t *injection,
+    const uint16_t *decay_q15,
+    size_t time_steps,
+    size_t batch,
+    size_t channels,
+    int32_t *all_states,
+    int32_t *final_state
+) {
+    if (time_steps == 0u || batch == 0u || channels == 0u ||
+        initial_state == nullptr || injection == nullptr ||
+        decay_q15 == nullptr || all_states == nullptr || final_state == nullptr) {
+        return OX_EINVAL;
+    }
+    if (size_product_overflows(batch, channels) ||
+        size_product_overflows(time_steps, batch * channels)) {
+        return OX_EOVERFLOW;
+    }
+
+    const size_t state_count = batch * channels;
+    const size_t value_count = time_steps * state_count;
+
+    uint64_t max_initial = 0u;
+    for (size_t index = 0u; index < state_count; ++index) {
+        const uint64_t magnitude = absolute_i32(initial_state[index]);
+        if (magnitude > max_initial) {
+            max_initial = magnitude;
+        }
+    }
+
+    uint64_t max_injection = 0u;
+    for (size_t index = 0u; index < value_count; ++index) {
+        if (decay_q15[index] > 32768u) {
+            return OX_EINVAL;
+        }
+        const uint64_t magnitude = absolute_i32(injection[index]);
+        if (magnitude > max_injection) {
+            max_injection = magnitude;
+        }
+    }
+
+    /* Conservative bound: |decay| <= 1 and each nearest-even scale can add
+       at most one state unit after rounding. Reject before writing any output. */
+    if (max_initial > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) ||
+        max_injection == std::numeric_limits<uint64_t>::max()) {
+        return OX_EOVERFLOW;
+    }
+    const uint64_t per_step_bound = max_injection + 1u;
+    const uint64_t int32_limit =
+        static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+    if (per_step_bound != 0u &&
+        static_cast<uint64_t>(time_steps) >
+            (int32_limit - max_initial) / per_step_bound) {
+        return OX_EOVERFLOW;
+    }
+
+    for (size_t index = 0u; index < state_count; ++index) {
+        final_state[index] = initial_state[index];
+    }
+
+    for (size_t time = 0u; time < time_steps; ++time) {
+        const size_t time_offset = time * state_count;
+        for (size_t index = 0u; index < state_count; ++index) {
+            int32_t decayed = 0;
+            const ox_status status = scale_q15_shift_add_round_even(
+                final_state[index],
+                decay_q15[time_offset + index],
+                &decayed
+            );
+            if (status != OX_OK) {
+                return status;
+            }
+            const int64_t updated =
+                static_cast<int64_t>(decayed) +
+                static_cast<int64_t>(injection[time_offset + index]);
+            if (updated < std::numeric_limits<int32_t>::min() ||
+                updated > std::numeric_limits<int32_t>::max()) {
+                return OX_EOVERFLOW;
+            }
+            final_state[index] = static_cast<int32_t>(updated);
+            all_states[time_offset + index] = final_state[index];
         }
     }
     return OX_OK;
