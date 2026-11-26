@@ -76,7 +76,6 @@ def test_run_id_is_rejected_when_fresh_mode_is_disabled(tmp_path: Path) -> None:
         resolve_workspace_root(tmp_path / "version", run_id="unused")
 
 
-
 def test_symlinked_workspace_entry_blocks_implicit_reuse(tmp_path: Path) -> None:
     version_root = tmp_path / "version"
     external = tmp_path / "external"
@@ -97,7 +96,6 @@ def test_fresh_workspace_rejects_symlinked_parent(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must not traverse symlinks"):
         resolve_workspace_root(version_root, force_fresh=True, run_id="safe-run")
-
 
 
 def test_default_workspace_rejects_root_symlink_before_resolving(tmp_path: Path) -> None:
@@ -124,7 +122,7 @@ def test_default_workspace_rejects_symlink_in_an_ancestor_component(tmp_path: Pa
         resolve_workspace_root(linked_parent / "version")
 
 
-def test_resume_never_allows_nested_symlinked_workspace_entries(tmp_path: Path) -> None:
+def test_resume_rejects_nested_symlinked_workspace_entries_that_escape(tmp_path: Path) -> None:
     version_root = tmp_path / "version"
     external = tmp_path / "external"
     version_root.mkdir()
@@ -135,17 +133,31 @@ def test_resume_never_allows_nested_symlinked_workspace_entries(tmp_path: Path) 
         resolve_workspace_root(version_root, resume_existing=True)
 
 
-def test_fresh_run_rejects_symlink_in_an_ancestor_of_version_root(tmp_path: Path) -> None:
-    real_parent = tmp_path / "real-parent"
-    real_parent.mkdir()
-    version = real_parent / "version"
-    version.mkdir()
-    linked_parent = tmp_path / "linked-parent"
-    linked_parent.symlink_to(real_parent, target_is_directory=True)
+def test_resume_allows_huggingface_style_symlinks_within_workspace(tmp_path: Path) -> None:
+    version_root = tmp_path / "version"
+    blobs = version_root / "cache" / "huggingface" / "datasets--example" / "blobs"
+    snapshots = version_root / "cache" / "huggingface" / "datasets--example" / "snapshots" / "revision"
+    blobs.mkdir(parents=True)
+    snapshots.mkdir(parents=True)
+    blob = blobs / "content-sha"
+    blob.write_bytes(b"verified-dataset-content")
+    snapshot_link = snapshots / "train.parquet"
+    snapshot_link.symlink_to(blob)
 
-    with pytest.raises(ValueError, match="version root must not traverse symlinks"):
-        resolve_workspace_root(
-            linked_parent / "version",
-            force_fresh=True,
-            run_id="fresh-run",
-        )
+    resolved = resolve_workspace_root(version_root, resume_existing=True)
+
+    assert resolved == version_root.resolve()
+    assert snapshot_link.is_symlink()
+    assert snapshot_link.read_bytes() == b"verified-dataset-content"
+    assert blob.read_bytes() == b"verified-dataset-content"
+
+
+def test_resume_rejects_dangling_workspace_symlinks(tmp_path: Path) -> None:
+    version_root = tmp_path / "version"
+    version_root.mkdir()
+    dangling = version_root / "cache" / "missing.parquet"
+    dangling.parent.mkdir()
+    dangling.symlink_to(version_root / "cache" / "does-not-exist.parquet")
+
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        resolve_workspace_root(version_root, resume_existing=True)
