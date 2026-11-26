@@ -14,6 +14,7 @@ These notebooks work with the legacy checkpoint/data lineage only. Preserve exis
 ## Q-Mini Add/Sub
 
 - From-scratch experimental pipeline: [Q-Mini Add/Sub](QMini_AddSub_V1_From_Scratch.ipynb)
+- One-cell Drive training: [Q-Mini Add/Sub 2M — One Click](QMini_AddSub_2M_One_Click.ipynb)
 - Package: `qmini_addsub/`
 - Separate tokenizer, dataset manifest, pretraining/SFT checkpoints and evaluation.
 
