@@ -11,8 +11,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
-import pyarrow.parquet as pq
 
 from qmini_addsub.data import (
     accept_oasst1_message,
@@ -69,6 +67,14 @@ def download_verified(url: str, destination: Path, sha256: str, size: int) -> Pa
 
 def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
+    try:
+        from huggingface_hub import hf_hub_download
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError(
+            "Add/Sub dataset preparation requires the optional data dependencies. "
+            "Install with: python -m pip install 'qmini[addsub-data]'."
+        ) from exc
     parquet_path = Path(hf_hub_download(
         repo_id=SIMPLE_WIKI_REPOSITORY,
         filename=SIMPLE_WIKI_FILE,
@@ -311,6 +317,14 @@ def _select_oasst_conversation_path(
 
 
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
+    try:
+        from huggingface_hub import hf_hub_download
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError(
+            "Add/Sub dataset preparation requires the optional data dependencies. "
+            "Install with: python -m pip install 'qmini[addsub-data]'."
+        ) from exc
     parquet_path = Path(
         hf_hub_download(
             repo_id=OASST_REPOSITORY,
@@ -418,6 +432,13 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
 
 
 def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "Add/Sub dataset preparation requires the optional data dependencies. "
+            "Install with: python -m pip install 'qmini[addsub-data]'."
+        ) from exc
     jsonl_path = Path(
         hf_hub_download(
             repo_id=DOLLY_REPOSITORY,
