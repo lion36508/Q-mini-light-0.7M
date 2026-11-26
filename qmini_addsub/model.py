@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import AddSubConfig
+from .config import AddSubConfig, MAX_PARAMETER_BUDGET
 from .quantization import initialize_five_symbol_weight_, quantize_weight_ste
 from .wavebit_hsra import (
     HolographicRotationMemory,
@@ -545,10 +545,10 @@ class AddSubLanguageModel(nn.Module):
             torch.random.default_generator.manual_seed(model_seed)
             self._initialize_parameters()
         actual_parameters = self.parameter_count()
-        if actual_parameters > self.config.parameter_budget:
+        if actual_parameters > MAX_PARAMETER_BUDGET:
             raise ValueError(
                 f"Constructed Add/Sub graph has {actual_parameters:,} parameters, "
-                f"exceeding the hard {self.config.parameter_budget:,} parameter cap. "
+                f"exceeding the hard {MAX_PARAMETER_BUDGET:,} parameter cap. "
                 "Optional architecture components must fit inside the same budget."
             )
 
