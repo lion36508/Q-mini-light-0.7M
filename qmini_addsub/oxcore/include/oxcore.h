@@ -124,6 +124,21 @@ OXCORE_API ox_status ox_ssm_scan_q15_i32(
     int32_t *final_state
 );
 
+/* Generic activation/gate LUT lookup. One uint8 index maps to one int16 value. */
+OXCORE_API ox_status ox_lut_u8_i16(
+    const uint8_t *indices, const int16_t table[256],
+    size_t length, int16_t *output
+);
+
+/* Stable Top-1: scores are [batch, experts], ties select the lowest expert id. */
+OXCORE_API ox_status ox_top1_i16(
+    const int16_t *scores,
+    size_t batch,
+    size_t experts,
+    uint16_t *selected_expert,
+    int16_t *selected_score
+);
+
 OXCORE_API ox_status ox_fwht_i64(int64_t *values, size_t length);
 OXCORE_API ox_status ox_sinkhorn4(
     const double logits[16], double out_matrix[16], uint32_t iterations
