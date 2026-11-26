@@ -108,7 +108,7 @@ def test_total_variation_distance_normalizes_large_finite_inputs_without_sum_ove
         [1e308, 1e308],
         [1e308, 1e307],
     )
-    assert value == pytest.approx(1.0 / 11.0, rel=1e-12)
+    assert value == pytest.approx(9.0 / 22.0, rel=1e-12)
 
 
 def test_total_variation_distance_rejects_zero_mass_after_stable_scaling():
