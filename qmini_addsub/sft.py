@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 from tokenizers import Tokenizer
 
 from .config import AddSubConfig
+from .curriculum import SelfPacedCurriculumSampler
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
 from .optim import (
@@ -25,7 +26,8 @@ from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
 
 
-SFT_FORMAT = "qmini-addsub-sft-v6"
+SFT_FORMAT = "qmini-addsub-sft-v7"
+LEGACY_SFT_FORMAT = "qmini-addsub-sft-v6"
 SYSTEM_TEXT = "You are Q-Mini."
 
 CHAT_SPECIAL_TOKENS = (
@@ -248,6 +250,8 @@ def fine_tune_from_addsub_checkpoint(
     device_name: str = "cpu",
     resume: str | Path | None = None,
     extend_schedule: bool = False,
+    curriculum_uniform_fraction: float = 1.0,
+    curriculum_warmup_steps: int = 50,
 ) -> dict[str, Any]:
     if not isinstance(extend_schedule, bool):
         raise TypeError("extend_schedule must be a boolean.")
@@ -265,6 +269,20 @@ def fine_tune_from_addsub_checkpoint(
         raise ValueError("seed must be non-negative.")
     if not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("learning_rate must be finite and positive.")
+    if (
+        isinstance(curriculum_uniform_fraction, bool)
+        or not isinstance(curriculum_uniform_fraction, (int, float))
+        or not math.isfinite(curriculum_uniform_fraction)
+        or not 0.35 <= curriculum_uniform_fraction <= 1.0
+    ):
+        raise ValueError("curriculum_uniform_fraction must be finite and between 0.35 and 1.0.")
+    if (
+        isinstance(curriculum_warmup_steps, bool)
+        or not isinstance(curriculum_warmup_steps, int)
+        or curriculum_warmup_steps < 1
+    ):
+        raise ValueError("curriculum_warmup_steps must be a positive integer.")
+    curriculum_enabled = float(curriculum_uniform_fraction) < 1.0
     device = torch.device(device_name)
     base_path, tokenizer_path = Path(base_checkpoint), Path(tokenizer_path)
     train_path, valid_path, test_path, output = (
@@ -339,6 +357,16 @@ def fine_tune_from_addsub_checkpoint(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
     rng = random.Random(seed)
+    sampler = SelfPacedCurriculumSampler(
+        dataset_size=len(train_data),
+        total_steps=steps,
+        warmup_steps=curriculum_warmup_steps,
+        uniform_fraction=float(curriculum_uniform_fraction),
+        start_quantile=0.55,
+        end_quantile=0.80,
+        bandwidth=0.18,
+        ema_decay=0.80,
+    )
     run_contract = {
         "batch_size": batch_size,
         "learning_rate": learning_rate,
@@ -348,6 +376,16 @@ def fine_tune_from_addsub_checkpoint(
         "save_every": save_every,
         "seed": seed,
     }
+    if curriculum_enabled:
+        run_contract.update({
+            "curriculum": SelfPacedCurriculumSampler.FORMAT,
+            "curriculum_uniform_fraction": float(curriculum_uniform_fraction),
+            "curriculum_warmup_steps": curriculum_warmup_steps,
+            "curriculum_start_quantile": 0.55,
+            "curriculum_end_quantile": 0.80,
+            "curriculum_bandwidth": 0.18,
+            "curriculum_ema_decay": 0.80,
+        })
     if wavebit_options is not None:
         run_contract["wavebit_hsra"] = wavebit_options
 
@@ -368,8 +406,15 @@ def fine_tune_from_addsub_checkpoint(
     schedule_total_steps = steps
     if resume is not None:
         checkpoint = torch.load(resume, map_location=device, weights_only=True)
+        checkpoint_format = checkpoint.get("format")
+        if checkpoint_format not in {SFT_FORMAT, LEGACY_SFT_FORMAT}:
+            raise ValueError("Unsupported Add/Sub SFT checkpoint format.")
+        if checkpoint_format == LEGACY_SFT_FORMAT and curriculum_enabled:
+            raise ValueError(
+                "Legacy v6 SFT checkpoints do not contain per-record curriculum losses; "
+                "resume them with uniform sampling or start a fresh curriculum run."
+            )
         expected = {
-            "format": SFT_FORMAT,
             "config": config.to_dict(),
             **hashes,
         }
@@ -409,6 +454,15 @@ def fine_tune_from_addsub_checkpoint(
                 raise ValueError("CUDA RNG state is missing or device count changed.")
             torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
+        if checkpoint_format == SFT_FORMAT:
+            curriculum_state = checkpoint.get("curriculum")
+            if not isinstance(curriculum_state, dict):
+                raise ValueError("SFT v7 checkpoint is missing exact curriculum state.")
+            sampler.load_state_dict(curriculum_state)
+        else:
+            # Legacy v6 used rng.sample(range(N), k) for uniform batches. The
+            # sampler's uniform-control path makes the exact same RNG call.
+            sampler.step = start_step
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "sft_metrics.jsonl"
     if resume is None and (
@@ -481,18 +535,31 @@ def fine_tune_from_addsub_checkpoint(
         for group in optimizer.param_groups:
             group["lr"] = current_lr
         sample_count = min(batch_size, len(train_data))
-        sampled_indices = rng.sample(range(len(train_data)), k=sample_count)
+        sampled_indices, curriculum_info = sampler.sample(sample_count, rng)
         batch = [train_data[index] for index in sampled_indices]
         inputs, labels = _collate(batch, pad_id)
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad(set_to_none=True)
         result = model(inputs, attention_mask=inputs.ne(pad_id))
         target_count = _require_response_targets(labels, step)
-        loss = F.cross_entropy(
-            result["logits"].float().reshape(-1, config.vocab_size),
-            labels.reshape(-1),
-            ignore_index=-100,
-        ) + (
+        if curriculum_enabled:
+            token_losses = F.cross_entropy(
+                result["logits"].float().reshape(-1, config.vocab_size),
+                labels.reshape(-1),
+                ignore_index=-100,
+                reduction="none",
+            ).reshape_as(labels)
+            per_record_counts = labels.ne(-100).sum(dim=1)
+            per_record_losses = token_losses.sum(dim=1) / per_record_counts.clamp_min(1)
+            response_loss = token_losses.sum() / target_count
+        else:
+            response_loss = F.cross_entropy(
+                result["logits"].float().reshape(-1, config.vocab_size),
+                labels.reshape(-1),
+                ignore_index=-100,
+            )
+            per_record_losses = None
+        loss = response_loss + (
             config.moe_balance_coef * result["aux_loss"]
             + config.router_z_loss_coef * result["router_z_loss"]
         )
@@ -504,6 +571,11 @@ def fine_tune_from_addsub_checkpoint(
         )
         optimizer.step()
         model.update_loss_free_router_bias(result["router_load"])
+        if curriculum_enabled:
+            sampler.update(
+                sampled_indices,
+                [float(value) for value in per_record_losses.detach().cpu().tolist()],
+            )
         assert_finite_training_state(model, optimizer, step)
         last_loss = float(loss.detach())
 
@@ -525,6 +597,17 @@ def fine_tune_from_addsub_checkpoint(
                 "run_contract": run_contract,
                 "schedule_total_steps": schedule_total_steps,
             }
+            if curriculum_enabled:
+                row.update({
+                    "curriculum_mode": curriculum_info["mode"],
+                    "curriculum_focus_quantile": curriculum_info["focus_quantile"],
+                    "curriculum_uniform_fraction": curriculum_info["uniform_fraction"],
+                    "curriculum_requested_uniform_fraction": curriculum_info["requested_uniform_fraction"],
+                    "curriculum_uniform_samples": curriculum_info["uniform_samples"],
+                    "curriculum_focused_samples": curriculum_info["focused_samples"],
+                    "curriculum_seen_fraction": curriculum_info["seen_fraction"],
+                    "curriculum_sampled_mean_response_loss": float(per_record_losses.detach().mean()),
+                })
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
             print(json.dumps(row, sort_keys=True))
@@ -538,6 +621,7 @@ def fine_tune_from_addsub_checkpoint(
                 "config": config.to_dict(),
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "curriculum": sampler.state_dict(),
                 "torch_rng": torch.get_rng_state(),
                 "python_rng": rng.getstate(),
                 "cuda_rng_states": (
@@ -563,8 +647,18 @@ def fine_tune_from_addsub_checkpoint(
         "final_validation_response_loss": evaluate(valid_data, "validation"),
         "heldout_test_response_loss": evaluate(test_data, "test"),
         "heldout_test_sha256": hashes["test_sha256"],
+        "curriculum": {
+            "format": sampler.FORMAT,
+            "enabled": curriculum_enabled,
+            "requested_uniform_replay_fraction": sampler.uniform_fraction,
+            "warmup_steps": sampler.warmup_steps,
+            "seen_records": sum(count > 0 for count in sampler.update_count),
+            "total_records": sampler.dataset_size,
+            "uniform_replay_quota_remainder": sampler.uniform_remainder,
+        },
         "output_dir": str(output),
-        "note": "SFT is training-only; full additive inference export remains a separate gate.",
+        "note": "Self-paced SFT sampling is optional and experimental; no quality improvement is claimed until held-out comparisons pass.",
+
     }
 
 
@@ -583,6 +677,18 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
+    parser.add_argument(
+        "--curriculum-uniform-fraction",
+        type=float,
+        default=1.0,
+        help="Uniform replay fraction; 1.0 keeps the baseline sampler, 0.35-0.99 enables loss-aware self-paced sampling.",
+    )
+    parser.add_argument(
+        "--curriculum-warmup-steps",
+        type=int,
+        default=50,
+        help="Uniform warmup steps before difficulty-based sampling (only used when the replay fraction is below 1.0).",
+    )
     args = parser.parse_args()
     result = fine_tune_from_addsub_checkpoint(
         base_checkpoint=args.base_checkpoint,
@@ -598,6 +704,8 @@ def main() -> None:
         device_name=args.device,
         resume=args.resume,
         extend_schedule=args.extend_schedule,
+        curriculum_uniform_fraction=args.curriculum_uniform_fraction,
+        curriculum_warmup_steps=args.curriculum_warmup_steps,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

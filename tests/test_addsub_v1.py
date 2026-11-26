@@ -543,7 +543,10 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
 
     sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000001.pt"
     sft_state = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
-    assert sft_state["format"] == "qmini-addsub-sft-v6"
+    assert sft_state["format"] == "qmini-addsub-sft-v7"
+    assert "curriculum" in sft_state
+    assert sft_state["curriculum"]["format"] == "qmini-self-paced-curriculum-v2"
+    assert sft_state["curriculum"]["uniform_fraction"] == 1.0
     assert "torch_rng" in sft_state and "python_rng" in sft_state
 
     resumed_sft_dir = tmp_path / "sft-resumed"
@@ -582,6 +585,63 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     resumed_sft_state = torch.load(resumed_sft_checkpoint, map_location="cpu", weights_only=True)
     for name, tensor in full_sft_state["model"].items():
         assert torch.equal(tensor, resumed_sft_state["model"][name]), name
+
+    # SFT v6 had the same uniform sampler but no curriculum state. It remains
+    # exactly resumable in baseline mode; opting into curriculum requires new
+    # per-record loss history and is rejected by the trainer.
+    legacy_sft_dir = tmp_path / "sft-legacy-v6"
+    legacy_sft_dir.mkdir()
+    legacy_checkpoint = torch.load(sft_checkpoint, map_location="cpu", weights_only=True)
+    legacy_checkpoint["format"] = "qmini-addsub-sft-v6"
+    legacy_checkpoint.pop("curriculum")
+    legacy_sft_path = legacy_sft_dir / sft_checkpoint.name
+    torch.save(legacy_checkpoint, legacy_sft_path)
+    shutil.copy2(tmp_path / "sft" / "sft_metrics.jsonl", legacy_sft_dir / "sft_metrics.jsonl")
+    legacy_resumed = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
+        output_dir=legacy_sft_dir,
+        steps=2,
+        batch_size=1,
+        save_every=1,
+        device_name="cpu",
+        seed=43,
+        resume=legacy_sft_path,
+    )
+    assert legacy_resumed["steps"] == 2
+    legacy_final = torch.load(
+        legacy_sft_dir / "sft-checkpoint-step-000000002.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    for name, tensor in full_sft_state["model"].items():
+        assert torch.equal(tensor, legacy_final["model"][name]), name
+
+    legacy_curriculum_dir = tmp_path / "sft-legacy-curriculum"
+    legacy_curriculum_dir.mkdir()
+    legacy_curriculum_checkpoint = legacy_curriculum_dir / sft_checkpoint.name
+    torch.save(legacy_checkpoint, legacy_curriculum_checkpoint)
+    shutil.copy2(tmp_path / "sft" / "sft_metrics.jsonl", legacy_curriculum_dir / "sft_metrics.jsonl")
+    with pytest.raises(ValueError, match="Legacy v6 SFT checkpoints"):
+        fine_tune_from_addsub_checkpoint(
+            base_checkpoint=final_pretrain_checkpoint,
+            tokenizer_path=tokenizer_path,
+            train_jsonl=sft_train,
+            valid_jsonl=sft_valid,
+            test_jsonl=sft_test,
+            output_dir=legacy_curriculum_dir,
+            steps=2,
+            batch_size=1,
+            save_every=1,
+            device_name="cpu",
+            seed=43,
+            resume=legacy_curriculum_checkpoint,
+            curriculum_uniform_fraction=0.35,
+            curriculum_warmup_steps=1,
+        )
 
     extended_sft_dir = tmp_path / "sft-extended"
     extended_sft_dir.mkdir()
@@ -623,6 +683,61 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     ]
     assert [row["step"] for row in extended_sft_metrics] == [2, 3]
     assert [row["schedule_total_steps"] for row in extended_sft_metrics] == [2, 3]
+
+    # Curriculum is opt-in. Its record-level response-loss state survives resume
+    # and the explicit cosine schedule extension path.
+    curriculum_dir = tmp_path / "sft-curriculum"
+    curriculum_result = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
+        output_dir=curriculum_dir,
+        steps=2,
+        batch_size=1,
+        save_every=1,
+        device_name="cpu",
+        seed=43,
+        curriculum_uniform_fraction=0.35,
+        curriculum_warmup_steps=1,
+    )
+    assert curriculum_result["curriculum"]["enabled"] is True
+    assert curriculum_result["curriculum"]["seen_records"] > 0
+    curriculum_step2 = curriculum_dir / "sft-checkpoint-step-000000002.pt"
+    curriculum_state = torch.load(curriculum_step2, map_location="cpu", weights_only=True)
+    assert curriculum_state["curriculum"]["step"] == 2
+    assert any(value is not None for value in curriculum_state["curriculum"]["ema_loss"])
+
+    curriculum_resume_args = {
+        "base_checkpoint": final_pretrain_checkpoint,
+        "tokenizer_path": tokenizer_path,
+        "train_jsonl": sft_train,
+        "valid_jsonl": sft_valid,
+        "test_jsonl": sft_test,
+        "output_dir": curriculum_dir,
+        "steps": 3,
+        "batch_size": 1,
+        "save_every": 1,
+        "device_name": "cpu",
+        "seed": 43,
+        "resume": curriculum_step2,
+        "curriculum_uniform_fraction": 0.35,
+        "curriculum_warmup_steps": 1,
+    }
+    with pytest.raises(ValueError, match="extend_schedule=True"):
+        fine_tune_from_addsub_checkpoint(**curriculum_resume_args)
+    curriculum_extended = fine_tune_from_addsub_checkpoint(
+        **curriculum_resume_args, extend_schedule=True
+    )
+    assert curriculum_extended["schedule_total_steps"] == 3
+    curriculum_step3 = torch.load(
+        curriculum_dir / "sft-checkpoint-step-000000003.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert curriculum_step3["curriculum"]["step"] == 3
+    assert len(curriculum_step3["curriculum"]["ema_loss"]) == curriculum_result["train_records"]
 
 
 def test_addsub_repetition_penalty_applies_before_greedy_choice():
