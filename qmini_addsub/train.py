@@ -126,11 +126,11 @@ def train_from_scratch(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
-    initial_model: str | Path | None = None,
     extend_schedule: bool = False,
     num_threads: int = 0,
     wavebit_options: dict[str, Any] | None = None,
     validate_only: bool = False,
+    initial_model: str | Path | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
     if not isinstance(validate_only, bool):
