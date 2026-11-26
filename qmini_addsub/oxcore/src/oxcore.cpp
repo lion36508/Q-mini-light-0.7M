@@ -125,6 +125,28 @@ bool size_product_overflows(size_t left, size_t right) {
     return right != 0u && left > std::numeric_limits<size_t>::max() / right;
 }
 
+bool byte_count_overflows(size_t count, size_t item_size) {
+    return item_size != 0u &&
+           count > std::numeric_limits<size_t>::max() / item_size;
+}
+
+bool ranges_overlap(
+    const void *left, size_t left_bytes, const void *right, size_t right_bytes
+) {
+    if (left_bytes == 0u || right_bytes == 0u) {
+        return false;
+    }
+    if (left == nullptr || right == nullptr) {
+        return true;
+    }
+    const uintptr_t left_address = reinterpret_cast<uintptr_t>(left);
+    const uintptr_t right_address = reinterpret_cast<uintptr_t>(right);
+    if (left_address <= right_address) {
+        return right_address - left_address < left_bytes;
+    }
+    return left_address - right_address < right_bytes;
+}
+
 uint64_t absolute_i32(int32_t value) {
     const int64_t wide = static_cast<int64_t>(value);
     return wide < 0 ? static_cast<uint64_t>(-wide)
@@ -154,7 +176,10 @@ ox_status scale_q15_shift_add_round_even(
         ++quotient;
     }
 
-    if (quotient > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+    const uint64_t signed_limit = negative
+        ? static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) + 1u
+        : static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+    if (quotient > signed_limit) {
         return OX_EOVERFLOW;
     }
     const int64_t signed_value = negative
@@ -195,7 +220,7 @@ uint32_t oxcore_abi_version(void) {
 }
 
 const char *oxcore_version(void) {
-    return "OxCore 0.1.0";
+    return "OxCore 0.2.0";
 }
 
 const char *ox_status_name(ox_status status) {
@@ -214,6 +239,8 @@ const char *ox_status_name(ox_status status) {
             return "reserved Mirror-63 code";
         case OX_ENUMERIC:
             return "numeric failure";
+        case OX_EALIAS:
+            return "overlapping input/output buffers";
         default:
             return "unknown OxCore status";
     }
@@ -474,7 +501,18 @@ ox_status ox_linear_mirror63_acc_i8(
         return OX_EOVERFLOW;
     }
 
+    const size_t input_count = batch * in_features;
     const size_t weight_count = out_features * blocks_per_row;
+    const size_t output_count = batch * out_features;
+    if (byte_count_overflows(output_count, sizeof(int64_t))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t input_bytes = input_count * sizeof(int8_t);
+    const size_t output_bytes = output_count * sizeof(int64_t);
+    if (ranges_overlap(output, output_bytes, input, input_bytes) ||
+        ranges_overlap(output, output_bytes, packed_weights, weight_count)) {
+        return OX_EALIAS;
+    }
     const ox_status validation =
         validate_mirror63_weight_array(packed_weights, weight_count);
     if (validation != OX_OK) {
@@ -539,7 +577,17 @@ ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
         return OX_EOVERFLOW;
     }
 
+    const size_t input_count = time_steps * channels;
     const size_t weight_count = channels * blocks_per_channel;
+    if (byte_count_overflows(input_count, sizeof(int64_t))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t input_bytes = input_count * sizeof(int8_t);
+    const size_t output_bytes = input_count * sizeof(int64_t);
+    if (ranges_overlap(output, output_bytes, input, input_bytes) ||
+        ranges_overlap(output, output_bytes, packed_weights, weight_count)) {
+        return OX_EALIAS;
+    }
     const ox_status validation =
         validate_mirror63_weight_array(packed_weights, weight_count);
     if (validation != OX_OK) {
@@ -608,38 +656,52 @@ ox_status ox_ssm_scan_q15_i32(
 
     const size_t state_count = batch * channels;
     const size_t value_count = time_steps * state_count;
-
-    uint64_t max_initial = 0u;
-    for (size_t index = 0u; index < state_count; ++index) {
-        const uint64_t magnitude = absolute_i32(initial_state[index]);
-        if (magnitude > max_initial) {
-            max_initial = magnitude;
-        }
+    if (byte_count_overflows(state_count, sizeof(int32_t)) ||
+        byte_count_overflows(value_count, sizeof(int32_t)) ||
+        byte_count_overflows(value_count, sizeof(uint16_t))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t state_bytes = state_count * sizeof(int32_t);
+    const size_t values_bytes = value_count * sizeof(int32_t);
+    const size_t decay_bytes = value_count * sizeof(uint16_t);
+    if (ranges_overlap(all_states, values_bytes, initial_state, state_bytes) ||
+        ranges_overlap(all_states, values_bytes, injection, values_bytes) ||
+        ranges_overlap(all_states, values_bytes, decay_q15, decay_bytes) ||
+        ranges_overlap(all_states, values_bytes, final_state, state_bytes) ||
+        ranges_overlap(final_state, state_bytes, initial_state, state_bytes) ||
+        ranges_overlap(final_state, state_bytes, injection, values_bytes) ||
+        ranges_overlap(final_state, state_bytes, decay_q15, decay_bytes)) {
+        return OX_EALIAS;
     }
 
-    uint64_t max_injection = 0u;
     for (size_t index = 0u; index < value_count; ++index) {
         if (decay_q15[index] > 32768u) {
             return OX_EINVAL;
         }
-        const uint64_t magnitude = absolute_i32(injection[index]);
-        if (magnitude > max_injection) {
-            max_injection = magnitude;
-        }
     }
 
-    /* Conservative bound: |decay| <= 1 and nearest-even rounding of a
-       nonnegative scale in [0,1] cannot increase the absolute integer state.
-       Reject before writing any output. */
-    const uint64_t int32_limit =
-        static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
-    if (max_initial > int32_limit) {
-        return OX_EOVERFLOW;
-    }
-    if (max_injection != 0u &&
-        static_cast<uint64_t>(time_steps) >
-            (int32_limit - max_initial) / max_injection) {
-        return OX_EOVERFLOW;
+    /* Exact dry run: validate every recurrence before touching either output.
+       This accepts safe cancellation/decay patterns that a global worst-case
+       bound would reject, while guaranteeing that execution cannot overflow. */
+    for (size_t index = 0u; index < state_count; ++index) {
+        int32_t current = initial_state[index];
+        for (size_t time = 0u; time < time_steps; ++time) {
+            const size_t value_index = time * state_count + index;
+            int32_t decayed = 0;
+            const ox_status status = scale_q15_shift_add_round_even(
+                current, decay_q15[value_index], &decayed
+            );
+            if (status != OX_OK) {
+                return status;
+            }
+            const int64_t updated = static_cast<int64_t>(decayed) +
+                                    static_cast<int64_t>(injection[value_index]);
+            if (updated < std::numeric_limits<int32_t>::min() ||
+                updated > std::numeric_limits<int32_t>::max()) {
+                return OX_EOVERFLOW;
+            }
+            current = static_cast<int32_t>(updated);
+        }
     }
 
     for (size_t index = 0u; index < state_count; ++index) {
@@ -680,6 +742,15 @@ ox_status ox_lut_u8_i16(
         length == 0u) {
         return OX_EINVAL;
     }
+    if (byte_count_overflows(length, sizeof(int16_t))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t output_bytes = length * sizeof(int16_t);
+    constexpr size_t table_bytes = 256u * sizeof(int16_t);
+    if (ranges_overlap(output, output_bytes, indices, length) ||
+        ranges_overlap(output, output_bytes, table, table_bytes)) {
+        return OX_EALIAS;
+    }
     for (size_t index = 0u; index < length; ++index) {
         output[index] = table[indices[index]];
     }
@@ -697,6 +768,19 @@ ox_status ox_top1_i16(
         selected_score == nullptr || batch == 0u || experts == 0u ||
         experts > 65536u || size_product_overflows(batch, experts)) {
         return OX_EINVAL;
+    }
+    const size_t score_count = batch * experts;
+    if (byte_count_overflows(score_count, sizeof(int16_t)) ||
+        byte_count_overflows(batch, sizeof(uint16_t))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t score_bytes = score_count * sizeof(int16_t);
+    const size_t index_bytes = batch * sizeof(uint16_t);
+    const size_t value_bytes = batch * sizeof(int16_t);
+    if (ranges_overlap(selected_expert, index_bytes, scores, score_bytes) ||
+        ranges_overlap(selected_score, value_bytes, scores, score_bytes) ||
+        ranges_overlap(selected_expert, index_bytes, selected_score, value_bytes)) {
+        return OX_EALIAS;
     }
 
     for (size_t row = 0u; row < batch; ++row) {
@@ -720,8 +804,8 @@ ox_status ox_fwht_i64(int64_t *values, size_t length) {
     if (values == nullptr || length == 0u || !is_power_of_two(length)) {
         return OX_EINVAL;
     }
-    if (length >
-        static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
+    if (byte_count_overflows(length, sizeof(int64_t)) ||
+        length > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
         return OX_EOVERFLOW;
     }
 
@@ -821,6 +905,14 @@ ox_status ox_normalize_f32(
     if (input == nullptr || output == nullptr || length == 0u ||
         !std::isfinite(epsilon) || epsilon <= 0.0f) {
         return OX_EINVAL;
+    }
+    if (byte_count_overflows(length, sizeof(float))) {
+        return OX_EOVERFLOW;
+    }
+    const size_t buffer_bytes = length * sizeof(float);
+    if (input != output &&
+        ranges_overlap(input, buffer_bytes, output, buffer_bytes)) {
+        return OX_EALIAS;
     }
 
     double sum_squares = 0.0;
