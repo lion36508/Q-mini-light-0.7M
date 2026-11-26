@@ -83,6 +83,29 @@ OXCORE_API ox_status ox_mirror63_dot_i8(
     int64_t *out_scaled_accumulator
 );
 
+/* Input: [batch, in_features]. Packed rows: [out_features, ceil(in_features/3)].
+ * Output: [batch, out_features]. Returns the unscaled integer numerator. */
+OXCORE_API ox_status ox_linear_mirror63_acc_i8(
+    const int8_t *input,
+    const uint8_t *packed_weights,
+    size_t batch,
+    size_t in_features,
+    size_t out_features,
+    int64_t *output
+);
+
+/* Causal depthwise input/output: contiguous [time_steps, channels].
+ * Weight bytes: [channels, ceil(kernel_size/3)]. Tap 0 is oldest; final tap
+ * multiplies the current time step. Missing left-context is exact zero pad. */
+OXCORE_API ox_status ox_causal_depthwise_conv_mirror63_acc_i8(
+    const int8_t *input,
+    size_t time_steps,
+    size_t channels,
+    const uint8_t *packed_weights,
+    size_t kernel_size,
+    int64_t *output
+);
+
 OXCORE_API ox_status ox_fwht_i64(int64_t *values, size_t length);
 OXCORE_API ox_status ox_sinkhorn4(
     const double logits[16], double out_matrix[16], uint32_t iterations
