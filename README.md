@@ -7,7 +7,7 @@ A small, text-only language-model research repository. It currently contains **t
 | Model implementation | Code | Current status |
 |---|---|---|
 | Q-Mini Light Legacy | `qmini/` | 705,742-parameter reference profile; Q2-v2 weights; preserve its existing checkpoints and tokenizer |
-| Q-Mini Add/Sub | `qmini_addsub/` | 760,340-parameter experimental profile; independent training/data/tokenizer/checkpoint format; real assistant quality remains unverified |
+| Q-Mini Add/Sub | `qmini_addsub/` | Active Colab profile: 1,985,684 parameters at vocabulary size 1,024, with an enforced hard ceiling of 2,000,000; independent data/tokenizer/checkpoint format; real assistant quality remains unverified |
 
 These are separate code paths and must not share checkpoints, tokenizers, datasets or training outputs. They are still stored in one GitHub repository; the repository split is not yet complete.
 
@@ -19,7 +19,7 @@ Legacy code, checkpoints and Drive data must be preserved during cleanup and mig
 
 ## Q-Mini Add/Sub
 
-The Add/Sub implementation is in `qmini_addsub/`. Its default configuration uses a 1,024-token vocabulary, width 96, four blocks, two Top-1 experts and a 512-token context. The model's five-symbol weight alphabet is `{-1.5, -0.5, 0, +0.5, +1.5}`, so fixed-width storage uses three bits per weight.
+The Add/Sub implementation is in `qmini_addsub/`. The active Colab profile is `configs/qmini_addsub_2m.json`: width 128, hidden width 448, four blocks, two Top-1 experts and a 512-token context. At vocabulary size 1,024 it has exactly 1,985,684 trainable parameters. The actual BPE vocabulary may be smaller, so the final count is recalculated after tokenizer construction. Config validation and model construction both reject a graph above 2,000,000 parameters. The model's five-symbol weight alphabet is `{-1.5, -0.5, 0, +0.5, +1.5}`, so fixed-width storage uses three bits per weight.
 
 The training model uses PyTorch floating-point/autograd operations. The packed `.qma` archive is a verified weight container with float32 auxiliary tensors; it is **not** a complete integer-only inference engine. Optional WaveBit-HSRA is an experimental mode of this same Add/Sub model, disabled unless explicitly enabled. It is not a third model.
 
@@ -35,7 +35,7 @@ See [Colab entry points](colab/README.md) and [Add/Sub implementation notes](qmi
 
 ## Scope and non-claims
 
-The active configuration set is limited to the legacy Light profile and the small CI smoke profile. Parameter count alone does not establish training progress or assistant capability.
+The active Colab Add/Sub route uses the explicit 2M-capped profile and a separate Drive workspace (`trainability_addsub_2m_v1`) so earlier Add/Sub runs remain untouched. Parameter count alone does not establish training progress or assistant capability.
 
 Do not claim general reasoning, factuality, Android deployment, complete integer-only inference or speed gains without independent held-out evaluation and measurements on the target device. CI does not launch full training.
 
