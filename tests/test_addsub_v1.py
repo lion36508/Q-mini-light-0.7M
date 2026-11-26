@@ -516,6 +516,33 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     resumed_pretrain_checkpoint = resumed_run_dir / "checkpoint-step-000000002.pt"
     assert final_pretrain_checkpoint.is_file()
     assert resumed_pretrain_checkpoint.is_file()
+
+    # A notebook may skip a completed stage only after a read-only check binds
+    # its exact checkpoint, dataset, tokenizer, configuration and metrics.
+    from qmini_addsub.train import sha256_file
+    pretrain_metrics = output_dir / "metrics.jsonl"
+    pretrain_metrics_before = sha256_file(pretrain_metrics)
+    verified_pretrain = train_from_scratch(
+        steps=2,
+        resume=final_pretrain_checkpoint,
+        validate_only=True,
+        **common,
+    )
+    assert verified_pretrain["status"] == "validated"
+    assert verified_pretrain["step"] == 2
+    assert sha256_file(pretrain_metrics) == pretrain_metrics_before
+    with pytest.raises(ValueError, match="incompatible with the current"):
+        train_from_scratch(
+            steps=2,
+            resume=final_pretrain_checkpoint,
+            validate_only=True,
+            config=AddSubConfig(
+                vocab_size=300, d_model=32, d_hidden=48, n_layers=1,
+                n_experts=2, kernel_size=3, max_context=64, dropout=0.0,
+                seed=12345,
+            ),
+            **{key: value for key, value in common.items() if key != "config"},
+        )
     recovered_metric_steps = [
         json.loads(line)["step"]
         for line in (resumed_run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
@@ -656,6 +683,28 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     resumed_sft_checkpoint = resumed_sft_dir / "sft-checkpoint-step-000000002.pt"
     full_sft_checkpoint = tmp_path / "sft" / "sft-checkpoint-step-000000002.pt"
     assert resumed_sft_checkpoint.is_file()
+
+    sft_metrics = tmp_path / "sft" / "sft_metrics.jsonl"
+    sft_metrics_before = sha256_file(sft_metrics)
+    verified_sft = fine_tune_from_addsub_checkpoint(
+        base_checkpoint=final_pretrain_checkpoint,
+        tokenizer_path=tokenizer_path,
+        train_jsonl=sft_train,
+        valid_jsonl=sft_valid,
+        test_jsonl=sft_test,
+        output_dir=tmp_path / "sft",
+        steps=2,
+        batch_size=1,
+        save_every=1,
+        device_name="cpu",
+        seed=43,
+        resume=full_sft_checkpoint,
+        validate_only=True,
+    )
+    assert verified_sft["status"] == "validated"
+    assert verified_sft["step"] == 2
+    assert sha256_file(sft_metrics) == sft_metrics_before
+
     recovered_sft_metric_steps = [
         json.loads(line)["step"]
         for line in (resumed_sft_dir / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
@@ -2186,6 +2235,9 @@ def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
     assert "qmini_addsub.readiness" in code
     assert "'--checkpoint'" in code
     assert "metrics_filename='metrics.jsonl'" in code
+    assert "verify_command" in code
+    assert "validate-only" in code
+    assert "passed full compatibility and metrics validation" in code
     assert "sorted(PRETRAIN_DIR.glob" not in code
     assert "sorted(SFT_DIR.glob" not in code
 
