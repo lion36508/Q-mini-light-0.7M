@@ -1,5 +1,6 @@
 #include "oxcore.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -32,7 +33,7 @@ size_t dtype_size(uint32_t dtype) {
     }
 }
 
-int balanced_digit(int value) {
+constexpr int balanced_digit(int value) {
     int remainder = value % 5;
     if (remainder > 2) {
         remainder -= 5;
@@ -40,6 +41,28 @@ int balanced_digit(int value) {
         remainder += 5;
     }
     return remainder;
+}
+
+constexpr auto make_balanced_triplet_lookup() {
+    std::array<std::array<int8_t, 3>, 125> table{};
+    for (int value = -62; value <= 62; ++value) {
+        const int q2 = balanced_digit(value);
+        const int quotient2 = (value - q2) / 5;
+        const int q1 = balanced_digit(quotient2);
+        const int q0 = (quotient2 - q1) / 5;
+        table[static_cast<size_t>(value + 62)] = {
+            static_cast<int8_t>(q0),
+            static_cast<int8_t>(q1),
+            static_cast<int8_t>(q2)
+        };
+    }
+    return table;
+}
+
+constexpr auto kBalancedTripletLookup = make_balanced_triplet_lookup();
+
+int add_five(int value) {
+    return value + value + value + value + value;
 }
 
 ox_status decode_mirror63(uint8_t code, int q[3], uint8_t *octave) {
@@ -58,22 +81,16 @@ ox_status decode_mirror63(uint8_t code, int q[3], uint8_t *octave) {
     }
 
     const int signed_value = negative ? -magnitude : magnitude;
-    const int q2 = balanced_digit(signed_value);
-    const int quotient2 = (signed_value - q2) / 5;
-    const int q1 = balanced_digit(quotient2);
-    const int q0 = (quotient2 - q1) / 5;
-    if (q0 < -2 || q0 > 2 || q1 < -2 || q1 > 2 || q2 < -2 || q2 > 2) {
-        return OX_ENUMERIC;
-    }
-
-    q[0] = q0;
-    q[1] = q1;
-    q[2] = q2;
+    const auto &triplet =
+        kBalancedTripletLookup[static_cast<size_t>(signed_value + 62)];
+    q[0] = static_cast<int>(triplet[0]);
+    q[1] = static_cast<int>(triplet[1]);
+    q[2] = static_cast<int>(triplet[2]);
     *octave = (code & kOctaveMask) != 0u ? 1u : 0u;
     return OX_OK;
 }
 
-int64_t multiply_by_small_integer(int value, int8_t activation) {
+int64_t scale_by_small_integer_additive(int value, int8_t activation) {
     const int64_t x = static_cast<int64_t>(activation);
     switch (value) {
         case -2:
@@ -275,9 +292,10 @@ ox_status ox_mirror63_pack_triplet(
         return OX_EINVAL;
     }
 
+    const int q0_value = static_cast<int>(q0);
+    const int q1_value = static_cast<int>(q1);
     const int value =
-        25 * static_cast<int>(q0) +
-        5 * static_cast<int>(q1) +
+        add_five(add_five(q0_value)) + add_five(q1_value) +
         static_cast<int>(q2);
     const int magnitude = value < 0 ? -value : value;
     uint8_t code = static_cast<uint8_t>(magnitude);
@@ -341,9 +359,9 @@ ox_status ox_mirror63_dot_i8(
 
         int64_t contribution = 0;
         const size_t offset = block * 3u;
-        contribution += multiply_by_small_integer(q[0], activations[offset]);
-        contribution += multiply_by_small_integer(q[1], activations[offset + 1u]);
-        contribution += multiply_by_small_integer(q[2], activations[offset + 2u]);
+        contribution += scale_by_small_integer_additive(q[0], activations[offset]);
+        contribution += scale_by_small_integer_additive(q[1], activations[offset + 1u]);
+        contribution += scale_by_small_integer_additive(q[2], activations[offset + 2u]);
         if (octave != 0u) {
             contribution += contribution;
         }
