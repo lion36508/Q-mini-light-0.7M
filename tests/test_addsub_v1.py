@@ -1307,7 +1307,7 @@ def test_custom_dataset_import_refuses_overwrite_without_explicit_flag(tmp_path)
 
 def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(tmp_path):
     from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
-    from qmini_addsub.train import CHECKPOINT_FORMAT
+    from qmini_addsub.sft import SFT_FORMAT
 
     config = AddSubConfig(
         vocab_size=300,
@@ -1329,8 +1329,9 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
     checkpoint_path = tmp_path / "trained-addsub.pt"
     torch.save(
         {
-            "format": CHECKPOINT_FORMAT,
+            "format": SFT_FORMAT,
             "step": 1,
+            "base_sha256": "1" * 64,
             "config": config.to_dict(),
             "model": original.state_dict(),
             "tokenizer_sha256": tokenizer_sha,
@@ -1764,6 +1765,8 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     )
     assert summary["test_records"] == 1
     assert summary["checkpoint_sha256"] == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    assert summary["checkpoint_format"] == SFT_FORMAT
+    assert summary["base_checkpoint_sha256"] == "1" * 64
     assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     assert (output_dir / "heldout_responses.jsonl").is_file()
     assert (output_dir / "heldout_summary.json").is_file()
