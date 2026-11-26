@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -19,6 +20,7 @@ from qmini_addsub.initialize import (
     initialize_model_artifacts,
     load_initial_model_checkpoint,
     verify_model_bundle,
+    verify_self_contained_model_source,
 )
 from qmini_addsub.model import AddSubLanguageModel
 
@@ -51,11 +53,42 @@ def test_model_first_initialization_creates_complete_untrained_bundle(tmp_path: 
         "tokenizer.json",
         "model_config.json",
         "initial_model.pt",
+        "parameter_layout.json",
         "model_manifest.json",
         "initialization_report.json",
         "MODEL_CARD.md",
     ):
         assert (artifacts / name).is_file()
+
+    source_root = artifacts / "source_code"
+    assert (source_root / "qmini_addsub" / "model.py").is_file()
+    assert (source_root / "qmini_addsub" / "train.py").is_file()
+    assert (source_root / "qmini_addsub" / "generate.py").is_file()
+    assert (source_root / "qmini_addsub" / "runtime.py").is_file()
+    assert (source_root / "qmini" / "__init__.py").is_file()
+    assert (source_root / "scripts" / "prepare_qmini_addsub_data.py").is_file()
+    assert (source_root / "configs" / "qmini_addsub_2m.json").is_file()
+    source_manifest = json.loads(
+        (source_root / "source_manifest.json").read_text(encoding="utf-8")
+    )
+    assert source_manifest["python_file_count"] > 20
+    assert result["source_verification"]["isolated_source_import"] is True
+    assert result["source_verification"]["model_bundle_verified"] is True
+    assert result["source_verification"]["source_package"].startswith(str(source_root))
+    persisted_manifest = json.loads(
+        (artifacts / "model_manifest.json").read_text(encoding="utf-8")
+    )
+    assert persisted_manifest["source_verification"]["isolated_source_import"] is True
+    assert len(list((source_root / "tests").glob("*.py"))) > 0
+
+    layout = json.loads(
+        (artifacts / "parameter_layout.json").read_text(encoding="utf-8")
+    )
+    assert layout["parameter_count"] == result["parameter_count"]
+    assert layout["parameters"]
+    assert sum(entry["numel"] for entry in layout["parameters"]) == result["parameter_count"]
+    assert layout["parameters"][0]["flat_offset_start"] == 0
+    assert layout["parameters"][-1]["flat_offset_end"] == result["parameter_count"]
 
     assert (root / "data").is_dir()
     assert not any((root / "data").iterdir())
@@ -83,6 +116,9 @@ def test_model_first_initialization_creates_complete_untrained_bundle(tmp_path: 
     )
     assert loaded_sha == result["initial_model_sha256"]
     assert verify_model_bundle(root)["parameter_count"] == result["parameter_count"]
+    independent = verify_self_contained_model_source(root)
+    assert independent["isolated_source_import"] is True
+    assert independent["parameter_count"] == result["parameter_count"]
 
 
 def test_model_first_initialization_is_idempotent_and_preserves_existing_bundle(tmp_path: Path) -> None:
@@ -210,3 +246,42 @@ def test_pretraining_loads_the_exact_saved_model_first_weights(tmp_path: Path) -
     assert result["initial_model_sha256"] == initial_sha
     assert checkpoint["run_contract"]["initial_model_sha256"] == initial_sha
     assert checkpoint["step"] == 1
+
+
+def test_model_first_and_training_colab_use_the_saved_source_bundle() -> None:
+    model_first_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab" / "QMini_AddSub_2M_Model_First.ipynb"
+    )
+    training_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab" / "QMini_AddSub_2M_One_Click.ipynb"
+    )
+    model_first = json.loads(model_first_path.read_text(encoding="utf-8"))
+    training = json.loads(training_path.read_text(encoding="utf-8"))
+
+    model_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in model_first["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    training_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in training["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    ast.parse(model_code, filename=str(model_first_path))
+    ast.parse(training_code, filename=str(training_path))
+
+    model_first_markdown = "".join(model_first["cells"][0].get("source", []))
+    assert "source_root=REPO_DIR" in model_code
+    assert "parameter_layout.json" in model_code
+    assert "source_code" in model_code
+    assert "does not download datasets" in model_first_markdown
+
+    assert "SOURCE_CODE_DIR = ARTIFACT_DIR / \"source_code\"" in training_code
+    assert "shutil.copytree(SOURCE_CODE_DIR, REPO_DIR" in training_code
+    assert "git clone" not in training_code
+    assert "git fetch" not in training_code
+    assert "source_root=REPO_DIR" in training_code
+    assert "--initial-model" in training_code
