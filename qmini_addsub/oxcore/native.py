@@ -74,6 +74,28 @@ def _as_uint8(values: Sequence[int]) -> ctypes.Array:
     return (ctypes.c_uint8 * len(checked))(*checked)
 
 
+def _as_int32(values: Sequence[int]) -> ctypes.Array:
+    checked = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("SSM states and injections must be integers.")
+        if not -(2**31) <= value <= 2**31 - 1:
+            raise ValueError("SSM states and injections must fit signed int32.")
+        checked.append(value)
+    return (ctypes.c_int32 * len(checked))(*checked)
+
+
+def _as_uint16(values: Sequence[int]) -> ctypes.Array:
+    checked = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("Q15 decay coefficients must be integers.")
+        if not 0 <= value <= 65535:
+            raise ValueError("Q15 decay coefficients must fit uint16.")
+        checked.append(value)
+    return (ctypes.c_uint16 * len(checked))(*checked)
+
+
 class OxCoreNative:
     """Explicit handle to one compiled OxCore shared library."""
 
@@ -156,6 +178,13 @@ class OxCoreNative:
             ctypes.POINTER(ctypes.c_int64)
         ]
         lib.ox_causal_depthwise_conv_mirror63_acc_i8.restype = ctypes.c_int
+        lib.ox_ssm_scan_q15_i32.argtypes = [
+            ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_uint16), ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.c_size_t, ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_int32)
+        ]
+        lib.ox_ssm_scan_q15_i32.restype = ctypes.c_int
 
         lib.ox_fwht_i64.argtypes = [
             ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t
@@ -305,6 +334,69 @@ class OxCoreNative:
             [int(output[time * channels + channel]) for channel in range(channels)]
             for time in range(time_steps)
         ]
+
+    def ssm_scan_q15_i32(
+        self,
+        initial_state: Sequence[Sequence[int]],
+        injection: Sequence[Sequence[Sequence[int]]],
+        decay_q15: Sequence[Sequence[Sequence[int]]],
+    ) -> tuple[list[list[list[int]]], list[list[int]]]:
+        """Run a multiply-free Q15 diagonal SSM recurrence.
+
+        initial_state: [batch, channels]
+        injection/decay_q15: [time, batch, channels]
+        decay is unsigned Q15 in [0, 32768]. Output contains every state and
+        the final cache, both int32. Q15 scaling uses shift-add and
+        round-to-nearest-even; conservative overflow is rejected before writes.
+        """
+        if not initial_state or not initial_state[0]:
+            raise ValueError("SSM initial state must have non-empty batch and channels.")
+        batch = len(initial_state)
+        channels = len(initial_state[0])
+        if any(len(row) != channels for row in initial_state):
+            raise ValueError("SSM initial state must be rectangular.")
+        if not injection or len(injection) != len(decay_q15):
+            raise ValueError("SSM injection and decay need matching non-empty time axes.")
+        time_steps = len(injection)
+        for name, values in (("injection", injection), ("decay_q15", decay_q15)):
+            if any(len(step) != batch for step in values):
+                raise ValueError(f"SSM {name} batch dimension does not match initial state.")
+            if any(len(row) != channels for step in values for row in step):
+                raise ValueError(f"SSM {name} channel dimension does not match initial state.")
+
+        initial = _as_int32([value for row in initial_state for value in row])
+        injected = _as_int32(
+            [value for step in injection for row in step for value in row]
+        )
+        decay = _as_uint16(
+            [value for step in decay_q15 for row in step for value in row]
+        )
+        state_count = batch * channels
+        output = (ctypes.c_int32 * (time_steps * state_count))()
+        final_state = (ctypes.c_int32 * state_count)()
+        status = self._lib.ox_ssm_scan_q15_i32(
+            initial, injected, decay, time_steps, batch, channels,
+            output, final_state
+        )
+        self._check(status, "Q15 SSM recurrence")
+        all_states = [
+            [
+                [
+                    int(output[(time * batch + row) * channels + channel])
+                    for channel in range(channels)
+                ]
+                for row in range(batch)
+            ]
+            for time in range(time_steps)
+        ]
+        final = [
+            [
+                int(final_state[row * channels + channel])
+                for channel in range(channels)
+            ]
+            for row in range(batch)
+        ]
+        return all_states, final
 
     def fwht_i64(self, values: Sequence[int]) -> list[int]:
         if not values:
