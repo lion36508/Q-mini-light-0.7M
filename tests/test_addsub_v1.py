@@ -463,6 +463,35 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     for name, tensor in full_state["model"].items():
         assert torch.equal(tensor, resumed_state["model"][name]), name
 
+    # Extending the horizon is opt-in and keeps the existing run lineage intact.
+    extended_pretrain_dir = tmp_path / "extended-pretrain"
+    extended_pretrain_dir.mkdir()
+    step_two = resumed_run_dir / "checkpoint-step-000000002.pt"
+    shutil.copy2(step_two, extended_pretrain_dir / step_two.name)
+    shutil.copy2(resumed_run_dir / "metrics.jsonl", extended_pretrain_dir / "metrics.jsonl")
+    extended_common = {**common, "output_dir": extended_pretrain_dir}
+    with pytest.raises(ValueError, match="extend_schedule=True"):
+        train_from_scratch(
+            steps=3, resume=extended_pretrain_dir / step_two.name, **extended_common
+        )
+    extended_result = train_from_scratch(
+        steps=3, resume=extended_pretrain_dir / step_two.name,
+        extend_schedule=True, **extended_common,
+    )
+    assert extended_result["schedule_total_steps"] == 3
+    extended_state = torch.load(
+        extended_pretrain_dir / "checkpoint-step-000000003.pt",
+        map_location="cpu", weights_only=True,
+    )
+    assert extended_state["step"] == 3
+    assert extended_state["schedule_total_steps"] == 3
+    pretrain_metrics = [
+        json.loads(line) for line in
+        (extended_pretrain_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["step"] for row in pretrain_metrics] == [1, 2, 3]
+    assert [row["schedule_total_steps"] for row in pretrain_metrics] == [2, 2, 3]
+
     def write_conversation(path):
         record = {
             "source": "databricks/databricks-dolly-15k",
@@ -550,6 +579,47 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     resumed_sft_state = torch.load(resumed_sft_checkpoint, map_location="cpu", weights_only=True)
     for name, tensor in full_sft_state["model"].items():
         assert torch.equal(tensor, resumed_sft_state["model"][name]), name
+
+    extended_sft_dir = tmp_path / "sft-extended"
+    extended_sft_dir.mkdir()
+    step_two_sft = resumed_sft_dir / "sft-checkpoint-step-000000002.pt"
+    shutil.copy2(step_two_sft, extended_sft_dir / step_two_sft.name)
+    shutil.copy2(
+        resumed_sft_dir / "sft_metrics.jsonl",
+        extended_sft_dir / "sft_metrics.jsonl",
+    )
+    extended_sft_args = {
+        "base_checkpoint": final_pretrain_checkpoint,
+        "tokenizer_path": tokenizer_path,
+        "train_jsonl": sft_train,
+        "valid_jsonl": sft_valid,
+        "test_jsonl": sft_test,
+        "output_dir": extended_sft_dir,
+        "steps": 3,
+        "batch_size": 1,
+        "save_every": 1,
+        "device_name": "cpu",
+        "seed": 43,
+        "resume": extended_sft_dir / step_two_sft.name,
+    }
+    with pytest.raises(ValueError, match="extend_schedule=True"):
+        fine_tune_from_addsub_checkpoint(**extended_sft_args)
+    extended_sft_result = fine_tune_from_addsub_checkpoint(
+        **extended_sft_args, extend_schedule=True
+    )
+    assert extended_sft_result["schedule_total_steps"] == 3
+    extended_sft_state = torch.load(
+        extended_sft_dir / "sft-checkpoint-step-000000003.pt",
+        map_location="cpu", weights_only=True,
+    )
+    assert extended_sft_state["step"] == 3
+    assert extended_sft_state["schedule_total_steps"] == 3
+    extended_sft_metrics = [
+        json.loads(line) for line in
+        (extended_sft_dir / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["step"] for row in extended_sft_metrics] == [2, 3]
+    assert [row["schedule_total_steps"] for row in extended_sft_metrics] == [2, 3]
 
 
 def test_addsub_repetition_penalty_applies_before_greedy_choice():
@@ -1974,3 +2044,69 @@ def test_addsub_checkpoint_resolver_uses_sft_metrics_filename_and_fails_closed(t
     (tmp_path / "sft_metrics.jsonl").write_text('{"step": 10}\\n', encoding="utf-8")
     with pytest.raises(FileNotFoundError, match="metrics file exists but no checkpoint"):
         resolve_checkpoint(tmp_path, "sft-checkpoint", "sft_metrics.jsonl")
+
+
+
+def test_metrics_reconciliation_accepts_explicit_horizon_growth(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    static_contract = {"batch_size": 1, "seed": 9}
+    rows = [
+        {
+            "step": 1,
+            "train_sha256": "a" * 64,
+            "run_contract": {**static_contract, "planned_steps": 2},
+            "schedule_total_steps": 2,
+        },
+        {
+            "step": 2,
+            "train_sha256": "a" * 64,
+            "run_contract": static_contract,
+            "schedule_total_steps": 2,
+        },
+        {
+            "step": 3,
+            "train_sha256": "a" * 64,
+            "run_contract": static_contract,
+            "schedule_total_steps": 5,
+        },
+    ]
+    metrics.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    discarded = reconcile_metrics_file(
+        str(metrics),
+        {"train_sha256": "a" * 64, "run_contract": static_contract},
+        maximum_committed_step=2,
+        run_name="Pretraining",
+    )
+    kept = [
+        json.loads(line) for line in
+        metrics.read_text(encoding="utf-8").splitlines()
+    ]
+    assert discarded == 1
+    assert [row["step"] for row in kept] == [1, 2]
+
+
+def test_metrics_reconciliation_rejects_decreasing_schedule_horizon(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    contract = {"batch_size": 1, "seed": 9}
+    rows = [
+        {"step": 1, "train_sha256": "a" * 64, "run_contract": contract, "schedule_total_steps": 5},
+        {"step": 2, "train_sha256": "a" * 64, "run_contract": contract, "schedule_total_steps": 4},
+    ]
+    metrics.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="horizon cannot decrease"):
+        reconcile_metrics_file(
+            str(metrics),
+            {"train_sha256": "a" * 64, "run_contract": contract},
+            maximum_committed_step=2,
+            run_name="SFT",
+        )
