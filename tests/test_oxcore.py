@@ -91,6 +91,17 @@ def test_mirror63_python_bridge_rejects_implicit_integer_wrapping(oxcore):
         oxcore.mirror63_dot_i8([256], [0, 0, 0])
 
 
+def test_oxcore_python_bridge_rejects_float_and_boolean_octave_or_fwht_values(oxcore):
+    with pytest.raises(TypeError, match="octave"):
+        oxcore.mirror63_pack((0, 0, 0), octave=1.0)
+    with pytest.raises(TypeError, match="octave"):
+        oxcore.mirror63_pack((0, 0, 0), octave=True)
+    with pytest.raises(TypeError, match="FWHT values must be integers"):
+        oxcore.fwht_i64([1, 2.0])
+    with pytest.raises(TypeError, match="FWHT values must be integers"):
+        oxcore.fwht_i64([1, True])
+
+
 def test_fwht_is_unnormalized_and_invertible_up_to_length(oxcore):
     values = [3, -1, 4, 2, 0, 7, -5, 9]
     transformed = oxcore.fwht_i64(values)
