@@ -1,0 +1,435 @@
+#include "oxcore.h"
+
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
+namespace {
+
+constexpr size_t kMaxArenaAlignment = 4096u;
+constexpr uint8_t kOctaveMask = 0x80u;
+constexpr uint8_t kSignMask = 0x40u;
+constexpr uint8_t kMagnitudeMask = 0x3fu;
+constexpr uint64_t kMirror63MaxAbsAccumulatorPerBlock = 1536u;
+
+bool is_power_of_two(size_t value) {
+    return value != 0u && (value & (value - 1u)) == 0u;
+}
+
+size_t dtype_size(uint32_t dtype) {
+    switch (dtype) {
+        case OX_DTYPE_F32:
+            return sizeof(float);
+        case OX_DTYPE_I8:
+        case OX_DTYPE_U8:
+            return sizeof(uint8_t);
+        case OX_DTYPE_I32:
+            return sizeof(int32_t);
+        case OX_DTYPE_I64:
+            return sizeof(int64_t);
+        default:
+            return 0u;
+    }
+}
+
+int balanced_digit(int value) {
+    int remainder = value % 5;
+    if (remainder > 2) {
+        remainder -= 5;
+    } else if (remainder < -2) {
+        remainder += 5;
+    }
+    return remainder;
+}
+
+ox_status decode_mirror63(uint8_t code, int q[3], uint8_t *octave) {
+    if (code == static_cast<uint8_t>(OXCORE_MIRROR63_SKIP_CODE)) {
+        q[0] = 0;
+        q[1] = 0;
+        q[2] = 0;
+        *octave = 0u;
+        return OX_SKIP;
+    }
+
+    const int magnitude = static_cast<int>(code & kMagnitudeMask);
+    const bool negative = (code & kSignMask) != 0u;
+    if (magnitude == 63 || (negative && magnitude == 0)) {
+        return OX_ERESERVED;
+    }
+
+    const int signed_value = negative ? -magnitude : magnitude;
+    const int q2 = balanced_digit(signed_value);
+    const int quotient2 = (signed_value - q2) / 5;
+    const int q1 = balanced_digit(quotient2);
+    const int q0 = (quotient2 - q1) / 5;
+    if (q0 < -2 || q0 > 2 || q1 < -2 || q1 > 2 || q2 < -2 || q2 > 2) {
+        return OX_ENUMERIC;
+    }
+
+    q[0] = q0;
+    q[1] = q1;
+    q[2] = q2;
+    *octave = (code & kOctaveMask) != 0u ? 1u : 0u;
+    return OX_OK;
+}
+
+int64_t multiply_by_small_integer(int value, int8_t activation) {
+    const int64_t x = static_cast<int64_t>(activation);
+    switch (value) {
+        case -2:
+            return -(x + x);
+        case -1:
+            return -x;
+        case 0:
+            return 0;
+        case 1:
+            return x;
+        case 2:
+            return x + x;
+        default:
+            return 0;
+    }
+}
+
+}  // namespace
+
+extern "C" {
+
+uint32_t oxcore_abi_version(void) {
+    return OXCORE_ABI_VERSION;
+}
+
+const char *oxcore_version(void) {
+    return "OxCore 0.1.0";
+}
+
+const char *ox_status_name(ox_status status) {
+    switch (status) {
+        case OX_OK:
+            return "ok";
+        case OX_SKIP:
+            return "skip";
+        case OX_EINVAL:
+            return "invalid argument";
+        case OX_ECAPACITY:
+            return "arena capacity exceeded";
+        case OX_EOVERFLOW:
+            return "integer or size overflow";
+        case OX_ERESERVED:
+            return "reserved Mirror-63 code";
+        case OX_ENUMERIC:
+            return "numeric failure";
+        default:
+            return "unknown OxCore status";
+    }
+}
+
+ox_status ox_tensor_view_validate(const ox_tensor_view *view) {
+    if (view == nullptr || view->rank > OXCORE_MAX_TENSOR_RANK) {
+        return OX_EINVAL;
+    }
+    if (dtype_size(view->dtype) == 0u) {
+        return OX_EINVAL;
+    }
+
+    uint64_t element_count = 1u;
+    for (uint32_t axis = 0u; axis < view->rank; ++axis) {
+        const uint64_t dimension = view->shape[axis];
+        if (dimension != 0u &&
+            element_count > std::numeric_limits<uint64_t>::max() / dimension) {
+            return OX_EOVERFLOW;
+        }
+        element_count *= dimension;
+    }
+    if (element_count != 0u && view->data == nullptr) {
+        return OX_EINVAL;
+    }
+    return OX_OK;
+}
+
+ox_status ox_arena_init(ox_arena *arena, void *buffer, size_t capacity) {
+    if (arena == nullptr || buffer == nullptr || capacity == 0u) {
+        return OX_EINVAL;
+    }
+    arena->base = static_cast<uint8_t *>(buffer);
+    arena->capacity = capacity;
+    arena->used = 0u;
+    arena->high_water = 0u;
+    return OX_OK;
+}
+
+void ox_arena_reset(ox_arena *arena) {
+    if (arena == nullptr) {
+        return;
+    }
+    arena->used = 0u;
+}
+
+size_t ox_arena_mark(const ox_arena *arena) {
+    return arena == nullptr ? 0u : arena->used;
+}
+
+ox_status ox_arena_rewind(ox_arena *arena, size_t mark) {
+    if (arena == nullptr || arena->base == nullptr || mark > arena->used) {
+        return OX_EINVAL;
+    }
+    arena->used = mark;
+    return OX_OK;
+}
+
+ox_status ox_arena_alloc(
+    ox_arena *arena, size_t size, size_t alignment, void **out
+) {
+    if (out != nullptr) {
+        *out = nullptr;
+    }
+    if (arena == nullptr || arena->base == nullptr || out == nullptr ||
+        size == 0u || !is_power_of_two(alignment) ||
+        alignment > kMaxArenaAlignment) {
+        return OX_EINVAL;
+    }
+
+    const uintptr_t base_address = reinterpret_cast<uintptr_t>(arena->base);
+    if (arena->used > arena->capacity ||
+        base_address > std::numeric_limits<uintptr_t>::max() - arena->used) {
+        return OX_EOVERFLOW;
+    }
+    const uintptr_t current_address = base_address + arena->used;
+    if (current_address >
+        std::numeric_limits<uintptr_t>::max() - (alignment - 1u)) {
+        return OX_EOVERFLOW;
+    }
+    const uintptr_t aligned_address =
+        (current_address + alignment - 1u) &
+        ~static_cast<uintptr_t>(alignment - 1u);
+    const size_t offset = static_cast<size_t>(aligned_address - base_address);
+    if (offset > arena->capacity || size > arena->capacity - offset) {
+        return OX_ECAPACITY;
+    }
+
+    const size_t new_used = offset + size;
+    arena->used = new_used;
+    if (new_used > arena->high_water) {
+        arena->high_water = new_used;
+    }
+    *out = reinterpret_cast<void *>(aligned_address);
+    return OX_OK;
+}
+
+ox_status ox_mirror63_pack_triplet(
+    int8_t q0, int8_t q1, int8_t q2, uint8_t octave, uint8_t *out_code
+) {
+    if (out_code == nullptr || octave > 1u ||
+        q0 < -2 || q0 > 2 || q1 < -2 || q1 > 2 || q2 < -2 || q2 > 2) {
+        return OX_EINVAL;
+    }
+
+    const int value =
+        25 * static_cast<int>(q0) +
+        5 * static_cast<int>(q1) +
+        static_cast<int>(q2);
+    const int magnitude = value < 0 ? -value : value;
+    uint8_t code = static_cast<uint8_t>(magnitude);
+    if (value < 0) {
+        code = static_cast<uint8_t>(code | kSignMask);
+    }
+    if (octave != 0u) {
+        code = static_cast<uint8_t>(code | kOctaveMask);
+    }
+    *out_code = code;
+    return OX_OK;
+}
+
+ox_status ox_mirror63_unpack_triplet(
+    uint8_t code, int8_t out_q[3], uint8_t *out_octave
+) {
+    if (out_q == nullptr || out_octave == nullptr) {
+        return OX_EINVAL;
+    }
+    int q[3] = {0, 0, 0};
+    uint8_t octave = 0u;
+    const ox_status status = decode_mirror63(code, q, &octave);
+    if (status == OX_OK || status == OX_SKIP) {
+        out_q[0] = static_cast<int8_t>(q[0]);
+        out_q[1] = static_cast<int8_t>(q[1]);
+        out_q[2] = static_cast<int8_t>(q[2]);
+        *out_octave = octave;
+    }
+    return status;
+}
+
+ox_status ox_mirror63_dot_i8(
+    const uint8_t *packed_blocks,
+    const int8_t *activations,
+    size_t block_count,
+    int64_t *out_scaled_accumulator
+) {
+    if (out_scaled_accumulator == nullptr ||
+        (block_count != 0u && (packed_blocks == nullptr || activations == nullptr))) {
+        return OX_EINVAL;
+    }
+    if (block_count > std::numeric_limits<size_t>::max() / 3u ||
+        block_count >
+            static_cast<size_t>(std::numeric_limits<int64_t>::max() /
+                                static_cast<int64_t>(kMirror63MaxAbsAccumulatorPerBlock))) {
+        return OX_EOVERFLOW;
+    }
+
+    int64_t accumulator = 0;
+    for (size_t block = 0u; block < block_count; ++block) {
+        int q[3] = {0, 0, 0};
+        uint8_t octave = 0u;
+        const ox_status status =
+            decode_mirror63(packed_blocks[block], q, &octave);
+        if (status == OX_SKIP) {
+            continue;
+        }
+        if (status != OX_OK) {
+            return status;
+        }
+
+        int64_t contribution = 0;
+        const size_t offset = block * 3u;
+        contribution += multiply_by_small_integer(q[0], activations[offset]);
+        contribution += multiply_by_small_integer(q[1], activations[offset + 1u]);
+        contribution += multiply_by_small_integer(q[2], activations[offset + 2u]);
+        if (octave != 0u) {
+            contribution += contribution;
+        }
+        accumulator += contribution;
+    }
+
+    *out_scaled_accumulator = accumulator;
+    return OX_OK;
+}
+
+ox_status ox_fwht_i64(int64_t *values, size_t length) {
+    if (values == nullptr || length == 0u || !is_power_of_two(length)) {
+        return OX_EINVAL;
+    }
+    if (length >
+        static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
+        return OX_EOVERFLOW;
+    }
+
+    uint64_t max_abs = 0u;
+    for (size_t index = 0u; index < length; ++index) {
+        const int64_t value = values[index];
+        const uint64_t magnitude = value < 0
+            ? static_cast<uint64_t>(-(value + 1)) + 1u
+            : static_cast<uint64_t>(value);
+        if (magnitude > max_abs) {
+            max_abs = magnitude;
+        }
+    }
+    const uint64_t safe_limit =
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+        static_cast<uint64_t>(length);
+    if (max_abs > safe_limit) {
+        return OX_EOVERFLOW;
+    }
+
+    for (size_t span = 1u; span < length; span *= 2u) {
+        const size_t group_size = span * 2u;
+        for (size_t base = 0u; base < length; base += group_size) {
+            for (size_t offset = 0u; offset < span; ++offset) {
+                const int64_t left = values[base + offset];
+                const int64_t right = values[base + span + offset];
+                values[base + offset] = left + right;
+                values[base + span + offset] = left - right;
+            }
+        }
+    }
+    return OX_OK;
+}
+
+ox_status ox_sinkhorn4(
+    const double logits[16], double out_matrix[16], uint32_t iterations
+) {
+    if (logits == nullptr || out_matrix == nullptr ||
+        iterations == 0u || iterations > 10000u) {
+        return OX_EINVAL;
+    }
+
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (size_t index = 0u; index < 16u; ++index) {
+        if (!std::isfinite(logits[index])) {
+            return OX_ENUMERIC;
+        }
+        if (logits[index] > maximum) {
+            maximum = logits[index];
+        }
+    }
+
+    double matrix[16] = {};
+    for (size_t index = 0u; index < 16u; ++index) {
+        matrix[index] = std::exp(logits[index] - maximum);
+        if (!std::isfinite(matrix[index])) {
+            return OX_ENUMERIC;
+        }
+    }
+
+    for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
+        for (size_t row = 0u; row < 4u; ++row) {
+            double sum = 0.0;
+            for (size_t column = 0u; column < 4u; ++column) {
+                sum += matrix[row * 4u + column];
+            }
+            if (!std::isfinite(sum) || sum <= 0.0) {
+                return OX_ENUMERIC;
+            }
+            for (size_t column = 0u; column < 4u; ++column) {
+                matrix[row * 4u + column] /= sum;
+            }
+        }
+        for (size_t column = 0u; column < 4u; ++column) {
+            double sum = 0.0;
+            for (size_t row = 0u; row < 4u; ++row) {
+                sum += matrix[row * 4u + column];
+            }
+            if (!std::isfinite(sum) || sum <= 0.0) {
+                return OX_ENUMERIC;
+            }
+            for (size_t row = 0u; row < 4u; ++row) {
+                matrix[row * 4u + column] /= sum;
+            }
+        }
+    }
+
+    for (size_t index = 0u; index < 16u; ++index) {
+        out_matrix[index] = matrix[index];
+    }
+    return OX_OK;
+}
+
+ox_status ox_normalize_f32(
+    const float *input, float *output, size_t length, float epsilon
+) {
+    if (input == nullptr || output == nullptr || length == 0u ||
+        !std::isfinite(epsilon) || epsilon <= 0.0f) {
+        return OX_EINVAL;
+    }
+
+    double sum_squares = 0.0;
+    for (size_t index = 0u; index < length; ++index) {
+        if (!std::isfinite(input[index])) {
+            return OX_ENUMERIC;
+        }
+        const double value = static_cast<double>(input[index]);
+        sum_squares += value * value;
+    }
+    const double denominator = std::sqrt(sum_squares) +
+                               static_cast<double>(epsilon);
+    if (!std::isfinite(denominator) || denominator <= 0.0) {
+        return OX_ENUMERIC;
+    }
+
+    for (size_t index = 0u; index < length; ++index) {
+        output[index] = static_cast<float>(
+            static_cast<double>(input[index]) / denominator
+        );
+    }
+    return OX_OK;
+}
+
+}  // extern "C"
