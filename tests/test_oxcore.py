@@ -81,6 +81,16 @@ def test_mirror63_dot_fails_closed_on_reserved_byte(oxcore):
         oxcore.mirror63_dot_i8([0x7F], [1, 2, 3])
 
 
+def test_mirror63_python_bridge_rejects_implicit_integer_wrapping(oxcore):
+    code = oxcore.mirror63_pack((1, 0, -1))
+    with pytest.raises(ValueError, match="int8 range"):
+        oxcore.mirror63_dot_i8([code], [128, 0, 0])
+    with pytest.raises(TypeError, match="integers"):
+        oxcore.mirror63_dot_i8([code], [1.5, 0, 0])
+    with pytest.raises(ValueError, match="uint8 range"):
+        oxcore.mirror63_dot_i8([256], [0, 0, 0])
+
+
 def test_fwht_is_unnormalized_and_invertible_up_to_length(oxcore):
     values = [3, -1, 4, 2, 0, 7, -5, 9]
     transformed = oxcore.fwht_i64(values)
