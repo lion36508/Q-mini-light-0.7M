@@ -40,7 +40,9 @@ typedef enum ox_dtype {
 } ox_dtype;
 
 typedef struct ox_tensor_view {
-    void *data;
+    void *storage;
+    size_t storage_bytes;
+    size_t offset_bytes;
     uint32_t dtype;
     uint32_t rank;
     uint64_t shape[OXCORE_MAX_TENSOR_RANK];
