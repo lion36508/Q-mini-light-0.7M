@@ -16,7 +16,10 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .data import escape_special_token_literals, normalize_training_text
 from .model import AddSubLanguageModel
-from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
+from .optim import (
+    assert_finite_training_state, build_adamw, cosine_warmup_lr,
+    reconcile_metrics_file, resolve_schedule_total_steps,
+)
 from .wavebit_hsra import validate_wavebit_options
 from .train import CHECKPOINT_FORMAT as PRETRAIN_FORMAT
 from .train import sha256_file
@@ -229,7 +232,10 @@ def fine_tune_from_addsub_checkpoint(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
+    extend_schedule: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(extend_schedule, bool):
+        raise TypeError("extend_schedule must be a boolean.")
     for name, value in (
         ("steps", steps),
         ("batch_size", batch_size),
@@ -319,7 +325,6 @@ def fine_tune_from_addsub_checkpoint(
         torch.cuda.manual_seed_all(seed)
     rng = random.Random(seed)
     run_contract = {
-        "planned_steps": steps,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
         "matrix_weight_decay": 0.01,
@@ -345,20 +350,39 @@ def fine_tune_from_addsub_checkpoint(
         "data_manifest_sha256": data_manifest_sha,
     }
     start_step = 0
+    schedule_total_steps = steps
     if resume is not None:
         checkpoint = torch.load(resume, map_location=device, weights_only=True)
         expected = {
             "format": SFT_FORMAT,
             "config": config.to_dict(),
-            "run_contract": run_contract,
             **hashes,
         }
         mismatch = [key for key, value in expected.items() if checkpoint.get(key) != value]
+        saved_contract = checkpoint.get("run_contract")
+        if not isinstance(saved_contract, dict):
+            mismatch.append("run_contract")
+            saved_contract = {}
+        saved_static_contract = {
+            key: value for key, value in saved_contract.items()
+            if key != "planned_steps"
+        }
+        if saved_static_contract != run_contract:
+            mismatch.append("run_contract")
         if mismatch:
             raise ValueError("Incompatible Add/Sub SFT resume: " + ", ".join(mismatch))
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
+        saved_horizon = checkpoint.get(
+            "schedule_total_steps",
+            saved_contract.get("planned_steps", checkpoint.get("planned_steps")),
+        )
+        if isinstance(saved_horizon, bool) or not isinstance(saved_horizon, int):
+            raise ValueError("SFT checkpoint has no valid saved schedule horizon.")
+        schedule_total_steps = resolve_schedule_total_steps(
+            steps, start_step, saved_horizon, extend_schedule, "SFT"
+        )
         if "torch_rng" not in checkpoint or "python_rng" not in checkpoint:
             raise ValueError(
                 "This SFT checkpoint predates exact RNG resume; start a new v4 SFT run."
@@ -370,9 +394,6 @@ def fine_tune_from_addsub_checkpoint(
                 raise ValueError("CUDA RNG state is missing or device count changed.")
             torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
-    if steps <= start_step:
-        raise ValueError("steps must be greater than the checkpoint's completed step.")
-
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "sft_metrics.jsonl"
     if resume is None and (
@@ -441,7 +462,7 @@ def fine_tune_from_addsub_checkpoint(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
-        current_lr = cosine_warmup_lr(step, steps, learning_rate)
+        current_lr = cosine_warmup_lr(step, schedule_total_steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
         sample_count = min(batch_size, len(train_data))
@@ -489,6 +510,7 @@ def fine_tune_from_addsub_checkpoint(
                 "tokenizer_sha256": hashes["tokenizer_sha256"],
                 "data_manifest_sha256": hashes["data_manifest_sha256"],
                 "run_contract": run_contract,
+                "schedule_total_steps": schedule_total_steps,
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
@@ -498,6 +520,7 @@ def fine_tune_from_addsub_checkpoint(
                 "format": SFT_FORMAT,
                 "step": step,
                 "planned_steps": steps,
+                "schedule_total_steps": schedule_total_steps,
                 "run_contract": run_contract,
                 "config": config.to_dict(),
                 "model": model.state_dict(),
@@ -517,6 +540,7 @@ def fine_tune_from_addsub_checkpoint(
     return {
         "format": SFT_FORMAT,
         "steps": steps,
+        "schedule_total_steps": schedule_total_steps,
         "train_records": len(train_data),
         "validation_records": len(valid_data),
         "test_records": len(test_data),
@@ -545,6 +569,7 @@ def main() -> None:
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     args = parser.parse_args()
     result = fine_tune_from_addsub_checkpoint(
         base_checkpoint=args.base_checkpoint,
@@ -559,6 +584,7 @@ def main() -> None:
         save_every=args.save_every,
         device_name=args.device,
         resume=args.resume,
+        extend_schedule=args.extend_schedule,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
