@@ -62,7 +62,7 @@ def _sha256_json(value: dict[str, Any]) -> str:
 
 
 SOURCE_SNAPSHOT_FORMAT = "qmini-addsub-source-snapshot-v1"
-SOURCE_DIRECTORIES = ("qmini_addsub", "qmini", "scripts")
+SOURCE_DIRECTORIES = ("qmini_addsub", "qmini", "scripts", "tests")
 SOURCE_ROOT_FILES = ("pyproject.toml", "README.md", "configs/qmini_addsub_2m.json")
 SOURCE_EXTENSIONS = {
     ".py", ".cpp", ".cc", ".h", ".hpp", ".json", ".toml",
@@ -100,6 +100,8 @@ def _source_snapshot_files(source_root: Path) -> list[Path]:
         source_root / "qmini" / "__init__.py",
         source_root / "pyproject.toml",
         source_root / "configs" / "qmini_addsub_2m.json",
+        source_root / "tests" / "test_addsub_v1.py",
+        source_root / "tests" / "test_addsub_model_initialization.py",
     }
     missing = sorted(str(path.relative_to(source_root)) for path in required if path not in selected)
     if missing:
@@ -155,6 +157,7 @@ reference generation, evaluation, quantization/export, and OxCore native bridge.
 - qmini_addsub/evaluate.py, export.py and scripts/ — evaluation, export and data/token stream tooling.
 - qmini/ — shared package modules needed by this repository build.
 - configs/qmini_addsub_2m.json — source 2M profile template.
+- tests/ — repository regression and native safety tests, including Add/Sub training/streaming/quantization tests.
 
 ## Run the source package
 
@@ -169,6 +172,10 @@ PyTorch must already be installed. Then, from this folder:
 - Reference chat: python -m qmini_addsub.generate --help
 - Evaluation: python -m qmini_addsub.evaluate --help
 - Packed weight export: python -m qmini_addsub.export --help
+
+To run the focused project tests after installing pytest:
+python -m pip install pytest
+python -m pytest tests/test_addsub_v1.py tests/test_addsub_model_initialization.py
 
 Use the exact artifacts in the parent artifacts folder: tokenizer.json,
 model_config.json, and initial_model.pt. Do not replace the tokenizer or
