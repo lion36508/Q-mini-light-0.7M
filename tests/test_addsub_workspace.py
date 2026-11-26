@@ -19,7 +19,7 @@ def test_existing_default_workspace_fails_closed_without_resume(tmp_path: Path) 
     old_data.parent.mkdir(parents=True)
     old_data.write_text('{"old": true}', encoding="utf-8")
 
-    with pytest.raises(FileExistsError, match="No existing files were deleted"):
+    with pytest.raises(ValueError, match="Workspace contains a symlinked entry"):
         resolve_workspace_root(version_root)
 
     assert old_data.read_text(encoding="utf-8") == '{"old": true}'
