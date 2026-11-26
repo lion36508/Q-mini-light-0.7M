@@ -79,8 +79,8 @@ definition of quantizer scale, clipping range and normalization.
 
 ## Formula 4 — mHC, nGPT and phantom gradients
 
-**Status: 4x4 Sinkhorn and L2 normalization implemented; residual streams and
-all autograd features deferred.**
+**Status: 4x4 Sinkhorn, L2 normalization and a Q15 diagonal SSM recurrence
+primitive implemented; residual-stream mixing and autograd remain deferred.**
 
 For a positive matrix, alternating row/column normalization approximates the
 Birkhoff polytope. A nonnegative doubly-stochastic matrix has spectral norm at
@@ -91,6 +91,21 @@ row/column sums.
 The native normalization primitive computes (u/(\|u\|_2+\epsilon)).
 The proposed residual interpolation followed by normalization places the
 result on the unit sphere, but is not by itself an exact geodesic/Slerp update.
+
+The native SSM cache primitive accepts precomputed Q15 decay coefficients
+(a_t in [0, 32768]) and int32 injection values:
+[
+s_t=\\operatorname{round}_{\\mathrm{even}}(a_t s_{t-1}/2^{15})+b_t.
+]
+Its scaling routine decomposes the coefficient into binary shifts and sums,
+then applies explicit nearest-even rounding; a conservative range bound is
+checked before output writes. It returns all token states and the final cache.
+This is only the diagonal recurrence/update kernel. It does not compute the
+model's drive/decay/gate projections, tanh/sigmoid lookup tables, the
+(1-a_t)drive injection, output projection or residual gating; those tensors
+must still be supplied by a future integer operator pipeline. The floating
+PyTorch state-space path has not been replaced and numerical parity against a
+trained checkpoint has not been established.
 
 Saving only the last (k) recurrent steps is truncated backpropagation through
 time: activation memory is (O(k)), and the gradient is biased by omitted
