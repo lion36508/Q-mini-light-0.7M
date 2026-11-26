@@ -565,6 +565,259 @@ def verify_model_bundle(output_root: str | Path) -> dict[str, Any]:
 
 
 
+
+def _upgrade_legacy_model_bundle(
+    root: Path,
+    source_root: Path,
+    source_commit: str | None,
+) -> dict[str, Any]:
+    """Safely extend the six-file bootstrap bundle without replacing its weights."""
+    artifact_dir = root / "artifacts"
+    paths = _required_artifact_paths(artifact_dir)
+    legacy_keys = ("tokenizer", "config", "initial_model", "manifest", "report", "model_card")
+
+    # A legacy bundle is only eligible when its original completion marker and all
+    # six files are present, regular files, and match the hashes in that marker.
+    for key in legacy_keys:
+        path = paths[key]
+        if path.is_symlink() or not path.is_file():
+            raise FileExistsError(
+                f"Legacy bundle migration requires an intact regular file: {path}"
+            )
+    old_manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    if (
+        old_manifest.get("format") != MODEL_MANIFEST_FORMAT
+        or old_manifest.get("stage") != "initialized_untrained"
+    ):
+        raise ValueError("Existing artifacts are not a recognized step-zero Q-Mini Add/Sub bundle.")
+
+    old_entries = old_manifest.get("files")
+    if not isinstance(old_entries, dict):
+        raise ValueError("Legacy model manifest has no file hash table.")
+    for key in legacy_keys:
+        if key == "manifest":
+            continue
+        path = paths[key]
+        entry = old_entries.get(path.name)
+        if not isinstance(entry, dict):
+            raise ValueError(f"Legacy manifest is missing metadata for {path.name}.")
+        if path.stat().st_size != entry.get("size_bytes"):
+            raise ValueError(f"Legacy model artifact size mismatch: {path.name}")
+        if sha256_file(path) != entry.get("sha256"):
+            raise ValueError(f"Legacy model artifact SHA-256 mismatch: {path.name}")
+
+    tokenizer = Tokenizer.from_file(str(paths["tokenizer"]))
+    tokenizer_sha = sha256_file(paths["tokenizer"])
+    config = AddSubConfig.from_dict(
+        json.loads(paths["config"].read_text(encoding="utf-8"))
+    )
+    for key, expected in EXPECTED_PROFILE.items():
+        if getattr(config, key) != expected:
+            raise ValueError(
+                f"Legacy model profile mismatch for {key}: "
+                f"{getattr(config, key)!r} != {expected!r}"
+            )
+    if tokenizer.get_vocab_size(with_added_tokens=True) != config.vocab_size:
+        raise ValueError("Legacy tokenizer vocabulary does not match its saved model config.")
+    if old_manifest.get("parameter_count") != config.estimated_parameter_count():
+        raise ValueError("Legacy manifest parameter count does not match its saved config.")
+    if old_manifest.get("tokenizer_sha256") != tokenizer_sha:
+        raise ValueError("Legacy manifest tokenizer fingerprint mismatch.")
+    if old_manifest.get("config_sha256") != sha256_file(paths["config"]):
+        raise ValueError("Legacy manifest config fingerprint mismatch.")
+
+    model = AddSubLanguageModel(config, seed=config.seed).cpu()
+    parameter_count = model.parameter_count()
+    if parameter_count != config.estimated_parameter_count():
+        raise ValueError("Legacy model parameter count does not match the architecture.")
+    if parameter_count > MAX_PARAMETER_BUDGET:
+        raise ValueError("Legacy model exceeds the 2,000,000 parameter ceiling.")
+    checkpoint_sha = load_initial_model_checkpoint(
+        model, paths["initial_model"], tokenizer_sha
+    )
+    if checkpoint_sha != old_manifest.get("initial_model_sha256"):
+        raise ValueError("Legacy initial model fingerprint does not match its manifest.")
+
+    # Recompute the layout from the loaded graph, never from guessed dimensions.
+    parameter_layout = []
+    offset = 0
+    for name, parameter in model.named_parameters():
+        count = parameter.numel()
+        parameter_layout.append({
+            "name": name,
+            "shape": list(parameter.shape),
+            "numel": count,
+            "dtype": str(parameter.dtype),
+            "requires_grad": bool(parameter.requires_grad),
+            "flat_offset_start": offset,
+            "flat_offset_end": offset + count,
+        })
+        offset += count
+    if offset != parameter_count:
+        raise RuntimeError("Legacy migration parameter layout is incomplete.")
+
+    layout_path = paths["parameter_layout"]
+    layout_payload = {
+        "format": "qmini-addsub-parameter-layout-v1",
+        "parameter_count": parameter_count,
+        "parameters": parameter_layout,
+    }
+    layout_is_new = not layout_path.exists() and not layout_path.is_symlink()
+    if not layout_is_new:
+        if layout_path.is_symlink() or not layout_path.is_file():
+            raise ValueError(f"Existing parameter layout is unsafe: {layout_path}")
+        saved_layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        if saved_layout != layout_payload:
+            raise ValueError("Existing parameter layout does not match the saved model tensors.")
+
+    source_path = paths["source_code"]
+    source_is_new = not source_path.exists() and not source_path.is_symlink()
+    if not source_is_new:
+        if source_path.is_symlink() or not source_path.is_dir():
+            raise ValueError(f"Existing source snapshot is unsafe: {source_path}")
+        source_manifest_path = source_path / "source_manifest.json"
+        if not source_manifest_path.is_file():
+            raise ValueError("Existing source snapshot is incomplete and will not be overwritten.")
+        source_snapshot = _verify_source_snapshot(
+            source_path, sha256_file(source_manifest_path)
+        )
+        source_snapshot["manifest_sha256"] = sha256_file(source_manifest_path)
+        if source_commit and source_snapshot.get("source_commit") != source_commit:
+            raise ValueError(
+                "Existing source snapshot belongs to a different repository commit; "
+                "it will not be overwritten."
+            )
+
+    staging = artifact_dir / ".qmini-model-migration-staging"
+    if staging.exists() or staging.is_symlink():
+        raise FileExistsError(
+            f"An earlier migration staging folder exists and was left untouched: {staging}"
+        )
+    staging.mkdir()
+    try:
+        if source_is_new:
+            source_snapshot = _write_source_snapshot(
+                source_root, staging / "source_code", source_commit
+            )
+        if layout_is_new:
+            staged_layout = staging / layout_path.name
+            staged_layout.write_text(
+                json.dumps(layout_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+        file_entries = {}
+        for key in ("tokenizer", "config", "initial_model", "report", "model_card"):
+            path = paths[key]
+            file_entries[path.name] = {
+                "size_bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        if layout_is_new:
+            layout_size = (staging / layout_path.name).stat().st_size
+            layout_sha = sha256_file(staging / layout_path.name)
+        else:
+            layout_size = layout_path.stat().st_size
+            layout_sha = sha256_file(layout_path)
+        file_entries[layout_path.name] = {
+            "size_bytes": layout_size,
+            "sha256": layout_sha,
+        }
+
+        new_manifest = {
+            "format": MODEL_MANIFEST_FORMAT,
+            "model_name": "Q-Mini Add/Sub 2M",
+            "model_track": "qmini_addsub_2m_v1",
+            "stage": "initialized_untrained",
+            "created_at_utc": old_manifest.get("created_at_utc"),
+            "language": "English",
+            "parameter_count": parameter_count,
+            "parameter_budget": MAX_PARAMETER_BUDGET,
+            "config_sha256": file_entries[paths["config"].name]["sha256"],
+            "tokenizer_sha256": tokenizer_sha,
+            "initial_model_sha256": checkpoint_sha,
+            "source_snapshot": {
+                "root": "source_code",
+                "manifest_sha256": source_snapshot["manifest_sha256"],
+                "sha256": source_snapshot["sha256"],
+                "source_commit": source_snapshot["source_commit"],
+                "file_count": source_snapshot["file_count"],
+                "python_file_count": source_snapshot["python_file_count"],
+            },
+            "parameter_layout": {
+                "path": "parameter_layout.json",
+                "parameter_count": parameter_count,
+                "tensor_count": len(parameter_layout),
+                "file_sha256": layout_sha,
+            },
+            "architecture": {
+                "type": "attention_free_causal_conv_gated_diagonal_ssm_sparse_moe",
+                "blocks": config.n_layers,
+                "d_model": config.d_model,
+                "d_hidden": config.d_hidden,
+                "experts": config.n_experts,
+                "routing": "sparse_top1",
+                "convolution": "causal_depthwise",
+                "state_space": "gated_diagonal",
+                "feed_forward": "SwiGLU",
+                "normalization": "RMSNorm",
+                "input_output_embeddings": "tied",
+                "context_length": config.max_context,
+            },
+            "tokenizer": {
+                "kind": "dataset_independent_utf8_byte_level_bpe",
+                "vocabulary_size": config.vocab_size,
+                "byte_symbols": 256,
+                "control_tokens": SPECIAL_TOKENS,
+                "learned_merges": 0,
+                "can_be_replaced_after_training_starts": False,
+            },
+            "quantization": {
+                "training_weight_method": "five_symbol straight-through fake quantization",
+                "training_compute": "PyTorch floating point",
+                "complete_multiply_free_mobile_runtime": False,
+                "packed_trained_export_created": False,
+            },
+            "dataset": {
+                "downloaded_by_initializer": False,
+                "license_prompt_shown": False,
+                "training_data_consumed": False,
+            },
+            "training": {
+                "status": "not_started",
+                "pretraining_steps": 0,
+                "assistant_sft_steps": 0,
+                "optimizer_state_created": False,
+            },
+            "files": file_entries,
+            "migration": {
+                "from": "six_file_qmini_addsub_bootstrap",
+                "weights_reused_without_reinitialization": True,
+            },
+        }
+        staged_manifest = staging / paths["manifest"].name
+        staged_manifest.write_text(
+            json.dumps(new_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        # Publish new artifacts first and replace the manifest last. Existing
+        # tokenizer/config/checkpoint/report/card bytes are never rewritten.
+        if source_is_new:
+            os.replace(staging / "source_code", source_path)
+        if layout_is_new:
+            os.replace(staging / layout_path.name, layout_path)
+        os.replace(staged_manifest, paths["manifest"])
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    verified_manifest = verify_model_bundle(root)
+    source_verification = verify_self_contained_model_source(root)
+    if source_verification["parameter_count"] != verified_manifest["parameter_count"]:
+        raise RuntimeError("Migrated source verification loaded a different parameter count.")
+    verified_manifest = _persist_source_verification(root, source_verification)
+    return verified_manifest
+
 def initialize_model_artifacts(
     output_root: str | Path,
     config_template: str | Path,
@@ -608,19 +861,32 @@ def initialize_model_artifacts(
 
     artifact_dir = root / "artifacts"
     paths = _required_artifact_paths(artifact_dir)
-    existing = [path for path in paths.values() if path.exists() or path.is_symlink()]
-    if len(existing) == len(paths):
+    existing_keys = {
+        key for key, path in paths.items()
+        if path.exists() or path.is_symlink()
+    }
+    legacy_keys = {"tokenizer", "config", "initial_model", "manifest", "report", "model_card"}
+    if legacy_keys.issubset(existing_keys) and existing_keys.issubset(set(paths)):
+        manifest_payload = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        if (
+            "source_snapshot" not in manifest_payload
+            or "parameter_layout" not in manifest_payload
+        ):
+            return _upgrade_legacy_model_bundle(
+                root, source_root_path, source_commit
+            )
+    if len(existing_keys) == len(paths):
         verified_manifest = verify_model_bundle(root)
         source_verification = verify_self_contained_model_source(root)
         if source_verification["parameter_count"] != verified_manifest["parameter_count"]:
             raise RuntimeError("Copied source verification loaded a different parameter count.")
         verified_manifest = _persist_source_verification(root, source_verification)
         return verified_manifest
-    if existing:
-        names = ", ".join(sorted(path.name for path in existing))
+    if existing_keys:
+        names = ", ".join(sorted(paths[key].name for key in existing_keys))
         raise FileExistsError(
             "A partial model bundle already exists and will not be overwritten: "
-            f"{names}. Inspect the artifacts folder first."
+            f"{names}. Only a hash-verified six-file legacy bundle can be upgraded automatically."
         )
 
     tokenizer = build_bootstrap_tokenizer()
