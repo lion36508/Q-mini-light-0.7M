@@ -531,7 +531,7 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     assert verified_pretrain["status"] == "validated"
     assert verified_pretrain["step"] == 2
     assert sha256_file(pretrain_metrics) == pretrain_metrics_before
-    with pytest.raises(ValueError, match="incompatible with the current"):
+    with pytest.raises(ValueError, match="not compatible with this Add/Sub v1 run"):
         train_from_scratch(
             steps=2,
             resume=final_pretrain_checkpoint,
