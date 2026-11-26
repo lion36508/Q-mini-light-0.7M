@@ -13,6 +13,5 @@
   "moe_loss_free_bias": false,
   "moe_bias_update_rate": 0.001,
   "moe_bias_max_abs": 2,
-  "seed": 20261119,
-  "parameter_budget": 2000000
+  "seed": 20261119
 }
