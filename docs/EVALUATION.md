@@ -21,3 +21,18 @@ Do not compare unrelated checkpoints, data mixtures, token budgets or hardware. 
 ## Release gate
 
 A release candidate needs a reproducible trained checkpoint, verified tokenizer and data lineage, independent held-out results, no unresolved critical test failures and documented limitations. General assistant quality cannot be inferred from parameter count, training loss, a synthetic learning proof or output diversity alone.
+
+
+## Add/Sub readiness gate
+
+After a held-out evaluation, the optional readiness command checks the SFT validation-loss trajectory, at least 50 held-out records by default, generation failures, token-overlap floor, empty/duplicate answers, repeated four-word phrases, and data/tokenizer/manifest lineage. It also requires the exact checkpoint SHA-256 to match the checkpoint used to produce the held-out report:
+
+```bash
+python -m qmini_addsub.readiness \
+  --metrics /path/to/sft/metrics.jsonl \
+  --checkpoint /path/to/sft-checkpoint-step-000000500.pt \
+  --heldout-summary /path/to/heldout/heldout_summary.json \
+  --output /path/to/readiness/readiness.json
+```
+
+Exit code 0 means the engineering thresholds passed and the report is marked `ready_for_review`; exit code 2 means `not_ready`. Neither status certifies semantic quality. Review the saved answer pairs and use an independently reviewed English benchmark before describing the model as an assistant. A checkpoint hash mismatch is an error, not a failed score, because the held-out report would not belong to the selected checkpoint.

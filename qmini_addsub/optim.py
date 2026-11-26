@@ -116,18 +116,57 @@ def assert_finite_training_state(
 
 
 
+def resolve_schedule_total_steps(
+    requested_steps: int,
+    completed_step: int,
+    saved_schedule_total_steps: int,
+    extend_schedule: bool,
+    run_name: str,
+) -> int:
+    """Validate an explicit increase of a saved cosine schedule horizon."""
+    for name, value in (
+        ("requested_steps", requested_steps),
+        ("completed_step", completed_step),
+        ("saved_schedule_total_steps", saved_schedule_total_steps),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{run_name} {name} must be an integer.")
+    if not isinstance(extend_schedule, bool):
+        raise TypeError("extend_schedule must be a boolean.")
+    if not isinstance(run_name, str) or not run_name.strip():
+        raise ValueError("run_name must be a non-empty string.")
+    if requested_steps < 1 or saved_schedule_total_steps < 1 or completed_step < 0:
+        raise ValueError(f"{run_name} schedule steps must be positive and completed_step non-negative.")
+    if requested_steps <= completed_step:
+        raise ValueError(
+            f"{run_name} target step {requested_steps} must be greater than "
+            f"the checkpoint step {completed_step}."
+        )
+    if requested_steps < saved_schedule_total_steps:
+        raise ValueError(
+            f"{run_name} cannot shorten the saved schedule horizon "
+            f"({saved_schedule_total_steps} -> {requested_steps})."
+        )
+    if requested_steps > saved_schedule_total_steps and not extend_schedule:
+        raise ValueError(
+            f"{run_name} scheduler horizon is {saved_schedule_total_steps} steps. "
+            "Pass extend_schedule=True / --extend-schedule to deliberately extend it."
+        )
+    return max(requested_steps, saved_schedule_total_steps)
+
+
 def reconcile_metrics_file(
     path: str,
     expected_identity: dict[str, object],
     maximum_committed_step: int,
     run_name: str,
 ) -> int:
-    """Validate metrics provenance and discard rows beyond the resumed checkpoint.
+    """Validate metrics lineage and discard rows beyond the resumed checkpoint.
 
-    Metric rows can be written more frequently than checkpoints. On recovery,
-    rows newer than the selected checkpoint describe updates that will be
-    repeated, so they are atomically truncated rather than mixed with the
-    resumed trajectory. Different data/tokenizer/schedule identities fail closed.
+    Historical rows may have older schedule horizons when a run was explicitly
+    extended. Dataset/tokenizer/model/optimizer identity remains exact. A
+    schedule horizon may only increase, and every row must be within its own
+    recorded horizon.
     """
     from pathlib import Path
     import json
@@ -154,22 +193,51 @@ def reconcile_metrics_file(
     except json.JSONDecodeError as exc:
         raise ValueError(f"{run_name} metrics file is not valid JSONL.") from exc
 
+    expected_contract = expected_identity.get("run_contract")
+    strict_expected_horizon = (
+        expected_contract.get("planned_steps")
+        if isinstance(expected_contract, dict) else None
+    )
+    expected_static_contract = (
+        {key: value for key, value in expected_contract.items() if key != "planned_steps"}
+        if isinstance(expected_contract, dict) else None
+    )
+
     kept = []
     discarded = 0
     previous_step = 0
-    run_contract = expected_identity.get("run_contract")
-    planned_steps = (
-        run_contract.get("planned_steps")
-        if isinstance(run_contract, dict)
-        else None
-    )
+    previous_horizon = 0
     for row in rows:
         for key, expected_value in expected_identity.items():
-            if key not in row or row[key] != expected_value:
+            if key == "run_contract":
+                row_contract = row.get("run_contract")
+                if not isinstance(row_contract, dict):
+                    raise ValueError(
+                        f"{run_name} metrics belong to a different dataset, tokenizer "
+                        "or run contract (run_contract)."
+                    )
+                row_static_contract = {
+                    name: value for name, value in row_contract.items()
+                    if name != "planned_steps"
+                }
+                if row_static_contract != expected_static_contract:
+                    raise ValueError(
+                        f"{run_name} metrics belong to a different dataset, tokenizer "
+                        "or run contract (run_contract)."
+                    )
+                if (
+                    strict_expected_horizon is not None
+                    and row_contract.get("planned_steps") != strict_expected_horizon
+                ):
+                    raise ValueError(
+                        f"{run_name} metrics belong to a different schedule horizon."
+                    )
+            elif key not in row or row[key] != expected_value:
                 raise ValueError(
                     f"{run_name} metrics belong to a different dataset, tokenizer "
                     f"or run contract ({key})."
                 )
+
         step = row.get("step")
         if isinstance(step, bool) or not isinstance(step, int) or step < 1:
             raise ValueError(f"{run_name} metrics contain an invalid step.")
@@ -177,11 +245,28 @@ def reconcile_metrics_file(
             raise ValueError(
                 f"{run_name} metrics steps must be strictly increasing."
             )
-        if planned_steps is not None and step > planned_steps:
+
+        row_contract = row.get("run_contract")
+        legacy_horizon = (
+            row_contract.get("planned_steps")
+            if isinstance(row_contract, dict) else None
+        )
+        horizon = row.get("schedule_total_steps", row.get("planned_steps", legacy_horizon))
+        if horizon is None:
+            horizon = strict_expected_horizon
+        if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+            raise ValueError(f"{run_name} metrics contain an invalid schedule horizon.")
+        if step > horizon:
             raise ValueError(
-                f"{run_name} metrics contain a step beyond the planned run horizon."
+                f"{run_name} metrics contain a step beyond its recorded schedule horizon."
+            )
+        if horizon < previous_horizon:
+            raise ValueError(
+                f"{run_name} schedule horizon cannot decrease across metrics rows."
             )
         previous_step = step
+        previous_horizon = horizon
+
         if step > maximum_committed_step:
             discarded += 1
         else:

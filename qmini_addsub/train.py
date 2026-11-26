@@ -16,7 +16,10 @@ from tokenizers import Tokenizer
 from .config import AddSubConfig
 from .model import AddSubLanguageModel
 from .data import escape_special_token_literals
-from .optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
+from .optim import (
+    assert_finite_training_state, build_adamw, cosine_warmup_lr,
+    reconcile_metrics_file, resolve_schedule_total_steps,
+)
 from .wavebit_hsra import validate_wavebit_options
 
 
@@ -108,12 +111,15 @@ def train_from_scratch(
     seed: int = 20261119,
     device_name: str = "cpu",
     resume: str | Path | None = None,
+    extend_schedule: bool = False,
     wavebit_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train only from a new random initialization or this package's own checkpoint."""
     config = config or AddSubConfig()
     config.validate()
     wavebit_options = validate_wavebit_options(wavebit_options)
+    if not isinstance(extend_schedule, bool):
+        raise TypeError("extend_schedule must be a boolean.")
     for name, value in (
         ("steps", steps),
         ("batch_size", batch_size),
@@ -227,7 +233,6 @@ def train_from_scratch(
         torch.cuda.manual_seed_all(seed)
 
     run_contract = {
-        "planned_steps": steps,
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "learning_rate": learning_rate,
@@ -244,6 +249,7 @@ def train_from_scratch(
     ).to(device)
     optimizer = build_adamw(model, learning_rate, weight_decay=0.01)
     start_step = 0
+    schedule_total_steps = steps
     rng = random.Random(seed)
 
     if resume is not None:
@@ -257,11 +263,20 @@ def train_from_scratch(
             "test_sha256": test_sha,
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
-            "run_contract": run_contract,
         }
         mismatches = [
             key for key, value in expected.items() if checkpoint.get(key) != value
         ]
+        saved_contract = checkpoint.get("run_contract")
+        if not isinstance(saved_contract, dict):
+            mismatches.append("run_contract")
+            saved_contract = {}
+        saved_static_contract = {
+            key: value for key, value in saved_contract.items()
+            if key != "planned_steps"
+        }
+        if saved_static_contract != run_contract:
+            mismatches.append("run_contract")
         if mismatches:
             raise ValueError(
                 "Resume checkpoint is not compatible with this Add/Sub v1 run: "
@@ -270,6 +285,15 @@ def train_from_scratch(
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
+        saved_horizon = checkpoint.get(
+            "schedule_total_steps",
+            saved_contract.get("planned_steps", checkpoint.get("planned_steps")),
+        )
+        if isinstance(saved_horizon, bool) or not isinstance(saved_horizon, int):
+            raise ValueError("Pretraining checkpoint has no valid saved schedule horizon.")
+        schedule_total_steps = resolve_schedule_total_steps(
+            steps, start_step, saved_horizon, extend_schedule, "Pretraining"
+        )
         torch.set_rng_state(checkpoint["torch_rng"].cpu())
         if device.type == "cuda":
             saved_cuda_rng = checkpoint.get("cuda_rng_states")
@@ -279,9 +303,6 @@ def train_from_scratch(
                 )
             torch.cuda.set_rng_state_all([state.cpu() for state in saved_cuda_rng])
         rng.setstate(checkpoint["python_rng"])
-    if steps <= start_step:
-        raise ValueError("steps must be greater than the checkpoint's completed step.")
-
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "metrics.jsonl"
     existing_checkpoints = list(output.glob("checkpoint-step-*.pt"))
@@ -366,6 +387,8 @@ def train_from_scratch(
             "tokenizer_sha256": tokenizer_sha,
             "data_manifest_sha256": manifest_sha,
             "run_contract": run_contract,
+            "planned_steps": steps,
+            "schedule_total_steps": schedule_total_steps,
             "valid_loss": valid_loss,
             "torch_rng": torch.get_rng_state(),
             "python_rng": rng.getstate(),
@@ -379,7 +402,7 @@ def train_from_scratch(
     model.train()
     last_loss = None
     for step in range(start_step + 1, steps + 1):
-        current_lr = cosine_warmup_lr(step, steps, learning_rate)
+        current_lr = cosine_warmup_lr(step, schedule_total_steps, learning_rate)
         for group in optimizer.param_groups:
             group["lr"] = current_lr
         inputs, targets = _sample_batch(
@@ -426,6 +449,7 @@ def train_from_scratch(
                 "tokenizer_sha256": tokenizer_sha,
                 "data_manifest_sha256": manifest_sha,
                 "run_contract": run_contract,
+                "schedule_total_steps": schedule_total_steps,
             }
             with metrics_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
@@ -441,6 +465,7 @@ def train_from_scratch(
     return {
         "format": CHECKPOINT_FORMAT,
         "steps": steps,
+        "schedule_total_steps": schedule_total_steps,
         "parameter_count": model.parameter_count(),
         "final_learning_rate": optimizer.param_groups[0]["lr"],
         "final_train_token_loss": last_loss,
@@ -475,6 +500,7 @@ def main() -> None:
     parser.add_argument("--validate-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     parser.add_argument("--seed", type=int, default=20261119)
     parser.add_argument("--wavebit-hsra", action="store_true",
                         help="Enable WaveBit-HSRA in the existing Add/Sub model (experimental).")
@@ -515,6 +541,7 @@ def main() -> None:
         seed=args.seed,
         device_name=args.device,
         resume=args.resume,
+        extend_schedule=args.extend_schedule,
         wavebit_options=(
             {
                 "group_size": args.wavebit_group_size,
