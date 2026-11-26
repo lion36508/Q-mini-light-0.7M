@@ -97,3 +97,55 @@ def test_fresh_workspace_rejects_symlinked_parent(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must not traverse symlinks"):
         resolve_workspace_root(version_root, force_fresh=True, run_id="safe-run")
+
+
+
+def test_default_workspace_rejects_root_symlink_before_resolving(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-version"
+    real_root.mkdir()
+    (real_root / "old-checkpoint.pt").write_bytes(b"preserve")
+    linked_root = tmp_path / "version-link"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="version root must not traverse symlinks"):
+        resolve_workspace_root(linked_root, resume_existing=True)
+
+    assert (real_root / "old-checkpoint.pt").read_bytes() == b"preserve"
+
+
+def test_default_workspace_rejects_symlink_in_an_ancestor_component(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    (real_parent / "version").mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="version root must not traverse symlinks"):
+        resolve_workspace_root(linked_parent / "version")
+
+
+def test_resume_never_allows_nested_symlinked_workspace_entries(tmp_path: Path) -> None:
+    version_root = tmp_path / "version"
+    external = tmp_path / "external"
+    version_root.mkdir()
+    external.mkdir()
+    (version_root / "artifacts").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="Workspace contains a symlinked entry"):
+        resolve_workspace_root(version_root, resume_existing=True)
+
+
+def test_fresh_run_rejects_symlink_in_an_ancestor_of_version_root(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    version = real_parent / "version"
+    version.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="version root must not traverse symlinks"):
+        resolve_workspace_root(
+            linked_parent / "version",
+            force_fresh=True,
+            run_id="fresh-run",
+        )
