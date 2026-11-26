@@ -254,6 +254,28 @@ def _verify_source_snapshot(source_dir: Path, expected_sha256: str) -> dict[str,
     return snapshot
 
 
+
+def _persist_source_verification(
+    output_root: str | Path,
+    source_verification: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the isolated-source import result in the model's top-level manifest."""
+    manifest_path = Path(output_root).expanduser() / "artifacts" / "model_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if source_verification.get("isolated_source_import") is not True:
+        raise RuntimeError("Refusing to record an unsuccessful isolated source import.")
+    if source_verification.get("model_bundle_verified") is not True:
+        raise RuntimeError("Refusing to record an unsuccessful model bundle verification.")
+    manifest["source_verification"] = source_verification
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(manifest_path)
+    return manifest
+
+
 def verify_self_contained_model_source(output_root: str | Path) -> dict[str, Any]:
     """Import and re-verify the bundle using only the Python source copied into Drive."""
     root = Path(output_root).expanduser().resolve()
@@ -584,7 +606,7 @@ def initialize_model_artifacts(
         source_verification = verify_self_contained_model_source(root)
         if source_verification["parameter_count"] != verified_manifest["parameter_count"]:
             raise RuntimeError("Copied source verification loaded a different parameter count.")
-        verified_manifest["source_verification"] = source_verification
+        verified_manifest = _persist_source_verification(root, source_verification)
         return verified_manifest
     if existing:
         names = ", ".join(sorted(path.name for path in existing))
@@ -852,7 +874,7 @@ This is a complete **initialized model graph**, not a trained assistant. It will
     source_verification = verify_self_contained_model_source(root)
     if source_verification["parameter_count"] != verified_manifest["parameter_count"]:
         raise RuntimeError("Copied source verification loaded a different parameter count.")
-    verified_manifest["source_verification"] = source_verification
+    verified_manifest = _persist_source_verification(root, source_verification)
     return verified_manifest
 
 
