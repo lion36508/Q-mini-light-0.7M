@@ -19,6 +19,7 @@ from qmini_addsub.initialize import (
     initialize_model_artifacts,
     load_initial_model_checkpoint,
     verify_model_bundle,
+    verify_self_contained_model_source,
 )
 from qmini_addsub.model import AddSubLanguageModel
 
@@ -51,11 +52,37 @@ def test_model_first_initialization_creates_complete_untrained_bundle(tmp_path: 
         "tokenizer.json",
         "model_config.json",
         "initial_model.pt",
+        "parameter_layout.json",
         "model_manifest.json",
         "initialization_report.json",
         "MODEL_CARD.md",
     ):
         assert (artifacts / name).is_file()
+
+    source_root = artifacts / "source_code"
+    assert (source_root / "qmini_addsub" / "model.py").is_file()
+    assert (source_root / "qmini_addsub" / "train.py").is_file()
+    assert (source_root / "qmini_addsub" / "generate.py").is_file()
+    assert (source_root / "qmini_addsub" / "runtime.py").is_file()
+    assert (source_root / "qmini" / "__init__.py").is_file()
+    assert (source_root / "scripts" / "prepare_qmini_addsub_data.py").is_file()
+    assert (source_root / "configs" / "qmini_addsub_2m.json").is_file()
+    source_manifest = json.loads(
+        (source_root / "source_manifest.json").read_text(encoding="utf-8")
+    )
+    assert source_manifest["python_file_count"] > 20
+    assert result["source_verification"]["isolated_source_import"] is True
+    assert result["source_verification"]["model_bundle_verified"] is True
+    assert result["source_verification"]["source_package"].startswith(str(source_root))
+
+    layout = json.loads(
+        (artifacts / "parameter_layout.json").read_text(encoding="utf-8")
+    )
+    assert layout["parameter_count"] == result["parameter_count"]
+    assert layout["parameters"]
+    assert sum(entry["numel"] for entry in layout["parameters"]) == result["parameter_count"]
+    assert layout["parameters"][0]["flat_offset_start"] == 0
+    assert layout["parameters"][-1]["flat_offset_end"] == result["parameter_count"]
 
     assert (root / "data").is_dir()
     assert not any((root / "data").iterdir())
@@ -83,6 +110,9 @@ def test_model_first_initialization_creates_complete_untrained_bundle(tmp_path: 
     )
     assert loaded_sha == result["initial_model_sha256"]
     assert verify_model_bundle(root)["parameter_count"] == result["parameter_count"]
+    independent = verify_self_contained_model_source(root)
+    assert independent["isolated_source_import"] is True
+    assert independent["parameter_count"] == result["parameter_count"]
 
 
 def test_model_first_initialization_is_idempotent_and_preserves_existing_bundle(tmp_path: Path) -> None:
