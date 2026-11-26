@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 
-_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\Z")
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 def _contains_files(root: Path) -> bool:
