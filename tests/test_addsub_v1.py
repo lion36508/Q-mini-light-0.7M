@@ -51,7 +51,7 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     all_code = "\n".join(code)
     assert "Q mini 2 light" in all_code
     assert "REPO_BRANCH = 'main'" in all_code
-    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in all_code
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_2m_v1'" in all_code
     assert "REPO_COMMIT = subprocess.check_output" in all_code
     assert "algorithm/addsub-stability-routing-v2" not in all_code
     assert "trainability_v2" not in all_code
@@ -74,6 +74,10 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
     assert "QMini-Light-0.7M/training_ready" not in all_code
     assert "qmini_addsub.train" in all_code
     assert "qmini_addsub.sft" in all_code
+    assert "--config-template" in all_code
+    assert "qmini_addsub_2m.json" in all_code
+    assert "qmini_addsub.preflight" in all_code
+    assert "SEQUENCE_LENGTH = 512" in all_code
 
 
 def test_addsub_config_is_independent_and_validates():
