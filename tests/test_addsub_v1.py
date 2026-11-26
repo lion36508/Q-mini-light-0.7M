@@ -2113,3 +2113,14 @@ def test_metrics_reconciliation_rejects_decreasing_schedule_horizon(tmp_path):
             maximum_committed_step=2,
             run_name="SFT",
         )
+
+
+def test_sft_zero_target_batch_fails_instead_of_skipping_optimizer_steps():
+    from qmini_addsub.sft import _require_response_targets
+
+    labels = torch.full((2, 8), -100, dtype=torch.long)
+    with pytest.raises(ValueError, match="no assistant response targets"):
+        _require_response_targets(labels, step=17)
+
+    labels[0, 3] = 42
+    assert _require_response_targets(labels, step=18) == 1
