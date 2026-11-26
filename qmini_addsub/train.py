@@ -75,6 +75,20 @@ def encode_text_file(
     return count, sha256_file(output), source_byte_count
 
 
+def evaluation_window_starts(max_start: int, max_windows: int = 64) -> list[int]:
+    """Return unique, deterministic evaluation starts covering both stream ends."""
+    if isinstance(max_start, bool) or not isinstance(max_start, int) or max_start < 0:
+        raise ValueError("max_start must be a non-negative integer.")
+    if isinstance(max_windows, bool) or not isinstance(max_windows, int) or max_windows < 1:
+        raise ValueError("max_windows must be a positive integer.")
+    count = min(max_windows, max_start + 1)
+    if count == 1:
+        return [0]
+    # Integer linspace includes the last valid window, unlike floor-stride
+    # range slicing, which can omit the tail of the held-out corpus.
+    return np.linspace(0, max_start, num=count, dtype=np.int64).tolist()
+
+
 def _sample_batch(
     tokens: np.ndarray,
     batch_size: int,
@@ -343,12 +357,7 @@ def train_from_scratch(
         max_start = len(tokens) - sequence_length - 1
         if max_start < 0:
             raise ValueError("Evaluation token stream is shorter than one sequence.")
-        number_of_windows = min(64, max_start + 1)
-        if number_of_windows == 1:
-            starts = [0]
-        else:
-            stride = max(1, max_start // (number_of_windows - 1))
-            starts = list(range(0, max_start + 1, stride))[:number_of_windows]
+        starts = evaluation_window_starts(max_start, max_windows=64)
 
         total_loss = 0.0
         target_count = 0
