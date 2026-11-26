@@ -2188,7 +2188,7 @@ def test_addsub_colab_keeps_cuda_visible_and_uses_the_actual_sft_metrics_filenam
     ]
     all_code = "\n".join(code)
     assert "REPO_BRANCH = 'main'" in code[0]
-    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in code[0]
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_2m_v1'" in code[0]
     assert "CUDA_VISIBLE_DEVICES" not in all_code
     assert "os.environ" not in code[0]
     assert "if DEVICE.startswith('cuda') and not torch.cuda.is_available():" in all_code
