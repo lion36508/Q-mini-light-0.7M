@@ -138,6 +138,11 @@ def groupwise_scale(weight: torch.Tensor, group_size: int = 32, multiplier: floa
         stop = min(start + group_size, flat.shape[1])
         block = flat[:, start:stop]
         scale = (block.abs().mean(dim=1, keepdim=True) * multiplier).clamp_min(1e-8)
+        if not bool(torch.isfinite(scale).all()) or bool((scale <= 0.0).any()):
+            raise OverflowError(
+                "WaveBit group-wise scale is not representable as a positive finite "
+                f"{weight.dtype} value for input group {start}:{stop}."
+            )
         scaled[:, start:stop] = scale.expand_as(block)
     return scaled.reshape_as(weight).detach()
 
