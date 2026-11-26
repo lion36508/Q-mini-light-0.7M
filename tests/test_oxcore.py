@@ -270,6 +270,39 @@ def test_q15_ssm_scan_fails_closed_on_conservative_int32_overflow(oxcore):
         )
 
 
+def test_uint8_activation_lut_maps_exact_table_entries(oxcore):
+    table = [index - 128 for index in range(256)]
+    assert oxcore.lut_u8_i16([0, 1, 128, 254, 255], table) == [
+        -128, -127, 0, 126, 127
+    ]
+
+
+def test_uint8_activation_lut_rejects_invalid_shape_and_values(oxcore):
+    with pytest.raises(ValueError, match="256"):
+        oxcore.lut_u8_i16([0], [0, 1])
+    with pytest.raises(ValueError, match="uint8 range"):
+        oxcore.lut_u8_i16([256], [0] * 256)
+    with pytest.raises(ValueError, match="int16"):
+        oxcore.lut_u8_i16([0], [32768] + [0] * 255)
+
+
+def test_top1_i16_is_stable_on_ties_and_returns_scores(oxcore):
+    indices, values = oxcore.top1_i16([
+        [2, 5, 5, -1],
+        [7, 7, 1, 7],
+        [-32768, -1, -2, -1],
+    ])
+    assert indices == [1, 0, 1]
+    assert values == [5, 7, -1]
+
+
+def test_top1_i16_rejects_invalid_shapes_and_scores(oxcore):
+    with pytest.raises(ValueError, match="rectangular"):
+        oxcore.top1_i16([[1, 2], [3]])
+    with pytest.raises(ValueError, match="int16"):
+        oxcore.top1_i16([[32768]])
+
+
 def test_fwht_is_unnormalized_and_invertible_up_to_length(oxcore):
     values = [3, -1, 4, 2, 0, 7, -5, 9]
     transformed = oxcore.fwht_i64(values)
