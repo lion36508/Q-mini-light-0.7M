@@ -2421,6 +2421,7 @@ def test_sft_v6_scaled_checkpoint_remains_loadable_and_exportable(tmp_path):
             "config": config.to_dict(),
             "model": original.state_dict(),
             "tokenizer_sha256": "a" * 64,
+            "data_manifest_sha256": "c" * 64,
             "base_sha256": "b" * 64,
             "run_contract": {
                 "batch_size": 1,
