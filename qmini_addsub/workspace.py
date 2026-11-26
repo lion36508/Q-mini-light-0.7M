@@ -31,14 +31,33 @@ def _reject_symlink_components(path: str | Path, *, label: str) -> Path:
 
 
 def _reject_workspace_symlink_entries(root: Path) -> None:
-    """Reject root or nested symlinks even when explicit resume is requested."""
+    """Reject escaping/dangling links but allow cache links that stay in-workspace.
+
+    Hugging Face's snapshot cache uses relative symlinks from snapshot files to
+    content-addressed blobs. Those links are safe to reuse when their resolved
+    targets remain inside this exact workspace. Links to external paths and
+    dangling/cyclic links remain forbidden, including during explicit resume.
+    """
     if root.is_symlink():
         raise ValueError(f"Workspace root must not be a symlink: {root}")
     if not root.exists():
         return
+
+    resolved_root = root.resolve(strict=True)
     for path in root.rglob("*"):
-        if path.is_symlink():
-            raise ValueError(f"Workspace contains a symlinked entry: {path}")
+        if not path.is_symlink():
+            continue
+        try:
+            resolved_target = path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(
+                f"Workspace contains a symlinked entry that cannot be resolved: {path}"
+            ) from exc
+        if resolved_target != resolved_root and resolved_root not in resolved_target.parents:
+            raise ValueError(
+                "Workspace contains a symlinked entry that escapes the workspace: "
+                f"{path} -> {resolved_target}"
+            )
 
 
 def _contains_files(root: Path) -> bool:
@@ -60,8 +79,8 @@ def resolve_workspace_root(
     """Resolve a safe Colab workspace without deleting or silently reusing artifacts.
 
     The default workspace preserves the existing Add/Sub v1 layout. A fresh run
-    gets its own isolated subdirectory under fresh_runs/<run_id>. Existing
-    files are reusable only after the caller explicitly opts into resume.
+    gets its own isolated subdirectory under fresh_runs/<run_id>. Existing files
+    are reusable only after the caller explicitly opts into resume.
     """
     if not isinstance(force_fresh, bool):
         raise TypeError("force_fresh must be a boolean.")
@@ -91,8 +110,8 @@ def resolve_workspace_root(
             raise ValueError("run_id is valid only when force_fresh=True.")
         root = base
 
-    # Symlinks are never an acceptable resume target: opt-in resume
-    # authorizes reusing this run's files, not writing through another path.
+    # Explicit resume permits trusted Hugging Face cache links whose targets
+    # remain within this workspace. It never permits links escaping the root.
     _reject_workspace_symlink_entries(root)
     has_files = _contains_files(root)
     if has_files and not resume_existing:
