@@ -529,11 +529,16 @@ def integer_octave_projection(
             raise ValueError("bias_half_units must be an integer output vector.")
         for batch in range(output.shape[0]):
             for out_index in range(output.shape[1]):
-                output[batch, out_index] = checked_int64_add(
-                    int(output[batch, out_index]),
-                    int(bias[out_index]),
-                    "Octave projection plus bias",
-                )
+                try:
+                    output[batch, out_index] = checked_int64_add(
+                        int(output[batch, out_index]),
+                        int(bias[out_index]),
+                        "Octave projection plus bias",
+                    )
+                except OverflowError as exc:
+                    raise OverflowError(
+                        "Octave projection plus bias exceeds int64 range."
+                    ) from exc
     return output
 
 
