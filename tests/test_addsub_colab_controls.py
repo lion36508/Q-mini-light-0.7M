@@ -11,7 +11,7 @@ def test_addsub_pretraining_colab_exposes_safe_cpu_thread_control():
     pretraining_cell = "".join(notebook["cells"][6]["source"])
 
     ast.parse(pretraining_cell)
-    assert "PRETRAIN_NUM_THREADS = 0" in pretraining_cell
+    assert "PRETRAIN_NUM_THREADS = 2" in pretraining_cell
     assert "PRETRAIN_NUM_THREADS must be a non-negative integer." in pretraining_cell
     assert "command += ['--threads', str(PRETRAIN_NUM_THREADS)]" in pretraining_cell
     assert "if PRETRAIN_NUM_THREADS > 0:" in pretraining_cell
