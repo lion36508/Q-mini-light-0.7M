@@ -4,7 +4,7 @@ OxCore lives **inside** the new Q-Mini Add/Sub model package. It is not a new
 model family, repository, tokenizer, checkpoint format, or training dataset.
 The old Q-Mini Light Q2-v2 implementation remains separate and unchanged.
 
-## Current v0.1 scope
+## Current v0.2 scope
 
 The first release is a small C ABI library with a Python `ctypes` bridge:
 
@@ -15,10 +15,15 @@ The first release is a small C ABI library with a Python `ctypes` bridge:
 - Mirror-63 balanced-base-5 triplet encoding: 250 valid code/octave pairs and
   exactly six reserved byte values. `0x3f` is the zero-block skip sentinel;
   the other five escape values are rejected.
-- Mirror-63 int8 dot accumulator. It uses only additions, subtractions and
-  small-coefficient additions for the five integer q symbols. It returns the
-  exact integer numerator; the caller applies the final scale and division by
-  two once.
+- Mirror-63 int8 dot accumulator and row-wise integer linear projection.
+  They use additions, subtractions and small-coefficient additions for the
+  five integer q symbols. The linear operator supports batches, multiple
+  output rows, partial final triplets and returns the exact integer numerator;
+  the caller applies the final scale and division by two once.
+- Causal depthwise convolution for contiguous time-major int8 input and
+  per-channel Mirror-63 kernels. Tap zero is oldest, the final tap is current,
+  and missing left context is exact zero padding. It returns int64 numerators
+  without intermediate shifts.
 - In-place, unnormalized integer FWHT with overflow preflight.
 - Stable 4x4 Sinkhorn projection and float32 L2 normalization.
 - Python bridge with no ML framework dependency and no import-time compilation.
@@ -51,8 +56,8 @@ before replacing any existing training or inference operation.
 
 ## Architecture boundaries
 
-1. **Native CPU ABI (implemented v0.1):** tensor descriptors, fixed arena,
-   Mirror-63, FWHT, Sinkhorn and L2 normalization.
+1. **Native CPU ABI (implemented v0.2):** tensor descriptors, fixed arena,
+   Mirror-63 dot/linear/causal-depthwise operators, FWHT, Sinkhorn and L2 normalization.
 2. **Python facade (implemented v0.1):** explicit library loading and typed
    wrappers. The shared library is built separately; importing this package
    does not import PyTorch or compile code.
