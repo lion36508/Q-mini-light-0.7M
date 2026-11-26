@@ -1889,6 +1889,31 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
         encoding="utf-8",
     )
 
+    with pytest.raises(ValueError, match="positive integer"):
+        evaluate_heldout_conversations(
+            checkpoint_path=checkpoint_path,
+            tokenizer_path=tokenizer_path,
+            test_jsonl=test_path,
+            dataset_manifest_path=manifest_path,
+            output_dir=tmp_path / "invalid-token-limit",
+            device_name="cpu",
+            max_new_tokens=True,
+        )
+
+    non_sft_checkpoint = tmp_path / "pretraining-only.pt"
+    non_sft_payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    non_sft_payload["format"] = "qmini-addsub-training-v7"
+    torch.save(non_sft_payload, non_sft_checkpoint)
+    with pytest.raises(ValueError, match="current Q-Mini Add/Sub SFT checkpoint"):
+        evaluate_heldout_conversations(
+            checkpoint_path=non_sft_checkpoint,
+            tokenizer_path=tokenizer_path,
+            test_jsonl=test_path,
+            dataset_manifest_path=manifest_path,
+            output_dir=tmp_path / "rejected-pretraining-checkpoint",
+            device_name="cpu",
+        )
+
     output_dir = tmp_path / "evaluation"
     summary = evaluate_heldout_conversations(
         checkpoint_path=checkpoint_path,
