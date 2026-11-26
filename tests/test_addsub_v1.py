@@ -2397,7 +2397,7 @@ def test_gated_diagonal_ssm_training_gradients_are_finite():
 
 
 def test_sft_v6_scaled_checkpoint_remains_loadable_and_exportable(tmp_path):
-    from qmini_addsub.export import export_addsub_checkpoint
+    from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
     from qmini_addsub.generate import load_addsub_model
     from qmini_addsub.sft import LEGACY_SFT_FORMAT
 
@@ -2440,5 +2440,7 @@ def test_sft_v6_scaled_checkpoint_remains_loadable_and_exportable(tmp_path):
 
     export_path = tmp_path / "legacy-v6-sft.qma"
     result = export_addsub_checkpoint(checkpoint, export_path)
-    assert result["checkpoint_format"] == LEGACY_SFT_FORMAT
+    assert result["format"] == "qmini-addsub-packed-weights-v2"
+    _, manifest = load_addsub_export(export_path)
+    assert manifest["checkpoint_format"] == LEGACY_SFT_FORMAT
     assert export_path.is_file()
