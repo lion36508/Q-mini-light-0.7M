@@ -47,10 +47,10 @@ jobs:
         run: bash scripts/build_oxcore.sh /tmp/libqmini_oxcore.so
       - name: Cross-compile OxCore ARM64 library
         run: |
-          aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++20 -fPIC -shared \\
-            -Wall -Wextra -Wpedantic -Werror \\
-            -Iqmini_addsub/oxcore/include \\
-            qmini_addsub/oxcore/src/oxcore.cpp \\
+          aarch64-linux-gnu-g++ -O3 -DNDEBUG -std=c++20 -fPIC -shared \
+            -Wall -Wextra -Wpedantic -Werror \
+            -Iqmini_addsub/oxcore/include \
+            qmini_addsub/oxcore/src/oxcore.cpp \
             -o /tmp/libqmini_oxcore_aarch64.so
           file /tmp/libqmini_oxcore_aarch64.so
       - name: Validate Colab notebook Python syntax
