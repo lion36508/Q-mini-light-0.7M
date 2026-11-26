@@ -408,7 +408,7 @@ def test_ngpt_l2_normalization_and_zero_vector(oxcore):
 
 
 def test_ngpt_normalization_validates_epsilon(oxcore):
-    for epsilon in (0.0, -1.0, float("inf"), float("nan")):
+    for epsilon in (0.0, -1.0, float("inf"), float("nan"), 1e-100, 1e100):
         with pytest.raises(ValueError, match="epsilon"):
             oxcore.normalize_f32([1.0, 2.0], epsilon=epsilon)
     with pytest.raises(TypeError, match="epsilon"):
@@ -441,10 +441,28 @@ def test_static_arena_rejects_capacity_and_alignment_errors(oxcore):
     arena = StaticArena(oxcore, 64)
     with pytest.raises(OxCoreError, match="capacity"):
         arena.alloc(1024)
-    with pytest.raises(OxCoreError, match="invalid argument"):
+    with pytest.raises(ValueError, match="power of two"):
         arena.alloc(4, 3)
+    with pytest.raises(ValueError, match="positive"):
+        arena.alloc(0)
+    with pytest.raises(ValueError, match="positive"):
+        arena.alloc(-1)
     with pytest.raises(OxCoreError, match="invalid argument"):
         arena.rewind(arena.capacity + 1)
+
+
+def test_static_arena_python_bridge_rejects_coercible_marks_and_sizes(oxcore):
+    arena = StaticArena(oxcore, 64)
+    with pytest.raises(TypeError, match="mark must be an integer"):
+        arena.rewind(1.5)
+    with pytest.raises(TypeError, match="mark must be an integer"):
+        arena.rewind(True)
+    with pytest.raises(ValueError, match="between zero"):
+        arena.rewind(-1)
+    with pytest.raises(TypeError, match="allocation size must be an integer"):
+        arena.alloc(1.5)
+    with pytest.raises(TypeError, match="alignment must be an integer"):
+        arena.alloc(1, 1.5)
 
 
 def test_tensor_view_checks_dtype_rank_strides_and_storage_bounds(oxcore):
