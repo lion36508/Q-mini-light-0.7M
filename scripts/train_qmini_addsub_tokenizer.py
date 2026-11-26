@@ -59,7 +59,7 @@ def append_sft_training_text(target, sft_path: str | Path, approved_sources: set
                 if reason != "accepted":
                     raise ValueError(f"{path}:{line_number}: SFT message rejected by cleaner ({reason}).")
                 escaped = escape_special_token_literals(cleaned)
-                target.write(escaped + "\\n")
+                target.write(escaped + "\n")
                 sampled_bytes += len(escaped.encode("utf-8"))
                 messages_written += 1
             conversations += 1
@@ -68,7 +68,7 @@ def append_sft_training_text(target, sft_path: str | Path, approved_sources: set
         raise ValueError(f"No usable manifest-approved SFT training text found in {path}.")
     # This is prepended to every SFT example during supervised fine-tuning.
     system_prompt = "You are Q-Mini."
-    target.write(system_prompt + "\\n")
+    target.write(system_prompt + "\n")
     sampled_bytes += len(system_prompt.encode("utf-8"))
     return {
         "conversations": conversations,
