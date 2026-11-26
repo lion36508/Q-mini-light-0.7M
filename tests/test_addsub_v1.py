@@ -1812,3 +1812,77 @@ def test_addsub_v2_router_and_residual_coefficients_are_validated():
         AddSubConfig(moe_balance_coef=-0.1).validate()
     with pytest.raises(ValueError, match="router_z_loss_coef"):
         AddSubConfig(router_z_loss_coef=float("inf")).validate()
+
+
+def test_addsub_colab_uses_main_and_does_not_hide_cuda_or_restart_from_zero():
+    import json
+    from pathlib import Path
+
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_AddSub_V1_From_Scratch.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    setup = code[0]
+    all_code = "\\n".join(code)
+    assert "REPO_BRANCH = 'main'" in setup
+    assert "CUDA_VISIBLE_DEVICES" not in all_code
+    assert "os.environ" not in setup
+    assert "if DEVICE.startswith('cuda') and not torch.cuda.is_available():" in all_code
+    assert "available_checkpoints = sorted(PRETRAIN_DIR.glob('checkpoint-step-*.pt'))" in all_code
+    assert "available_sft_checkpoints = sorted(SFT_DIR.glob('sft-checkpoint-step-*.pt'))" in all_code
+
+
+def test_addsub_tokenizer_includes_approved_sft_training_messages(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "reviewed-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "How does a small computer store information?"},
+            {"role": "assistant", "content": "It stores information as bits in memory."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    output = io.StringIO()
+    stats = append_sft_training_text(output, sft_path, {"reviewed-source"})
+    corpus = output.getvalue()
+    assert stats["conversations"] == 1
+    assert stats["messages"] == 2
+    assert stats["bytes"] > 0
+    assert "small computer store information" in corpus
+    assert "bits in memory" in corpus
+    assert "You are Q-Mini." in corpus
+
+
+def test_addsub_tokenizer_rejects_unapproved_or_synthetic_sft_text(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "unapproved-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "A sufficiently clear user message."},
+            {"role": "assistant", "content": "A sufficiently clear assistant response."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not approved"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
+
+    record["source"] = "reviewed-source"
+    record["synthetic"] = True
+    sft_path.write_text(json.dumps(record) + "\\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="synthetic or unverified"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
