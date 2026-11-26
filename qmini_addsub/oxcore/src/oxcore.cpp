@@ -224,7 +224,8 @@ ox_status ox_tensor_view_validate(const ox_tensor_view *view) {
         return OX_EINVAL;
     }
     const size_t item_size = dtype_size(view->dtype);
-    if (item_size == 0u || view->offset_bytes > view->storage_bytes) {
+    if (item_size == 0u || view->offset_bytes > view->storage_bytes ||
+        view->offset_bytes % item_size != 0u) {
         return OX_EINVAL;
     }
 
