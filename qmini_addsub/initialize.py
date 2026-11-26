@@ -258,6 +258,7 @@ def _verify_source_snapshot(source_dir: Path, expected_sha256: str) -> dict[str,
     }
     if _sha256_json(digest_payload) != snapshot.get("sha256"):
         raise ValueError("Source snapshot index digest mismatch.")
+    snapshot["manifest_sha256"] = sha256_file(manifest_path)
     return snapshot
 
 
