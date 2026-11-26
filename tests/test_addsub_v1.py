@@ -2145,3 +2145,17 @@ def test_generation_fourgram_guard_does_not_block_a_different_continuation():
     generated = [1, 2, 3, 4] * 4
     assert _would_exceed_fourgram_repeat(generated, 9) is False
 
+
+
+def test_pretraining_evaluation_windows_include_both_stream_ends_without_duplicates():
+    from qmini_addsub.train import evaluation_window_starts
+
+    assert evaluation_window_starts(0) == [0]
+    assert evaluation_window_starts(2) == [0, 1, 2]
+    starts = evaluation_window_starts(100)
+    assert len(starts) == 64
+    assert starts[0] == 0
+    assert starts[-1] == 100
+    assert starts == sorted(set(starts))
+    with pytest.raises(ValueError, match="max_start"):
+        evaluation_window_starts(-1)
