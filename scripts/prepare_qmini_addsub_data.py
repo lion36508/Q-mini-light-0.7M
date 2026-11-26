@@ -251,13 +251,13 @@ def prepare_wikitext(cache: Path, output: Path) -> dict:
 def _select_oasst_conversation_path(
     messages: list[dict],
 ) -> tuple[list[dict] | None, str | None, bool]:
-    """Select one deterministic, complete root-to-leaf path from an OASST tree.
+    """Select the longest complete branch in O(nodes + edges) time.
 
-    OASST message trees can branch. Choosing children[0] makes the training
-    corpus depend on Parquet row order and can silently select a short or
-    incomplete branch. Instead, validate message identity/root structure and
-    choose the longest complete path; equal-length paths use message-ID order
-    as a stable tie-break. Cyclic paths and duplicate IDs are rejected.
+    OASST trees can branch. Selecting the first child depends on Parquet row
+    order, while enumerating every root-to-leaf path can be exponential.
+    This post-order dynamic program computes one best assistant-ending suffix
+    per message. Equal-length branches are tie-broken by the next message ID,
+    which is sufficient because message IDs are unique.
     """
     by_id: dict[str, dict] = {}
     for message in messages:
@@ -279,7 +279,7 @@ def _select_oasst_conversation_path(
     if root.get("role") != "prompter":
         return None, "invalid_root_role", False
 
-    children: dict[str, list[dict]] = defaultdict(list)
+    children: dict[str, list[str]] = defaultdict(list)
     orphan_messages = 0
     for message in messages:
         parent_id = message.get("parent_id")
@@ -287,61 +287,78 @@ def _select_oasst_conversation_path(
             continue
         parent_key = str(parent_id)
         if parent_key not in by_id:
-            # A parent may have been filtered out by OASST review/rank policy.
-            # Its descendants are not reachable from the accepted root.
             orphan_messages += 1
             continue
-        children[parent_key].append(message)
+        children[parent_key].append(str(message["message_id"]))
 
-    for child_list in children.values():
-        child_list.sort(key=lambda item: str(item["message_id"]))
+    for child_ids in children.values():
+        child_ids.sort()
 
-    branching = any(len(child_list) > 1 for child_list in children.values())
+    branching = any(len(child_ids) > 1 for child_ids in children.values())
     root_id = str(root["message_id"])
-    stack: list[tuple[dict, tuple[dict, ...], frozenset[str]]] = [
-        (root, (root,), frozenset((root_id,)))
-    ]
-    best_path: tuple[dict, ...] | None = None
-    best_key: tuple[int, tuple[str, ...]] | None = None
+
+    # state: 1 = visiting, 2 = complete. The graph is expected to be a tree
+    # (each row carries one parent_id); visiting checks still fail closed on
+    # malformed cyclic edges.
+    state: dict[str, int] = {}
+    best_length: dict[str, int] = {}
+    best_child: dict[str, str | None] = {}
+    stack: list[tuple[str, bool]] = [(root_id, False)]
 
     while stack:
-        current, path, path_ids = stack.pop()
-        current_id = str(current["message_id"])
-        available_children = children.get(current_id, [])
-        next_children = [
-            child for child in available_children
-            if str(child["message_id"]) not in path_ids
-        ]
-        has_cycle_edge = len(next_children) != len(available_children)
-
-        if next_children:
-            for child in reversed(next_children):
-                child_id = str(child["message_id"])
-                stack.append((
-                    child,
-                    (*path, child),
-                    path_ids | frozenset((child_id,)),
-                ))
+        message_id, expanded = stack.pop()
+        if not expanded:
+            if state.get(message_id, 0) in (1, 2):
+                continue
+            state[message_id] = 1
+            stack.append((message_id, True))
+            for child_id in reversed(children.get(message_id, [])):
+                if state.get(child_id, 0) != 2 and state.get(child_id, 0) != 1:
+                    stack.append((child_id, False))
             continue
 
-        # A cyclic edge is not a valid leaf. Do not turn a malformed loop into
-        # a plausible-looking truncated training conversation.
-        if has_cycle_edge:
-            continue
-        if path[0].get("role") != "prompter" or path[-1].get("role") != "assistant":
-            continue
+        child_ids = children.get(message_id, [])
+        selected_child = None
+        selected_length = 0
+        for child_id in child_ids:
+            # A child still being visited is a cycle edge; do not use it.
+            if state.get(child_id) != 2:
+                continue
+            suffix_length = best_length.get(child_id, 0)
+            if suffix_length == 0:
+                continue
+            candidate_length = 1 + suffix_length
+            if (
+                candidate_length > selected_length
+                or (
+                    candidate_length == selected_length
+                    and (selected_child is None or child_id < selected_child)
+                )
+            ):
+                selected_length = candidate_length
+                selected_child = child_id
 
-        ids = tuple(str(item["message_id"]) for item in path)
-        key = (-len(path), ids)
-        if best_key is None or key < best_key:
-            best_key = key
-            best_path = path
+        if not child_ids and by_id[message_id].get("role") == "assistant":
+            selected_length = 1
+            selected_child = None
 
-    if best_path is None:
+        best_length[message_id] = selected_length
+        best_child[message_id] = selected_child
+        state[message_id] = 2
+
+    if best_length.get(root_id, 0) == 0:
         reason = "orphaned_or_cyclic_tree" if orphan_messages else "no_complete_assistant_path"
         return None, reason, branching
-    return list(best_path), None, branching
 
+    selected_path = []
+    cursor: str | None = root_id
+    while cursor is not None:
+        selected_path.append(by_id[cursor])
+        cursor = best_child.get(cursor)
+
+    if selected_path[0].get("role") != "prompter" or selected_path[-1].get("role") != "assistant":
+        return None, "no_complete_assistant_path", branching
+    return selected_path, None, branching
 
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
     hf_hub_download_fn = _require_hf_hub_download()
