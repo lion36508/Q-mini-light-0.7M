@@ -35,8 +35,6 @@ class AddSubConfig:
     moe_bias_update_rate: float = 0.001
     moe_bias_max_abs: float = 2.0
     seed: int = 20261119
-    # Absolute project ceiling for every Add/Sub training profile.
-    parameter_budget: int = MAX_PARAMETER_BUDGET
 
     def validate(self) -> None:
         positive = {
@@ -97,19 +95,11 @@ class AddSubConfig:
             raise ValueError("seed must be a non-negative integer.")
         if self.n_experts < 2:
             raise ValueError("n_experts must be at least 2 for sparse Top-1 routing.")
-        if (
-            isinstance(self.parameter_budget, bool)
-            or not isinstance(self.parameter_budget, int)
-            or not 1 <= self.parameter_budget <= MAX_PARAMETER_BUDGET
-        ):
-            raise ValueError(
-                f"parameter_budget must be an integer from 1 to {MAX_PARAMETER_BUDGET}."
-            )
         estimated = self.estimated_parameter_count()
-        if estimated > self.parameter_budget:
+        if estimated > MAX_PARAMETER_BUDGET:
             raise ValueError(
-                f"Model profile requires {estimated:,} parameters, exceeding its "
-                f"{self.parameter_budget:,} parameter budget."
+                f"Model profile requires {estimated:,} parameters, exceeding the "
+                f"hard {MAX_PARAMETER_BUDGET:,} parameter ceiling."
             )
 
     def estimated_parameter_count(self) -> int:
