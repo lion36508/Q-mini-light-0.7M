@@ -138,6 +138,11 @@ def groupwise_scale(weight: torch.Tensor, group_size: int = 32, multiplier: floa
         stop = min(start + group_size, flat.shape[1])
         block = flat[:, start:stop]
         scale = (block.abs().mean(dim=1, keepdim=True) * multiplier).clamp_min(1e-8)
+        if not bool(torch.isfinite(scale).all()) or bool((scale <= 0.0).any()):
+            raise OverflowError(
+                "WaveBit group-wise scale is not representable as a positive finite "
+                f"{weight.dtype} value for input group {start}:{stop}."
+            )
         scaled[:, start:stop] = scale.expand_as(block)
     return scaled.reshape_as(weight).detach()
 
@@ -459,6 +464,9 @@ def integer_octave_projection(
 
     required_groups = (input_features + 2) // 3
     lut = build_octave_decode_lut(boost_factor=boost_factor)
+    # The packed/native projection contract uses signed int64 activations
+    # and a signed int64 accumulator. Do not let uint64 or wider values narrow.
+    activations = checked_int64_array(activations, "Octave activations")
     output = np.zeros((activations.shape[0], out_features), dtype=np.int64)
     for batch in range(activations.shape[0]):
         for out_index in range(out_features):
@@ -495,28 +503,42 @@ def integer_octave_projection(
                     if shift is None:
                         raise ValueError("Invalid Octave half-unit coefficient.")
                     term = int(activations[batch, feature]) << shift
-                    if coefficient > 0:
-                        accumulator += term
-                    else:
-                        accumulator -= term
+                    contribution = term if coefficient > 0 else -term
+                    try:
+                        accumulator = checked_int64_add(
+                            accumulator,
+                            contribution,
+                            "Octave projection accumulator",
+                        )
+                    except OverflowError as exc:
+                        raise OverflowError(
+                            "Octave projection accumulator exceeds int64 range."
+                        ) from exc
                 group += 1
             if group != required_groups or cursor != end:
                 raise ValueError("Octave stream row does not match declared input width.")
+            # Every intermediate update is checked above; this is a defensive
+            # assertion before storing into the NumPy int64 output buffer.
             int64_info = np.iinfo(np.int64)
             if accumulator < int64_info.min or accumulator > int64_info.max:
                 raise OverflowError("Octave projection accumulator exceeds int64 range.")
             output[batch, out_index] = accumulator
     if bias_half_units is not None:
-        bias = np.asarray(bias_half_units)
-        if bias.dtype.kind not in "iu" or bias.shape != (out_features,):
+        bias = checked_int64_array(bias_half_units, "bias_half_units")
+        if bias.shape != (out_features,):
             raise ValueError("bias_half_units must be an integer output vector.")
-        int64_info = np.iinfo(np.int64)
-        if any(int(value) < int64_info.min or int(value) > int64_info.max for value in bias):
-            raise ValueError("bias_half_units values must fit in int64 without narrowing.")
-        combined = output.astype(object) + bias.astype(object)[None, :]
-        if any(int(value) < int64_info.min or int(value) > int64_info.max for value in combined.flat):
-            raise OverflowError("Octave projection plus bias exceeds int64 range.")
-        output = np.asarray(combined, dtype=np.int64)
+        for batch in range(output.shape[0]):
+            for out_index in range(output.shape[1]):
+                try:
+                    output[batch, out_index] = checked_int64_add(
+                        int(output[batch, out_index]),
+                        int(bias[out_index]),
+                        "Octave projection plus bias",
+                    )
+                except OverflowError as exc:
+                    raise OverflowError(
+                        "Octave projection plus bias exceeds int64 range."
+                    ) from exc
     return output
 
 
@@ -641,7 +663,14 @@ def blockwise_hadamard_quantize_i8(
             cursor += block_width
         codes = np.rint(transformed * (float(max_code) / max_abs))
         output[row] = np.clip(codes, -max_code, max_code).astype(np.int8)
-        output_scales[row] = np.float32(scales[row] * (max_abs / max_code))
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            row_scale = np.float32(np.float64(scales[row]) * (max_abs / max_code))
+        if not np.isfinite(row_scale) or row_scale <= 0.0:
+            raise OverflowError(
+                "Hadamard activation output scale is not representable as a "
+                "positive finite float32 value."
+            )
+        output_scales[row] = row_scale
     return output, output_scales
 
 
@@ -771,6 +800,8 @@ class HolographicRotationMemory(torch.nn.Module):
 # Keep the historical public API while centralizing overflow-safe arithmetic.
 from .integer_safety import (
     CapacitorCharge,
+    checked_int64_add,
+    checked_int64_array,
     holographic_state_step_int,
     integer_wavebit_projection,
 )

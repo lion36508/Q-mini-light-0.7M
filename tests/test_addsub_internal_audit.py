@@ -573,3 +573,85 @@ def test_octave_integer_reference_supports_wide_integer_activations_without_narr
     )
     assert result.dtype == np.int64
     assert result.tolist() == [[400]]
+
+
+
+def test_octave_projection_rejects_intermediate_int64_overflow_even_if_later_terms_cancel():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_octave_projection, pack_octave_stream
+
+    # The first +2 coefficient creates 2**63 in half-units. The following
+    # -2 coefficient would cancel it mathematically, but a native int64
+    # accumulator cannot represent the intermediate value.
+    codes = np.asarray([[4, 0, 2]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    stream, offsets = pack_octave_stream(codes, modes)
+    activations = np.asarray([[1 << 62, 1 << 62]], dtype=np.int64)
+    with pytest.raises(OverflowError, match="Octave projection accumulator"):
+        integer_octave_projection(
+            activations, stream, offsets, input_features=2
+        )
+
+
+def test_octave_projection_rejects_accumulator_overflow_before_opposite_sign_cancellation():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_octave_projection, pack_octave_stream
+
+    codes = np.asarray([[4, 4, 0]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    stream, offsets = pack_octave_stream(codes, modes)
+    activations = np.asarray(
+        [[1 << 61, 1 << 61, 1 << 61]], dtype=np.int64
+    )
+    with pytest.raises(OverflowError, match="Octave projection accumulator"):
+        integer_octave_projection(
+            activations, stream, offsets, input_features=3
+        )
+
+
+def test_octave_projection_rejects_uint64_activation_narrowing():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import integer_octave_projection, pack_octave_stream
+
+    codes = np.asarray([[3, 2, 2]], dtype=np.uint8)
+    modes = np.asarray([[False]], dtype=np.bool_)
+    stream, offsets = pack_octave_stream(codes, modes)
+    activations = np.asarray([[np.iinfo(np.uint64).max]], dtype=np.uint64)
+    with pytest.raises(OverflowError, match="outside the signed int64"):
+        integer_octave_projection(
+            activations, stream, offsets, input_features=1
+        )
+
+
+def test_wavebit_hadamard_activation_scale_rejects_float32_underflow_and_overflow():
+    import numpy as np
+    from qmini_addsub.wavebit_hsra import blockwise_hadamard_quantize_i8
+
+    smallest_subnormal = np.nextafter(np.float32(0.0), np.float32(1.0))
+    with pytest.raises(OverflowError, match="positive finite float32"):
+        blockwise_hadamard_quantize_i8(
+            np.asarray([[1]], dtype=np.int8),
+            np.asarray([smallest_subnormal], dtype=np.float32),
+            block_size=1,
+            activation_bits=4,
+        )
+
+    with pytest.raises(OverflowError, match="positive finite float32"):
+        blockwise_hadamard_quantize_i8(
+            np.asarray([[127]], dtype=np.int8),
+            np.asarray([np.finfo(np.float32).max], dtype=np.float32),
+            block_size=1,
+            activation_bits=2,
+        )
+
+
+
+def test_wavebit_groupwise_scale_rejects_finite_weights_that_overflow_the_scale():
+    import torch
+    from qmini_addsub.wavebit_hsra import groupwise_scale
+
+    maximum = torch.finfo(torch.float32).max
+    weights = torch.full((1, 3), maximum, dtype=torch.float32)
+    assert torch.isfinite(weights).all()
+    with pytest.raises(OverflowError, match="group-wise scale"):
+        groupwise_scale(weights, group_size=3, multiplier=1.4)
