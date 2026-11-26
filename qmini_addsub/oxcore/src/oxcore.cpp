@@ -128,7 +128,8 @@ ox_status ox_tensor_view_validate(const ox_tensor_view *view) {
     if (view == nullptr || view->rank > OXCORE_MAX_TENSOR_RANK) {
         return OX_EINVAL;
     }
-    if (dtype_size(view->dtype) == 0u) {
+    const size_t item_size = dtype_size(view->dtype);
+    if (item_size == 0u || view->offset_bytes > view->storage_bytes) {
         return OX_EINVAL;
     }
 
@@ -141,8 +142,58 @@ ox_status ox_tensor_view_validate(const ox_tensor_view *view) {
         }
         element_count *= dimension;
     }
-    if (element_count != 0u && view->data == nullptr) {
+    if (element_count == 0u) {
+        return OX_OK;
+    }
+    if (view->storage == nullptr || view->storage_bytes == 0u ||
+        view->offset_bytes > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
         return OX_EINVAL;
+    }
+
+    int64_t minimum_offset = static_cast<int64_t>(view->offset_bytes);
+    int64_t maximum_offset = minimum_offset;
+    for (uint32_t axis = 0u; axis < view->rank; ++axis) {
+        const uint64_t dimension = view->shape[axis];
+        const int64_t stride = view->strides_bytes[axis];
+        if (dimension <= 1u) {
+            continue;
+        }
+        const uint64_t stride_magnitude = stride < 0
+            ? static_cast<uint64_t>(-(stride + 1)) + 1u
+            : static_cast<uint64_t>(stride);
+        if (stride_magnitude % static_cast<uint64_t>(item_size) != 0u) {
+            return OX_EINVAL;
+        }
+        const uint64_t steps = dimension - 1u;
+        if (stride_magnitude != 0u &&
+            steps > std::numeric_limits<uint64_t>::max() / stride_magnitude) {
+            return OX_EOVERFLOW;
+        }
+        const uint64_t span = steps * stride_magnitude;
+        if (span > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+            return OX_EOVERFLOW;
+        }
+        if (stride < 0) {
+            if (span > static_cast<uint64_t>(minimum_offset)) {
+                return OX_EINVAL;
+            }
+            minimum_offset -= static_cast<int64_t>(span);
+        } else {
+            if (span > static_cast<uint64_t>(
+                           std::numeric_limits<int64_t>::max() - maximum_offset)) {
+                return OX_EOVERFLOW;
+            }
+            maximum_offset += static_cast<int64_t>(span);
+        }
+    }
+
+    if (minimum_offset < 0 || maximum_offset < minimum_offset) {
+        return OX_EINVAL;
+    }
+    const uint64_t end_offset =
+        static_cast<uint64_t>(maximum_offset) + static_cast<uint64_t>(item_size);
+    if (end_offset > static_cast<uint64_t>(view->storage_bytes)) {
+        return OX_ECAPACITY;
     }
     return OX_OK;
 }
