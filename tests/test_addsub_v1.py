@@ -1686,7 +1686,7 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     from tokenizers.pre_tokenizers import Whitespace
 
     from qmini_addsub.evaluate import evaluate_heldout_conversations
-    from qmini_addsub.train import CHECKPOINT_FORMAT
+    from qmini_addsub.sft import SFT_FORMAT
 
     special = [
         "<unk>", "<bos>", "<eos>", "<pad>",
@@ -1716,8 +1716,9 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     checkpoint_path = tmp_path / "trained.pt"
     torch.save(
         {
-            "format": CHECKPOINT_FORMAT,
+            "format": SFT_FORMAT,
             "step": 1,
+            "base_sha256": "1" * 64,
             "config": config.to_dict(),
             "model": model.state_dict(),
             "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
