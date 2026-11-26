@@ -544,6 +544,13 @@ class AddSubLanguageModel(nn.Module):
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(model_seed)
             self._initialize_parameters()
+        actual_parameters = self.parameter_count()
+        if actual_parameters > self.config.parameter_budget:
+            raise ValueError(
+                f"Constructed Add/Sub graph has {actual_parameters:,} parameters, "
+                f"exceeding the hard {self.config.parameter_budget:,} parameter cap. "
+                "Optional architecture components must fit inside the same budget."
+            )
 
     def _initialize_parameters(self) -> None:
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
