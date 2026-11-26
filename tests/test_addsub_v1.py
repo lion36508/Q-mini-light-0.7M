@@ -47,10 +47,18 @@ def test_colab_addsub_notebook_is_separate_and_training_is_off_by_default():
         ast.parse(source, filename=f"{notebook_path}:cell-{index}")
     all_code = "\n".join(code)
     assert "Q mini 2 light" in all_code
+    assert "REPO_BRANCH = 'main'" in all_code
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in all_code
+    assert "REPO_COMMIT = subprocess.check_output" in all_code
+    assert "algorithm/addsub-stability-routing-v2" not in all_code
+    assert "trainability_v2" not in all_code
     assert "PREPARE_PINNED_CORPUS = False" in all_code
     assert "IMPORT_USER_DATA = False" in all_code
     assert "BUILD_TOKENIZER_AND_STREAMS = False" in all_code
     assert "START_PRETRAIN = False" in all_code
+    assert "PRETRAIN_EXTEND_SCHEDULE = False" in all_code
+    assert "SFT_EXTEND_SCHEDULE = False" in all_code
+    assert all_code.count("['--extend-schedule']") == 2
     assert "START_SFT = False" in all_code
     assert "EXPORT_PACKED_WEIGHTS = False" in all_code
     assert "RUN_HELDOUT_EVAL = False" in all_code
@@ -458,6 +466,35 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     for name, tensor in full_state["model"].items():
         assert torch.equal(tensor, resumed_state["model"][name]), name
 
+    # Extending the horizon is opt-in and keeps the existing run lineage intact.
+    extended_pretrain_dir = tmp_path / "extended-pretrain"
+    extended_pretrain_dir.mkdir()
+    step_two = resumed_run_dir / "checkpoint-step-000000002.pt"
+    shutil.copy2(step_two, extended_pretrain_dir / step_two.name)
+    shutil.copy2(resumed_run_dir / "metrics.jsonl", extended_pretrain_dir / "metrics.jsonl")
+    extended_common = {**common, "output_dir": extended_pretrain_dir}
+    with pytest.raises(ValueError, match="extend_schedule=True"):
+        train_from_scratch(
+            steps=3, resume=extended_pretrain_dir / step_two.name, **extended_common
+        )
+    extended_result = train_from_scratch(
+        steps=3, resume=extended_pretrain_dir / step_two.name,
+        extend_schedule=True, **extended_common,
+    )
+    assert extended_result["schedule_total_steps"] == 3
+    extended_state = torch.load(
+        extended_pretrain_dir / "checkpoint-step-000000003.pt",
+        map_location="cpu", weights_only=True,
+    )
+    assert extended_state["step"] == 3
+    assert extended_state["schedule_total_steps"] == 3
+    pretrain_metrics = [
+        json.loads(line) for line in
+        (extended_pretrain_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["step"] for row in pretrain_metrics] == [1, 2, 3]
+    assert [row["schedule_total_steps"] for row in pretrain_metrics] == [2, 2, 3]
+
     def write_conversation(path):
         record = {
             "source": "databricks/databricks-dolly-15k",
@@ -545,6 +582,47 @@ def test_addsub_pretraining_runs_from_zero_saves_and_resumes_verified_checkpoint
     resumed_sft_state = torch.load(resumed_sft_checkpoint, map_location="cpu", weights_only=True)
     for name, tensor in full_sft_state["model"].items():
         assert torch.equal(tensor, resumed_sft_state["model"][name]), name
+
+    extended_sft_dir = tmp_path / "sft-extended"
+    extended_sft_dir.mkdir()
+    step_two_sft = resumed_sft_dir / "sft-checkpoint-step-000000002.pt"
+    shutil.copy2(step_two_sft, extended_sft_dir / step_two_sft.name)
+    shutil.copy2(
+        resumed_sft_dir / "sft_metrics.jsonl",
+        extended_sft_dir / "sft_metrics.jsonl",
+    )
+    extended_sft_args = {
+        "base_checkpoint": final_pretrain_checkpoint,
+        "tokenizer_path": tokenizer_path,
+        "train_jsonl": sft_train,
+        "valid_jsonl": sft_valid,
+        "test_jsonl": sft_test,
+        "output_dir": extended_sft_dir,
+        "steps": 3,
+        "batch_size": 1,
+        "save_every": 1,
+        "device_name": "cpu",
+        "seed": 43,
+        "resume": extended_sft_dir / step_two_sft.name,
+    }
+    with pytest.raises(ValueError, match="extend_schedule=True"):
+        fine_tune_from_addsub_checkpoint(**extended_sft_args)
+    extended_sft_result = fine_tune_from_addsub_checkpoint(
+        **extended_sft_args, extend_schedule=True
+    )
+    assert extended_sft_result["schedule_total_steps"] == 3
+    extended_sft_state = torch.load(
+        extended_sft_dir / "sft-checkpoint-step-000000003.pt",
+        map_location="cpu", weights_only=True,
+    )
+    assert extended_sft_state["step"] == 3
+    assert extended_sft_state["schedule_total_steps"] == 3
+    extended_sft_metrics = [
+        json.loads(line) for line in
+        (extended_sft_dir / "sft_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["step"] for row in extended_sft_metrics] == [2, 3]
+    assert [row["schedule_total_steps"] for row in extended_sft_metrics] == [2, 3]
 
 
 def test_addsub_repetition_penalty_applies_before_greedy_choice():
@@ -1689,6 +1767,14 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     assert (output_dir / "heldout_responses.jsonl").is_file()
     assert (output_dir / "heldout_summary.json").is_file()
+    diversity = summary["output_diversity"]
+    assert diversity["examples"] == summary["test_records"] == 1
+    assert 1 <= diversity["unique_normalized_answers"] <= 1
+    assert diversity["unique_answer_fraction"] == 1.0
+    assert diversity["largest_identical_answer_count"] == 1
+    assert diversity["all_outputs_identical"] is True
+    persisted = json.loads((output_dir / "heldout_summary.json").read_text(encoding="utf-8"))
+    assert persisted["output_diversity"] == diversity
 
 
 
@@ -1812,6 +1898,233 @@ def test_addsub_v2_router_and_residual_coefficients_are_validated():
         AddSubConfig(moe_balance_coef=-0.1).validate()
     with pytest.raises(ValueError, match="router_z_loss_coef"):
         AddSubConfig(router_z_loss_coef=float("inf")).validate()
+
+
+def test_addsub_checkpoint_discovery_uses_numeric_order_and_rejects_ambiguous_names(tmp_path):
+    from qmini_addsub.checkpoints import latest_checkpoint
+
+    older = tmp_path / "checkpoint-step-9.pt"
+    newer = tmp_path / "checkpoint-step-10.pt"
+    older.touch()
+    newer.touch()
+    assert latest_checkpoint(tmp_path, "checkpoint") == (newer, 10)
+
+    duplicate = tmp_path / "checkpoint-step-000000010.pt"
+    duplicate.touch()
+    with pytest.raises(ValueError, match="duplicate numeric checkpoint step"):
+        latest_checkpoint(tmp_path, "checkpoint")
+
+
+def test_addsub_checkpoint_discovery_fails_closed_on_malformed_or_metrics_only_output(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    malformed = tmp_path / "checkpoint-step-final.pt"
+    malformed.touch()
+    with pytest.raises(ValueError, match="malformed checkpoint filename"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl")
+
+    malformed.unlink()
+    (tmp_path / "metrics.jsonl").write_text('{"step": 1}\\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="metrics file exists but no checkpoint"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl")
+
+
+def test_addsub_checkpoint_resume_selects_latest_and_rejects_older_explicit_checkpoint(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    first = tmp_path / "checkpoint-step-000000001.pt"
+    latest = tmp_path / "checkpoint-step-000000012.pt"
+    first.touch()
+    latest.touch()
+    assert resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl") == (latest, 12)
+    with pytest.raises(ValueError, match="newer checkpoint"):
+        resolve_checkpoint(tmp_path, "checkpoint", "metrics.jsonl", explicit=first)
+
+
+def test_addsub_colab_notebook_uses_safe_checkpoint_resume():
+    import json
+
+    notebook_path = (
+        Path(__file__).resolve().parents[1]
+        / "colab"
+        / "QMini_AddSub_V1_From_Scratch.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    )
+    assert "from qmini_addsub.checkpoints import resolve_checkpoint" in code
+    assert "Automatically resuming pretraining" in code
+    assert "Automatically resuming assistant SFT" in code
+    assert "RUN_READINESS_GATE = False" in code
+    assert "qmini_addsub.readiness" in code
+    assert "'--checkpoint'" in code
+    assert "metrics_filename='metrics.jsonl'" in code
+    assert "sorted(PRETRAIN_DIR.glob" not in code
+    assert "sorted(SFT_DIR.glob" not in code
+
+
+def test_addsub_colab_keeps_cuda_visible_and_uses_the_actual_sft_metrics_filename():
+    import json
+    from pathlib import Path
+
+    notebook_path = Path(__file__).resolve().parents[1] / "colab" / "QMini_AddSub_V1_From_Scratch.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    code = [
+        "".join(cell.get("source", []))
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    all_code = "\n".join(code)
+    assert "REPO_BRANCH = 'main'" in code[0]
+    assert "VERSION_ROOT = DRIVE_ROOT / 'trainability_addsub_main_v1'" in code[0]
+    assert "CUDA_VISIBLE_DEVICES" not in all_code
+    assert "os.environ" not in code[0]
+    assert "if DEVICE.startswith('cuda') and not torch.cuda.is_available():" in all_code
+    assert "metrics_path = SFT_DIR / 'sft_metrics.jsonl'" in all_code
+    assert all_code.count("metrics_filename='sft_metrics.jsonl'") >= 4
+    assert "metrics_path = SFT_DIR / 'metrics.jsonl'" not in all_code
+
+
+def test_addsub_tokenizer_includes_approved_sft_training_messages(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "reviewed-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "How does a small computer store information?"},
+            {"role": "assistant", "content": "It stores information as bits in memory."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    output = io.StringIO()
+    stats = append_sft_training_text(output, sft_path, {"reviewed-source"})
+    corpus = output.getvalue()
+    assert stats["conversations"] == 1
+    assert stats["messages"] == 2
+    assert stats["bytes"] > 0
+    assert "small computer store information" in corpus
+    assert "bits in memory" in corpus
+    assert "You are Q-Mini." in corpus
+
+
+def test_addsub_tokenizer_rejects_unapproved_or_synthetic_sft_text(tmp_path):
+    import io
+    import json
+    from scripts.train_qmini_addsub_tokenizer import append_sft_training_text
+
+    sft_path = tmp_path / "sft_train.jsonl"
+    record = {
+        "source": "unapproved-source",
+        "human_authored": True,
+        "synthetic": False,
+        "messages": [
+            {"role": "user", "content": "A sufficiently clear user message."},
+            {"role": "assistant", "content": "A sufficiently clear assistant response."},
+        ],
+    }
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not approved"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
+
+    record["source"] = "reviewed-source"
+    record["synthetic"] = True
+    sft_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="synthetic or unverified"):
+        append_sft_training_text(io.StringIO(), sft_path, {"reviewed-source"})
+
+
+def test_addsub_checkpoint_resolver_uses_sft_metrics_filename_and_fails_closed(tmp_path):
+    from qmini_addsub.checkpoints import resolve_checkpoint
+
+    (tmp_path / "sft_metrics.jsonl").write_text('{"step": 10}\\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="metrics file exists but no checkpoint"):
+        resolve_checkpoint(tmp_path, "sft-checkpoint", "sft_metrics.jsonl")
+
+
+
+def test_metrics_reconciliation_accepts_explicit_horizon_growth(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    static_contract = {"batch_size": 1, "seed": 9}
+    rows = [
+        {
+            "step": 1,
+            "train_sha256": "a" * 64,
+            "run_contract": {**static_contract, "planned_steps": 2},
+            "schedule_total_steps": 2,
+        },
+        {
+            "step": 2,
+            "train_sha256": "a" * 64,
+            "run_contract": static_contract,
+            "schedule_total_steps": 2,
+        },
+        {
+            "step": 3,
+            "train_sha256": "a" * 64,
+            "run_contract": static_contract,
+            "schedule_total_steps": 5,
+        },
+    ]
+    metrics.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    discarded = reconcile_metrics_file(
+        str(metrics),
+        {"train_sha256": "a" * 64, "run_contract": static_contract},
+        maximum_committed_step=2,
+        run_name="Pretraining",
+    )
+    kept = [
+        json.loads(line) for line in
+        metrics.read_text(encoding="utf-8").splitlines()
+    ]
+    assert discarded == 1
+    assert [row["step"] for row in kept] == [1, 2]
+
+
+def test_metrics_reconciliation_rejects_decreasing_schedule_horizon(tmp_path):
+    import json
+
+    metrics = tmp_path / "metrics.jsonl"
+    contract = {"batch_size": 1, "seed": 9}
+    rows = [
+        {"step": 1, "train_sha256": "a" * 64, "run_contract": contract, "schedule_total_steps": 5},
+        {"step": 2, "train_sha256": "a" * 64, "run_contract": contract, "schedule_total_steps": 4},
+    ]
+    metrics.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="horizon cannot decrease"):
+        reconcile_metrics_file(
+            str(metrics),
+            {"train_sha256": "a" * 64, "run_contract": contract},
+            maximum_committed_step=2,
+            run_name="SFT",
+        )
+
+
+def test_sft_zero_target_batch_fails_instead_of_skipping_optimizer_steps():
+    from qmini_addsub.sft import _require_response_targets
+
+    labels = torch.full((2, 8), -100, dtype=torch.long)
+    with pytest.raises(ValueError, match="no assistant response targets"):
+        _require_response_targets(labels, step=17)
+
+    labels[0, 3] = 42
+    assert _require_response_targets(labels, step=18) == 1
+
 
 def test_generation_stops_a_fourgram_phrase_before_a_fifth_repeat():
     from qmini_addsub.generate import _would_exceed_fourgram_repeat

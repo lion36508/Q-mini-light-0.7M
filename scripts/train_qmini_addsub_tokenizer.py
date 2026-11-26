@@ -16,6 +16,67 @@ from qmini_addsub.data import escape_special_token_literals, normalize_training_
 from qmini_addsub.train import sha256_file
 
 
+def append_sft_training_text(target, sft_path: str | Path, approved_sources: set[str]) -> dict[str, int]:
+    """Append only manifest-approved human-authored SFT train messages to BPE text."""
+    path = Path(sft_path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if not isinstance(approved_sources, set) or not approved_sources or any(
+        not isinstance(value, str) or not value.strip() for value in approved_sources
+    ):
+        raise ValueError("A non-empty set of approved SFT sources is required.")
+
+    conversations = 0
+    messages_written = 0
+    sampled_bytes = 0
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid SFT JSONL.") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_number}: SFT record must be an object.")
+            if record.get("source") not in approved_sources:
+                raise ValueError(f"{path}:{line_number}: SFT source is not approved by the manifest.")
+            if record.get("human_authored") is not True or record.get("synthetic") is not False:
+                raise ValueError(f"{path}:{line_number}: synthetic or unverified SFT text is forbidden.")
+            messages = record.get("messages")
+            if not isinstance(messages, list) or len(messages) < 2:
+                raise ValueError(f"{path}:{line_number}: SFT messages must contain a conversation.")
+            roles = [item.get("role") if isinstance(item, dict) else None for item in messages]
+            if roles[0] != "user" or roles[-1] != "assistant":
+                raise ValueError(f"{path}:{line_number}: SFT conversation must start with user and end with assistant.")
+            if any(role not in {"user", "assistant"} for role in roles) or any(
+                roles[index] == roles[index - 1] for index in range(1, len(roles))
+            ):
+                raise ValueError(f"{path}:{line_number}: SFT roles must alternate between user and assistant.")
+
+            for message in messages:
+                cleaned, reason = normalize_training_text(message.get("content"))
+                if reason != "accepted":
+                    raise ValueError(f"{path}:{line_number}: SFT message rejected by cleaner ({reason}).")
+                escaped = escape_special_token_literals(cleaned)
+                target.write(escaped + "\n")
+                sampled_bytes += len(escaped.encode("utf-8"))
+                messages_written += 1
+            conversations += 1
+
+    if conversations == 0 or messages_written == 0:
+        raise ValueError(f"No usable manifest-approved SFT training text found in {path}.")
+    # This is prepended to every SFT example during supervised fine-tuning.
+    system_prompt = "You are Q-Mini."
+    target.write(system_prompt + "\n")
+    sampled_bytes += len(system_prompt.encode("utf-8"))
+    return {
+        "conversations": conversations,
+        "messages": messages_written,
+        "bytes": sampled_bytes,
+    }
+
+
 SPECIAL_TOKENS = [
     "<unk>",
     "<pad>",
@@ -127,6 +188,17 @@ def main() -> None:
                         )
                     target.write(first_accepted + "\n")
                     pretrain_sampled_bytes = first_count
+
+            sft_stats = {"conversations": 0, "messages": 0, "bytes": 0}
+            if sft_train_entry is not None:
+                approved_sources = data_manifest.get("approved_instruction_sources")
+                if not isinstance(approved_sources, list) or not approved_sources:
+                    raise ValueError("Dataset manifest must declare approved_instruction_sources for SFT tokenizer text.")
+                sft_stats = append_sft_training_text(
+                    target, sft, set(approved_sources)
+                )
+                sft_sampled_bytes = sft_stats["bytes"]
+
         if pretrain_sampled_bytes == 0:
             raise RuntimeError("Tokenizer sampling produced no usable pretraining text.")
 
@@ -180,6 +252,8 @@ def main() -> None:
             "pretrain_source_bytes": pretrain_source_bytes,
             "pretrain_sampled_bytes": pretrain_sampled_bytes,
             "sft_sampled_bytes": sft_sampled_bytes,
+            "sft_conversations": sft_stats["conversations"],
+            "sft_messages": sft_stats["messages"],
             "sft_tokenizer_corpus_share": sft_sampled_bytes / max(1, pretrain_sampled_bytes + sft_sampled_bytes),
             "validation_test_used": False,
         }, indent=2))
