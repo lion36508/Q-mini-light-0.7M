@@ -33,7 +33,39 @@ def oxcore(tmp_path_factory):
 
 def test_oxcore_loads_as_standalone_c_abi(oxcore):
     assert oxcore.abi_version == 1
-    assert oxcore.version == "OxCore 0.1.0"
+    assert oxcore.version == "OxCore 0.2.0"
+
+
+def test_oxcore_rejects_incompatible_native_abi(tmp_path, monkeypatch):
+    fake_path = tmp_path / "wrong-abi.so"
+    fake_path.write_bytes(b"test placeholder")
+
+    class FakeFunction:
+        def __init__(self, value):
+            self.value = value
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self.value
+
+    class FakeLibrary:
+        def __init__(self):
+            self.functions = {
+                "oxcore_abi_version": FakeFunction(99),
+                "oxcore_version": FakeFunction(b"OxCore 99.0.0"),
+                "ox_status_name": FakeFunction(b"invalid"),
+            }
+
+        def __getattr__(self, name):
+            return self.functions.setdefault(name, FakeFunction(0))
+
+    monkeypatch.setattr(
+        "qmini_addsub.oxcore.native.ctypes.CDLL",
+        lambda _path: FakeLibrary(),
+    )
+    with pytest.raises(OxCoreError, match="Incompatible OxCore ABI"):
+        OxCoreNative(fake_path)
 
 
 def test_mirror63_all_250_codes_round_trip_and_exactly_six_escapes(oxcore):
@@ -246,6 +278,25 @@ def test_q15_ssm_scan_matches_sequential_reference_and_returns_final_cache(oxcor
     assert final == [[20, -48]]
 
 
+def test_q15_ssm_scan_accepts_int32_min_and_safe_cancellation(oxcore):
+    states, final = oxcore.ssm_scan_q15_i32(
+        [[-(2**31)]],
+        [[[0]]],
+        [[[32768]]],
+    )
+    assert states == [[[-(2**31)]]]
+    assert final == [[-(2**31)]]
+
+    # The first token reaches INT32_MAX and the second safely cancels it.
+    states, final = oxcore.ssm_scan_q15_i32(
+        [[0]],
+        [[[2**31 - 1]], [[-(2**31 - 1)]]],
+        [[[0]], [[32768]]],
+    )
+    assert states == [[[2**31 - 1]], [[0]]]
+    assert final == [[0]]
+
+
 def test_q15_ssm_scan_uses_round_to_nearest_even_for_positive_and_negative_ties(oxcore):
     initial = [[1, 3, -3, 5, -5]]
     injection = [[[0, 0, 0, 0, 0]]]
@@ -317,6 +368,13 @@ def test_fwht_rejects_non_power_of_two_and_preflights_overflow(oxcore):
         oxcore.fwht_i64([2**63 - 1, 0])
 
 
+def test_sinkhorn4_rejects_out_of_range_iteration_count(oxcore):
+    with pytest.raises(ValueError, match="between 1 and 10000"):
+        oxcore.sinkhorn4([[0.0] * 4 for _ in range(4)], iterations=0)
+    with pytest.raises(ValueError, match="between 1 and 10000"):
+        oxcore.sinkhorn4([[0.0] * 4 for _ in range(4)], iterations=10001)
+
+
 def test_sinkhorn4_returns_nonnegative_doubly_stochastic_matrix(oxcore):
     logits = [
         [0.0, 0.2, -0.1, 0.4],
@@ -347,6 +405,14 @@ def test_ngpt_l2_normalization_and_zero_vector(oxcore):
         1.0, abs=1e-6
     )
     assert oxcore.normalize_f32([0.0, 0.0, 0.0]) == [0.0, 0.0, 0.0]
+
+
+def test_ngpt_normalization_validates_epsilon(oxcore):
+    for epsilon in (0.0, -1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="epsilon"):
+            oxcore.normalize_f32([1.0, 2.0], epsilon=epsilon)
+    with pytest.raises(TypeError, match="epsilon"):
+        oxcore.normalize_f32([1.0], epsilon=True)
 
 
 def test_ngpt_normalization_rejects_nonfinite_input(oxcore):
