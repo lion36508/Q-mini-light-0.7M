@@ -522,6 +522,7 @@ def fine_tune_from_addsub_checkpoint(
                 "test_sha256": hashes["test_sha256"],
                 "tokenizer_sha256": hashes["tokenizer_sha256"],
                 "data_manifest_sha256": hashes["data_manifest_sha256"],
+                "base_sha256": hashes["base_sha256"],
                 "run_contract": run_contract,
                 "schedule_total_steps": schedule_total_steps,
             }
