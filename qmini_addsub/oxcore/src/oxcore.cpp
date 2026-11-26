@@ -672,6 +672,50 @@ ox_status ox_ssm_scan_q15_i32(
     return OX_OK;
 }
 
+ox_status ox_lut_u8_i16(
+    const uint8_t *indices, const int16_t table[256],
+    size_t length, int16_t *output
+) {
+    if (indices == nullptr || table == nullptr || output == nullptr ||
+        length == 0u) {
+        return OX_EINVAL;
+    }
+    for (size_t index = 0u; index < length; ++index) {
+        output[index] = table[indices[index]];
+    }
+    return OX_OK;
+}
+
+ox_status ox_top1_i16(
+    const int16_t *scores,
+    size_t batch,
+    size_t experts,
+    uint16_t *selected_expert,
+    int16_t *selected_score
+) {
+    if (scores == nullptr || selected_expert == nullptr ||
+        selected_score == nullptr || batch == 0u || experts == 0u ||
+        experts > 65536u || size_product_overflows(batch, experts)) {
+        return OX_EINVAL;
+    }
+
+    for (size_t row = 0u; row < batch; ++row) {
+        const size_t offset = row * experts;
+        size_t best_index = 0u;
+        int16_t best_score = scores[offset];
+        for (size_t expert = 1u; expert < experts; ++expert) {
+            const int16_t candidate = scores[offset + expert];
+            if (candidate > best_score) {
+                best_score = candidate;
+                best_index = expert;
+            }
+        }
+        selected_expert[row] = static_cast<uint16_t>(best_index);
+        selected_score[row] = best_score;
+    }
+    return OX_OK;
+}
+
 ox_status ox_fwht_i64(int64_t *values, size_t length) {
     if (values == nullptr || length == 0u || !is_power_of_two(length)) {
         return OX_EINVAL;
