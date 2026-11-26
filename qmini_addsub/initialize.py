@@ -63,7 +63,7 @@ def _sha256_json(value: dict[str, Any]) -> str:
 
 SOURCE_SNAPSHOT_FORMAT = "qmini-addsub-source-snapshot-v1"
 SOURCE_DIRECTORIES = ("qmini_addsub", "qmini", "scripts")
-SOURCE_ROOT_FILES = ("pyproject.toml", "README.md")
+SOURCE_ROOT_FILES = ("pyproject.toml", "README.md", "configs/qmini_addsub_2m.json")
 SOURCE_EXTENSIONS = {
     ".py", ".cpp", ".cc", ".h", ".hpp", ".json", ".toml",
     ".md", ".txt", ".sh", ".yml", ".yaml", ".cmake",
@@ -99,6 +99,7 @@ def _source_snapshot_files(source_root: Path) -> list[Path]:
         source_root / "qmini_addsub" / "sft.py",
         source_root / "qmini" / "__init__.py",
         source_root / "pyproject.toml",
+        source_root / "configs" / "qmini_addsub_2m.json",
     }
     missing = sorted(str(path.relative_to(source_root)) for path in required if path not in selected)
     if missing:
