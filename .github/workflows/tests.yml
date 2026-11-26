@@ -53,6 +53,8 @@ jobs:
             qmini_addsub/oxcore/src/oxcore.cpp \
             -o /tmp/libqmini_oxcore_aarch64.so
           file /tmp/libqmini_oxcore_aarch64.so
+      - name: Run OxCore native ASan and UBSan tests
+        run: bash scripts/test_oxcore_sanitizers.sh
       - name: Validate Colab notebook Python syntax
         run: |
           python - <<'PY'
