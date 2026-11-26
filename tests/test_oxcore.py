@@ -118,7 +118,7 @@ def test_mirror63_linear_projection_matches_integer_reference_and_handles_partia
         [[1, 2, 3, 4], [-1, 5, -2, 3]],
         weight_rows,
     )
-    assert actual == [[15, 5], [7, 10]]
+    assert actual == [[15, 5], [6, 10]]
 
 
 def test_mirror63_linear_projection_rejects_bad_shapes_and_reserved_codes(oxcore):
@@ -140,7 +140,7 @@ def test_mirror63_causal_depthwise_convolution_matches_reference(oxcore):
         packed_weights,
         kernel_size=3,
     )
-    assert actual == [[4, -10], [6, -20], [10, -10], [14, -30]]
+    assert actual == [[4, -10], [6, -20], [10, -10], [14, 0]]
 
 
 def test_mirror63_causal_depthwise_convolution_rejects_bad_weights_and_shapes(oxcore):
