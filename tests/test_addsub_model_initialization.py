@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
+import numpy as np
 import torch
 from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
 
 from qmini_addsub.config import AddSubConfig
+from qmini_addsub.train import train_from_scratch
 from qmini_addsub.initialize import (
     INITIAL_MODEL_FORMAT,
     build_bootstrap_tokenizer,
@@ -103,3 +108,105 @@ def test_partial_model_bundle_is_never_overwritten(tmp_path: Path) -> None:
         initialize_model_artifacts(root, PROFILE, threads=2)
 
     assert marker.read_text(encoding="utf-8") == "user-data-preserve"
+
+
+
+def test_pretraining_loads_the_exact_saved_model_first_weights(tmp_path: Path) -> None:
+    from qmini_addsub.initialize import INITIAL_MODEL_FORMAT
+
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=8,
+        d_hidden=16,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=16,
+        dropout=0.0,
+        seed=91,
+    )
+    special = ["<unk>", "<pad>", "<bos>", "<eos>", "<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
+    vocab = {token: index for index, token in enumerate(special)}
+    vocab.update({f"byte-token-{index:03d}": index for index in range(8, 264)})
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer_path = tmp_path / "tokenizer.json"
+    tokenizer.save(str(tokenizer_path))
+    tokenizer_sha = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+
+    initial_model = AddSubLanguageModel(config, seed=config.seed)
+    initial_path = tmp_path / "initial_model.pt"
+    torch.save(
+        {
+            "format": INITIAL_MODEL_FORMAT,
+            "stage": "initialized_untrained",
+            "step": 0,
+            "config": config.to_dict(),
+            "parameter_count": initial_model.parameter_count(),
+            "tokenizer_sha256": tokenizer_sha,
+            "wavebit_options": None,
+            "model": initial_model.state_dict(),
+        },
+        initial_path,
+    )
+    initial_sha = hashlib.sha256(initial_path.read_bytes()).hexdigest()
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    stream_entries = {}
+    source_splits = {}
+    for split in ("train", "validation", "test"):
+        text_path = data_dir / f"pretrain_{split}.txt"
+        text_path.write_text(f"English {split} data for Q-Mini.\n", encoding="utf-8")
+        source_sha = hashlib.sha256(text_path.read_bytes()).hexdigest()
+        source_splits[split] = {"sha256": source_sha}
+        stream_path = data_dir / f"pretrain_{split}.u16"
+        values = (np.arange(64, dtype=np.uint16) % 12) + 8
+        values.tofile(stream_path)
+        stream_entries[split] = {
+            "path": stream_path.name,
+            "tokens": int(values.size),
+            "sha256": hashlib.sha256(stream_path.read_bytes()).hexdigest(),
+            "source_sha256": source_sha,
+            "source_bytes": text_path.stat().st_size,
+        }
+
+    manifest = {
+        "format": "qmini-addsub-data-v1",
+        "language": "English",
+        "synthetic_training_records_included": 0,
+        "pretraining": {"splits": source_splits},
+        "token_streams": stream_entries,
+        "tokenizer": {"path": tokenizer_path.name, "sha256": tokenizer_sha},
+    }
+    (data_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True), encoding="utf-8"
+    )
+
+    output_dir = tmp_path / "pretrain-run"
+    result = train_from_scratch(
+        train_bin=data_dir / "pretrain_train.u16",
+        valid_bin=data_dir / "pretrain_validation.u16",
+        tokenizer_path=tokenizer_path,
+        output_dir=output_dir,
+        config=config,
+        steps=1,
+        batch_size=1,
+        learning_rate=1e-3,
+        sequence_length=8,
+        save_every=1,
+        validate_every=1,
+        seed=42,
+        device_name="cpu",
+        num_threads=1,
+        initial_model=initial_path,
+    )
+
+    checkpoint = torch.load(
+        output_dir / "checkpoint-step-000000001.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert result["initial_model_sha256"] == initial_sha
+    assert checkpoint["run_contract"]["initial_model_sha256"] == initial_sha
+    assert checkpoint["step"] == 1
