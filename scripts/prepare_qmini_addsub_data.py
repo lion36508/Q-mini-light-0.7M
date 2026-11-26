@@ -11,6 +11,13 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    # Keep a patchable module attribute while allowing pure helper imports
+    # without the optional network/data dependencies installed.
+    hf_hub_download = None
+
 
 from qmini_addsub.data import (
     accept_oasst1_message,
@@ -65,17 +72,30 @@ def download_verified(url: str, destination: Path, sha256: str, size: int) -> Pa
     return destination
 
 
+def _require_hf_hub_download():
+    downloader = hf_hub_download
+    if downloader is None:
+        try:
+            from huggingface_hub import hf_hub_download as downloader
+        except ImportError as exc:
+            raise RuntimeError(
+                "Add/Sub dataset preparation requires the optional data dependencies. "
+                "Install with: python -m pip install 'qmini[addsub-data]'."
+            ) from exc
+    return downloader
+
+
 def prepare_simple_wikipedia(cache: Path, output: Path) -> dict:
     """Prepare hash-pinned, human-authored Simple English Wikipedia articles."""
+    hf_hub_download_fn = _require_hf_hub_download()
     try:
-        from huggingface_hub import hf_hub_download
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise RuntimeError(
             "Add/Sub dataset preparation requires the optional data dependencies. "
             "Install with: python -m pip install 'qmini[addsub-data]'."
         ) from exc
-    parquet_path = Path(hf_hub_download(
+    parquet_path = Path(hf_hub_download_fn(
         repo_id=SIMPLE_WIKI_REPOSITORY,
         filename=SIMPLE_WIKI_FILE,
         repo_type="dataset",
@@ -317,8 +337,8 @@ def _select_oasst_conversation_path(
 
 
 def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
+    hf_hub_download_fn = _require_hf_hub_download()
     try:
-        from huggingface_hub import hf_hub_download
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise RuntimeError(
@@ -326,7 +346,7 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
             "Install with: python -m pip install 'qmini[addsub-data]'."
         ) from exc
     parquet_path = Path(
-        hf_hub_download(
+        hf_hub_download_fn(
             repo_id=OASST_REPOSITORY,
             filename=OASST_FILE,
             repo_type="dataset",
@@ -432,15 +452,9 @@ def load_oasst_conversations(cache: Path) -> tuple[list[dict], dict]:
 
 
 def load_dolly_conversations(cache: Path) -> tuple[list[dict], dict]:
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError as exc:
-        raise RuntimeError(
-            "Add/Sub dataset preparation requires the optional data dependencies. "
-            "Install with: python -m pip install 'qmini[addsub-data]'."
-        ) from exc
+    hf_hub_download_fn = _require_hf_hub_download()
     jsonl_path = Path(
-        hf_hub_download(
+        hf_hub_download_fn(
             repo_id=DOLLY_REPOSITORY,
             filename=DOLLY_FILE,
             repo_type="dataset",
