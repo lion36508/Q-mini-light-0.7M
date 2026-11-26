@@ -254,6 +254,7 @@ def fine_tune_from_addsub_checkpoint(
     save_every: int = 100,
     seed: int = 20261119,
     device_name: str = "cpu",
+    num_threads: int = 0,
     resume: str | Path | None = None,
     extend_schedule: bool = False,
     curriculum_uniform_fraction: float = 1.0,
@@ -261,6 +262,10 @@ def fine_tune_from_addsub_checkpoint(
 ) -> dict[str, Any]:
     if not isinstance(extend_schedule, bool):
         raise TypeError("extend_schedule must be a boolean.")
+    if isinstance(num_threads, bool) or not isinstance(num_threads, int) or num_threads < 0:
+        raise ValueError("num_threads must be a non-negative integer; 0 preserves the PyTorch default.")
+    if num_threads > 0:
+        torch.set_num_threads(num_threads)
     for name, value in (
         ("steps", steps),
         ("batch_size", batch_size),
@@ -382,6 +387,8 @@ def fine_tune_from_addsub_checkpoint(
         "save_every": save_every,
         "seed": seed,
     }
+    if num_threads > 0:
+        run_contract["cpu_intraop_threads"] = num_threads
     if curriculum_enabled:
         run_contract.update({
             "curriculum": SelfPacedCurriculumSampler.FORMAT,
@@ -668,6 +675,8 @@ def fine_tune_from_addsub_checkpoint(
             "uniform_replay_quota_remainder": sampler.uniform_remainder,
         },
         "output_dir": str(output),
+        "torch_num_threads": torch.get_num_threads(),
+        "requested_num_threads": num_threads,
         "note": "Self-paced SFT sampling is optional and experimental; no quality improvement is claimed until held-out comparisons pass.",
 
     }
@@ -686,6 +695,7 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--threads", type=int, default=0, help="Optional PyTorch intra-op CPU thread count; 0 keeps the current default.")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--extend-schedule", action="store_true", help="Explicitly allow increasing the saved cosine schedule horizon on resume.")
     parser.add_argument(
@@ -713,6 +723,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         save_every=args.save_every,
         device_name=args.device,
+        num_threads=args.threads,
         resume=args.resume,
         extend_schedule=args.extend_schedule,
         curriculum_uniform_fraction=args.curriculum_uniform_fraction,
