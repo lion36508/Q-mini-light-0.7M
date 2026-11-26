@@ -304,6 +304,10 @@ class OxCoreNative:
         status = self._lib.ox_tensor_view_validate(ctypes.byref(view))
         if status == _OX_OK:
             return True
+        # A tensor-view predicate reports ordinary invalid/out-of-bounds
+        # metadata as False. Numeric overflow remains an exceptional failure.
+        if status in (2, 3):  # OX_EINVAL, OX_ECAPACITY
+            return False
         self._check(status, "Tensor view validation")
         return False
 
