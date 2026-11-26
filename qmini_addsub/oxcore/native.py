@@ -1,0 +1,354 @@
+"""Small ctypes bridge to the standalone OxCore C ABI.
+
+No ML framework, tokenizer, NumPy, or runtime compilation is required here.
+Build the C++20 library with scripts/build_oxcore.sh and set
+QMINI_OXCORE_LIBRARY to its path.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import os
+from pathlib import Path
+from typing import Sequence
+
+
+_OX_OK = 0
+_OX_SKIP = 1
+_DTYPE_CODES = {"f32": 1, "i8": 2, "i32": 3, "i64": 4, "u8": 5}
+_DTYPE_CTYPES = {
+    "f32": ctypes.c_float,
+    "i8": ctypes.c_int8,
+    "i32": ctypes.c_int32,
+    "i64": ctypes.c_int64,
+    "u8": ctypes.c_uint8,
+}
+
+
+class OxCoreError(RuntimeError):
+    """Raised when a native OxCore operation rejects its input."""
+
+
+class _Arena(ctypes.Structure):
+    _fields_ = [
+        ("base", ctypes.c_void_p),
+        ("capacity", ctypes.c_size_t),
+        ("used", ctypes.c_size_t),
+        ("high_water", ctypes.c_size_t),
+    ]
+
+
+class _TensorView(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.c_void_p),
+        ("dtype", ctypes.c_uint32),
+        ("rank", ctypes.c_uint32),
+        ("shape", ctypes.c_uint64 * 8),
+        ("strides_bytes", ctypes.c_int64 * 8),
+    ]
+
+
+def _as_int8(values: Sequence[int]) -> ctypes.Array:
+    try:
+        return (ctypes.c_int8 * len(values))(*values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Activations must be integers in the int8 range.") from exc
+
+
+def _as_uint8(values: Sequence[int]) -> ctypes.Array:
+    try:
+        return (ctypes.c_uint8 * len(values))(*values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Packed bytes must be integers in the uint8 range.") from exc
+
+
+class OxCoreNative:
+    """Explicit handle to one compiled OxCore shared library."""
+
+    def __init__(self, library_path: str | os.PathLike[str]) -> None:
+        path = Path(library_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"OxCore library does not exist: {path}")
+        self.path = path
+        self._lib = ctypes.CDLL(str(path))
+        self._configure_signatures()
+        version = self._lib.oxcore_version()
+        self.version = version.decode("utf-8") if version else "unknown"
+
+    @classmethod
+    def load(cls, library_path: str | os.PathLike[str] | None = None) -> "OxCoreNative":
+        selected = library_path or os.environ.get("QMINI_OXCORE_LIBRARY")
+        if selected is None:
+            package_dir = Path(__file__).resolve().parent
+            for filename in ("liboxcore.so", "liboxcore.dylib", "oxcore.dll"):
+                candidate = package_dir / filename
+                if candidate.is_file():
+                    selected = candidate
+                    break
+        if selected is None:
+            raise FileNotFoundError(
+                "OxCore is not built. Run scripts/build_oxcore.sh and set "
+                "QMINI_OXCORE_LIBRARY to the resulting shared library."
+            )
+        return cls(selected)
+
+    def _configure_signatures(self) -> None:
+        lib = self._lib
+        lib.oxcore_abi_version.argtypes = []
+        lib.oxcore_abi_version.restype = ctypes.c_uint32
+        lib.oxcore_version.argtypes = []
+        lib.oxcore_version.restype = ctypes.c_char_p
+        lib.ox_status_name.argtypes = [ctypes.c_int]
+        lib.ox_status_name.restype = ctypes.c_char_p
+
+        lib.ox_arena_init.argtypes = [
+            ctypes.POINTER(_Arena), ctypes.c_void_p, ctypes.c_size_t
+        ]
+        lib.ox_arena_init.restype = ctypes.c_int
+        lib.ox_arena_reset.argtypes = [ctypes.POINTER(_Arena)]
+        lib.ox_arena_reset.restype = None
+        lib.ox_arena_mark.argtypes = [ctypes.POINTER(_Arena)]
+        lib.ox_arena_mark.restype = ctypes.c_size_t
+        lib.ox_arena_rewind.argtypes = [ctypes.POINTER(_Arena), ctypes.c_size_t]
+        lib.ox_arena_rewind.restype = ctypes.c_int
+        lib.ox_arena_alloc.argtypes = [
+            ctypes.POINTER(_Arena), ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_void_p)
+        ]
+        lib.ox_arena_alloc.restype = ctypes.c_int
+
+        lib.ox_mirror63_pack_triplet.argtypes = [
+            ctypes.c_int8, ctypes.c_int8, ctypes.c_int8,
+            ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint8)
+        ]
+        lib.ox_mirror63_pack_triplet.restype = ctypes.c_int
+        lib.ox_mirror63_unpack_triplet.argtypes = [
+            ctypes.c_uint8, ctypes.POINTER(ctypes.c_int8),
+            ctypes.POINTER(ctypes.c_uint8)
+        ]
+        lib.ox_mirror63_unpack_triplet.restype = ctypes.c_int
+        lib.ox_mirror63_dot_i8.argtypes = [
+            ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_int8),
+            ctypes.c_size_t, ctypes.POINTER(ctypes.c_int64)
+        ]
+        lib.ox_mirror63_dot_i8.restype = ctypes.c_int
+
+        lib.ox_fwht_i64.argtypes = [
+            ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t
+        ]
+        lib.ox_fwht_i64.restype = ctypes.c_int
+        lib.ox_sinkhorn4.argtypes = [
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+            ctypes.c_uint32
+        ]
+        lib.ox_sinkhorn4.restype = ctypes.c_int
+        lib.ox_normalize_f32.argtypes = [
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+            ctypes.c_size_t, ctypes.c_float
+        ]
+        lib.ox_normalize_f32.restype = ctypes.c_int
+        lib.ox_tensor_view_validate.argtypes = [ctypes.POINTER(_TensorView)]
+        lib.ox_tensor_view_validate.restype = ctypes.c_int
+
+    def _check(self, status: int, operation: str, allow_skip: bool = False) -> None:
+        if status == _OX_OK or (allow_skip and status == _OX_SKIP):
+            return
+        raw = self._lib.ox_status_name(status)
+        detail = raw.decode("utf-8") if raw else f"status {status}"
+        raise OxCoreError(f"{operation}: {detail}")
+
+    @property
+    def abi_version(self) -> int:
+        return int(self._lib.oxcore_abi_version())
+
+    def mirror63_pack(self, q: Sequence[int], octave: int = 0) -> int:
+        if len(q) != 3 or isinstance(octave, bool) or octave not in (0, 1):
+            raise ValueError("Mirror-63 needs three balanced digits and octave 0 or 1.")
+        output = ctypes.c_uint8()
+        values = []
+        for value in q:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("Mirror-63 digits must be integers.")
+            if not -2 <= value <= 2:
+                raise ValueError("Mirror-63 digits must be in [-2, 2].")
+            values.append(value)
+        status = self._lib.ox_mirror63_pack_triplet(
+            values[0], values[1], values[2], octave, ctypes.byref(output)
+        )
+        self._check(status, "Mirror-63 pack")
+        return int(output.value)
+
+    def mirror63_unpack(self, code: int) -> tuple[tuple[int, int, int], int] | None:
+        if isinstance(code, bool) or not isinstance(code, int) or not 0 <= code <= 255:
+            raise ValueError("Mirror-63 code must be an integer byte.")
+        q = (ctypes.c_int8 * 3)()
+        octave = ctypes.c_uint8()
+        status = self._lib.ox_mirror63_unpack_triplet(
+            code, q, ctypes.byref(octave)
+        )
+        if status == _OX_SKIP:
+            return None
+        self._check(status, "Mirror-63 unpack")
+        return (int(q[0]), int(q[1]), int(q[2])), int(octave.value)
+
+    def mirror63_dot_i8(
+        self, packed_blocks: Sequence[int], activations: Sequence[int]
+    ) -> int:
+        blocks = _as_uint8(packed_blocks)
+        if len(activations) != 3 * len(packed_blocks):
+            raise ValueError("Mirror-63 dot needs exactly three int8 activations per block.")
+        inputs = _as_int8(activations)
+        output = ctypes.c_int64()
+        status = self._lib.ox_mirror63_dot_i8(
+            blocks, inputs, len(packed_blocks), ctypes.byref(output)
+        )
+        self._check(status, "Mirror-63 dot")
+        return int(output.value)
+
+    def fwht_i64(self, values: Sequence[int]) -> list[int]:
+        if not values:
+            raise ValueError("FWHT input must be non-empty.")
+        try:
+            buffer = (ctypes.c_int64 * len(values))(*values)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("FWHT values must fit in signed int64.") from exc
+        status = self._lib.ox_fwht_i64(buffer, len(values))
+        self._check(status, "FWHT")
+        return [int(value) for value in buffer]
+
+    def sinkhorn4(
+        self, logits: Sequence[Sequence[float]], iterations: int = 20
+    ) -> list[list[float]]:
+        if len(logits) != 4 or any(len(row) != 4 for row in logits):
+            raise ValueError("Sinkhorn input must be a 4 by 4 matrix.")
+        if isinstance(iterations, bool) or not isinstance(iterations, int):
+            raise TypeError("Sinkhorn iterations must be an integer.")
+        try:
+            flat = [float(value) for row in logits for value in row]
+            source = (ctypes.c_double * 16)(*flat)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Sinkhorn logits must be finite real values.") from exc
+        output = (ctypes.c_double * 16)()
+        status = self._lib.ox_sinkhorn4(source, output, iterations)
+        self._check(status, "Sinkhorn-4")
+        return [
+            [float(output[row * 4 + col]) for col in range(4)]
+            for row in range(4)
+        ]
+
+    def normalize_f32(
+        self, values: Sequence[float], epsilon: float = 1e-6
+    ) -> list[float]:
+        if not values:
+            raise ValueError("Normalization input must be non-empty.")
+        try:
+            source = (ctypes.c_float * len(values))(*values)
+            output = (ctypes.c_float * len(values))()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Normalization values must be float32-compatible.") from exc
+        status = self._lib.ox_normalize_f32(
+            source, output, len(values), ctypes.c_float(epsilon)
+        )
+        self._check(status, "nGPT L2 normalization")
+        return [float(value) for value in output]
+
+    def validate_tensor_view(
+        self,
+        values: Sequence[int | float],
+        dtype: str,
+        shape: Sequence[int],
+        strides_bytes: Sequence[int] | None = None,
+    ) -> bool:
+        if dtype not in _DTYPE_CODES:
+            raise ValueError(f"Unsupported OxCore dtype: {dtype}")
+        if len(shape) > 8 or (strides_bytes is not None and len(strides_bytes) != len(shape)):
+            raise ValueError("Tensor rank and stride metadata must fit the 8-axis ABI.")
+        scalar_type = _DTYPE_CTYPES[dtype]
+        storage = (scalar_type * len(values))(*values)
+        view = _TensorView()
+        view.data = ctypes.cast(storage, ctypes.c_void_p) if values else None
+        view.dtype = _DTYPE_CODES[dtype]
+        view.rank = len(shape)
+        for axis, dimension in enumerate(shape):
+            if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 0:
+                raise ValueError("Tensor dimensions must be non-negative integers.")
+            view.shape[axis] = dimension
+        if strides_bytes is None:
+            stride = ctypes.sizeof(scalar_type)
+            reversed_strides = []
+            for dimension in reversed(shape):
+                reversed_strides.append(stride)
+                stride *= max(1, int(dimension))
+            strides = list(reversed(reversed_strides))
+        else:
+            strides = list(strides_bytes)
+        for axis, stride_value in enumerate(strides):
+            if isinstance(stride_value, bool) or not isinstance(stride_value, int):
+                raise ValueError("Tensor byte strides must be integers.")
+            view.strides_bytes[axis] = stride_value
+        status = self._lib.ox_tensor_view_validate(ctypes.byref(view))
+        if status == _OX_OK:
+            return True
+        self._check(status, "Tensor view validation")
+        return False
+
+
+class StaticArena:
+    """Caller-owned, fixed-capacity arena backed by one aligned Python buffer."""
+
+    def __init__(self, core: OxCoreNative, capacity: int) -> None:
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0:
+            raise ValueError("Arena capacity must be a positive integer.")
+        self._core = core
+        self._storage = ctypes.create_string_buffer(capacity + 63)
+        raw_address = ctypes.addressof(self._storage)
+        aligned_address = (raw_address + 63) & ~63
+        self._arena = _Arena()
+        self._core._check(
+            self._core._lib.ox_arena_init(
+                ctypes.byref(self._arena),
+                ctypes.c_void_p(aligned_address),
+                capacity,
+            ),
+            "Arena initialization",
+        )
+
+    @property
+    def capacity(self) -> int:
+        return int(self._arena.capacity)
+
+    @property
+    def used(self) -> int:
+        return int(self._arena.used)
+
+    @property
+    def high_water(self) -> int:
+        return int(self._arena.high_water)
+
+    def mark(self) -> int:
+        return int(self._core._lib.ox_arena_mark(ctypes.byref(self._arena)))
+
+    def rewind(self, mark: int) -> None:
+        self._core._check(
+            self._core._lib.ox_arena_rewind(ctypes.byref(self._arena), mark),
+            "Arena rewind",
+        )
+
+    def reset(self) -> None:
+        self._core._lib.ox_arena_reset(ctypes.byref(self._arena))
+
+    def alloc(self, size: int, alignment: int = 64) -> int:
+        if isinstance(size, bool) or not isinstance(size, int):
+            raise TypeError("Arena allocation size must be an integer.")
+        if isinstance(alignment, bool) or not isinstance(alignment, int):
+            raise TypeError("Arena alignment must be an integer.")
+        output = ctypes.c_void_p()
+        self._core._check(
+            self._core._lib.ox_arena_alloc(
+                ctypes.byref(self._arena), size, alignment, ctypes.byref(output)
+            ),
+            "Arena allocation",
+        )
+        if output.value is None:
+            raise OxCoreError("Arena allocator returned a null pointer after success.")
+        return int(output.value)
