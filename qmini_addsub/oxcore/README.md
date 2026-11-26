@@ -40,6 +40,12 @@ bash scripts/build_oxcore.sh /tmp/libqmini_oxcore.so
 export QMINI_OXCORE_LIBRARY=/tmp/libqmini_oxcore.so
 ```
 
+Run the native AddressSanitizer/UndefinedBehaviorSanitizer checks:
+
+```bash
+bash scripts/test_oxcore_sanitizers.sh
+```
+
 Then use it explicitly:
 
 ```python
