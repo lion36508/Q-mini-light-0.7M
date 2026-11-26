@@ -2394,3 +2394,54 @@ def test_gated_diagonal_ssm_training_gradients_are_finite():
     for name, parameter in module.named_parameters():
         assert parameter.grad is not None, name
         assert torch.isfinite(parameter.grad).all(), name
+
+
+def test_sft_v6_scaled_checkpoint_remains_loadable_and_exportable(tmp_path):
+    from qmini_addsub.export import export_addsub_checkpoint, load_addsub_export
+    from qmini_addsub.generate import load_addsub_model
+    from qmini_addsub.sft import LEGACY_SFT_FORMAT
+
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=16,
+        d_hidden=24,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=16,
+        dropout=0.0,
+        seed=603,
+    )
+    original = AddSubLanguageModel(config).eval()
+    checkpoint = tmp_path / "legacy-v6-sft.pt"
+    torch.save(
+        {
+            "format": LEGACY_SFT_FORMAT,
+            "step": 10,
+            "config": config.to_dict(),
+            "model": original.state_dict(),
+            "tokenizer_sha256": "a" * 64,
+            "data_manifest_sha256": "c" * 64,
+            "base_sha256": "b" * 64,
+            "run_contract": {
+                "batch_size": 1,
+                "learning_rate": 5e-5,
+                "planned_steps": 10,
+            },
+        },
+        checkpoint,
+    )
+
+    restored = load_addsub_model(checkpoint, device_name="cpu")
+    matrix_parameters = [
+        parameter for parameter in restored.parameters() if parameter.ndim >= 2
+    ]
+    assert matrix_parameters
+    assert all(getattr(parameter, "_qmini_fixed_scale", None) is None for parameter in matrix_parameters)
+
+    export_path = tmp_path / "legacy-v6-sft.qma"
+    result = export_addsub_checkpoint(checkpoint, export_path)
+    assert result["format"] == "qmini-addsub-packed-weights-v2"
+    _, manifest = load_addsub_export(export_path)
+    assert manifest["checkpoint_format"] == LEGACY_SFT_FORMAT
+    assert export_path.is_file()
