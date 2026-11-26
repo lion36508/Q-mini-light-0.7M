@@ -411,3 +411,37 @@ def test_oxcore_python_package_has_no_ml_framework_imports():
                 assert not (names & forbidden), (path, names & forbidden)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 assert node.module.split(".")[0] not in forbidden, (path, node.module)
+
+def test_oxcore_activation_lut_maps_uint8_indices_without_reinterpretation(oxcore):
+    table = [index - 128 for index in range(256)]
+    assert oxcore.lut_u8_i16([0, 128, 255, 10], table) == [-128, 0, 127, -118]
+
+
+def test_oxcore_activation_lut_rejects_bad_table_and_index_types(oxcore):
+    with pytest.raises(ValueError, match="256"):
+        oxcore.lut_u8_i16([1], [0] * 255)
+    with pytest.raises(ValueError, match="uint8 range"):
+        oxcore.lut_u8_i16([256], [0] * 256)
+    with pytest.raises(TypeError, match="integers"):
+        oxcore.lut_u8_i16([1.5], [0] * 256)
+    with pytest.raises(ValueError, match="int16"):
+        oxcore.lut_u8_i16([1], [40000] * 256)
+
+
+def test_oxcore_top1_router_uses_stable_lowest_index_ties(oxcore):
+    selected, values = oxcore.top1_i16([
+        [-3, 7, 7, -1],
+        [32767, -32768, 0, 32766],
+        [5, 5, 5, 5],
+    ])
+    assert selected == [1, 0, 0]
+    assert values == [7, 32767, 5]
+
+
+def test_oxcore_top1_router_rejects_invalid_score_inputs(oxcore):
+    with pytest.raises(ValueError, match="rectangular"):
+        oxcore.top1_i16([[1, 2], [3]])
+    with pytest.raises(TypeError, match="integers"):
+        oxcore.top1_i16([[1.5, 2]])
+    with pytest.raises(ValueError, match="int16"):
+        oxcore.top1_i16([[32768, 2]])
