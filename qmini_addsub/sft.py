@@ -138,7 +138,13 @@ class ConversationDataset(Dataset):
                     "<|user|>" if role == "user" else "<|assistant|>"
                 )
                 content = str(message.get("content") or "").strip()
-                content_ids = tokenizer.encode(escape_special_token_literals(content)).ids
+                # The model writes BOS/role/end control tokens itself below.
+                # Disable tokenizer post-processors here so a tokenizer JSON
+                # that auto-inserts BOS/EOS cannot corrupt message boundaries.
+                content_ids = tokenizer.encode(
+                    escape_special_token_literals(content),
+                    add_special_tokens=False,
+                ).ids
                 if not content_ids:
                     continue
                 encoded.append((role, special[role_token], content_ids))

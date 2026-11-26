@@ -28,6 +28,7 @@ from qmini_addsub.runtime import additive_projection, saturating_add
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
 from qmini_addsub.sft import ConversationDataset, _load_conversations
 
 
@@ -183,6 +184,46 @@ def test_sft_dataset_masks_user_context_and_supervises_assistant_end_token():
     assert labels[user_position + 1] == -100
     assert labels[assistant_position] == -100
     assert labels[assistant_position + 1] == vocab["<unk>"]
+    assert labels[-1] == vocab["<|end|>"]
+
+
+def test_sft_dataset_disables_tokenizer_postprocessor_when_building_control_tokens():
+    vocab = {
+        "<unk>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<pad>": 3,
+        "<|system|>": 4,
+        "<|user|>": 5,
+        "<|assistant|>": 6,
+        "<|end|>": 7,
+        "question": 8,
+        "answer": 9,
+        "You": 10,
+        "are": 11,
+    }
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.post_processor = TemplateProcessing(
+        single="<bos> $A <eos>",
+        special_tokens=[("<bos>", 1), ("<eos>", 2)],
+    )
+
+    # The tokenizer's default encode() path really would add BOS/EOS.
+    assert tokenizer.encode("question").ids == [1, 8, 2]
+
+    dataset = ConversationDataset(
+        [{"messages": [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ]}],
+        tokenizer,
+        max_context=64,
+    )
+    token_ids, labels = dataset[0]
+    assert token_ids.count(vocab["<bos>"]) == 1
+    assert token_ids.count(vocab["<eos>"]) == 0
+    assert token_ids.count(vocab["<|end|>"]) == 3
     assert labels[-1] == vocab["<|end|>"]
 
 
