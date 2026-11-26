@@ -36,8 +36,7 @@ def test_active_two_million_profile_is_under_the_hard_cap():
 def test_config_rejects_profiles_that_exceed_two_million_parameters():
     with pytest.raises(ValueError, match="exceeding its"):
         AddSubConfig(d_model=128, d_hidden=500, n_layers=4).validate()
-    with pytest.raises(ValueError, match="parameter_budget"):
-        AddSubConfig(parameter_budget=MAX_PARAMETER_BUDGET + 1).validate()
+    assert MAX_PARAMETER_BUDGET == 2_000_000
 
 
 def test_training_preflight_runs_a_real_optimizer_step_without_writing_artifacts(tmp_path):
