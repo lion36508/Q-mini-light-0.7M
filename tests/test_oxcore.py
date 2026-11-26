@@ -102,6 +102,62 @@ def test_oxcore_python_bridge_rejects_float_and_boolean_octave_or_fwht_values(ox
         oxcore.fwht_i64([1, True])
 
 
+def test_mirror63_linear_projection_matches_integer_reference_and_handles_partial_block(oxcore):
+    weight_rows = [
+        [
+            oxcore.mirror63_pack((1, -1, 0), octave=0),
+            oxcore.mirror63_pack((2, 2, -2), octave=1),
+        ],
+        [
+            oxcore.mirror63_pack((-2, 2, 1), octave=0),
+            oxcore.mirror63_pack((0, 0, 0), octave=0),
+        ],
+    ]
+    # Only the first lane of the second packed block is live (in_features=4).
+    actual = oxcore.linear_mirror63_acc_i8(
+        [[1, 2, 3, 4], [-1, 5, -2, 3]],
+        weight_rows,
+    )
+    assert actual == [[15, 5], [7, 10]]
+
+
+def test_mirror63_linear_projection_rejects_bad_shapes_and_reserved_codes(oxcore):
+    with pytest.raises(ValueError, match="rectangular"):
+        oxcore.linear_mirror63_acc_i8([[1, 2], [3]], [[0]])
+    with pytest.raises(ValueError, match="ceil"):
+        oxcore.linear_mirror63_acc_i8([[1, 2, 3, 4]], [[0]])
+    with pytest.raises(OxCoreError, match="reserved"):
+        oxcore.linear_mirror63_acc_i8([[1, 2, 3]], [[0x7F]])
+
+
+def test_mirror63_causal_depthwise_convolution_matches_reference(oxcore):
+    packed_weights = [
+        [oxcore.mirror63_pack((1, -1, 2), octave=1)],
+        [oxcore.mirror63_pack((2, 0, -1), octave=0)],
+    ]
+    actual = oxcore.causal_depthwise_conv_mirror63_acc_i8(
+        [[1, 10], [2, 20], [3, 30], [4, 40]],
+        packed_weights,
+        kernel_size=3,
+    )
+    assert actual == [[4, -10], [6, -20], [10, -10], [14, -30]]
+
+
+def test_mirror63_causal_depthwise_convolution_rejects_bad_weights_and_shapes(oxcore):
+    with pytest.raises(ValueError, match="one packed weight row"):
+        oxcore.causal_depthwise_conv_mirror63_acc_i8(
+            [[1, 2]], [[0]], kernel_size=1
+        )
+    with pytest.raises(ValueError, match="kernel_size"):
+        oxcore.causal_depthwise_conv_mirror63_acc_i8(
+            [[1]], [[0]], kernel_size=0
+        )
+    with pytest.raises(OxCoreError, match="reserved"):
+        oxcore.causal_depthwise_conv_mirror63_acc_i8(
+            [[1]], [[0x7F]], kernel_size=1
+        )
+
+
 def test_fwht_is_unnormalized_and_invertible_up_to_length(oxcore):
     values = [3, -1, 4, 2, 0, 7, -5, 9]
     transformed = oxcore.fwht_i64(values)
