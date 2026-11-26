@@ -2124,3 +2124,24 @@ def test_sft_zero_target_batch_fails_instead_of_skipping_optimizer_steps():
 
     labels[0, 3] = 42
     assert _require_response_targets(labels, step=18) == 1
+
+
+def test_generation_stops_a_fourgram_phrase_before_a_fifth_repeat():
+    from qmini_addsub.generate import _would_exceed_fourgram_repeat
+
+    three_repeats = [1, 2, 3, 4] * 3
+    four_repeats = [1, 2, 3, 4] * 4
+    five_repeats = [1, 2, 3, 4] * 5
+
+    assert _would_exceed_fourgram_repeat(three_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(four_repeats, 1) is False
+    assert _would_exceed_fourgram_repeat(five_repeats, 1) is True
+    assert _would_exceed_fourgram_repeat([1, 2, 3], 9) is False
+
+
+def test_generation_fourgram_guard_does_not_block_a_different_continuation():
+    from qmini_addsub.generate import _would_exceed_fourgram_repeat
+
+    generated = [1, 2, 3, 4] * 4
+    assert _would_exceed_fourgram_repeat(generated, 9) is False
+
