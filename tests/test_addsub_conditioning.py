@@ -101,3 +101,16 @@ def test_conditioning_report_measures_question_and_context_sensitivity():
     for row in report["question_prompts"]:
         assert len(row["top_tokens"]) == 4
         assert row["entropy_nats"] > 0.0
+
+
+def test_total_variation_distance_normalizes_large_finite_inputs_without_sum_overflow():
+    value = total_variation_distance(
+        [1e308, 1e308],
+        [1e308, 1e307],
+    )
+    assert value == pytest.approx(1.0 / 11.0, rel=1e-12)
+
+
+def test_total_variation_distance_rejects_zero_mass_after_stable_scaling():
+    with pytest.raises(ValueError, match="positive total mass"):
+        total_variation_distance([0.0, 0.0], [1e308, 1e308])
