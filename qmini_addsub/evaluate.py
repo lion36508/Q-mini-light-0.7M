@@ -113,17 +113,6 @@ def evaluate_heldout_conversations(
     if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens < 1:
         raise ValueError("max_new_tokens must be a positive integer.")
 
-    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
-    if checkpoint.get("format") != SFT_FORMAT:
-        raise ValueError("Held-out SFT evaluation requires a current Q-Mini Add/Sub SFT checkpoint.")
-    base_checkpoint_sha = checkpoint.get("base_sha256")
-    if (
-        not isinstance(base_checkpoint_sha, str)
-        or len(base_checkpoint_sha) != 64
-        or any(char not in "0123456789abcdef" for char in base_checkpoint_sha)
-    ):
-        raise ValueError("Selected SFT checkpoint is missing a valid base checkpoint SHA-256.")
-
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     if manifest.get("format") != "qmini-addsub-data-v1":
         raise ValueError("Unsupported Add/Sub evaluation dataset manifest.")
@@ -137,6 +126,17 @@ def evaluate_heldout_conversations(
     tokenizer_sha = sha256_file(tokenizer_file)
     if tokenizer_metadata.get("sha256") != tokenizer_sha:
         raise ValueError("Evaluation tokenizer does not match the curated data manifest.")
+
+    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
+    if checkpoint.get("format") != SFT_FORMAT:
+        raise ValueError("Held-out SFT evaluation requires a current Q-Mini Add/Sub SFT checkpoint.")
+    base_checkpoint_sha = checkpoint.get("base_sha256")
+    if (
+        not isinstance(base_checkpoint_sha, str)
+        or len(base_checkpoint_sha) != 64
+        or any(char not in "0123456789abcdef" for char in base_checkpoint_sha)
+    ):
+        raise ValueError("Selected SFT checkpoint is missing a valid base checkpoint SHA-256.")
 
     approved_values = manifest.get("approved_instruction_sources")
     if (
