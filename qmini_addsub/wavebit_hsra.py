@@ -147,9 +147,9 @@ def _hard_octave_symbol(normalized: torch.Tensor) -> torch.Tensor:
     x = normalized.clamp(-1.0, 1.0)
     return torch.where(
         x <= -0.75, -1.0,
-        torch.where(x < -0.25, -0.5,
+        torch.where(x <= -0.25, -0.5,
                     torch.where(x <= 0.25, 0.0,
-                                torch.where(x < 0.75, 0.5, 1.0))),
+                                torch.where(x <= 0.75, 0.5, 1.0))),
     )
 
 
@@ -443,6 +443,9 @@ def integer_octave_projection(
     offsets = np.asarray(row_offsets)
     if activations.dtype.kind not in "iu" or activations.ndim != 2:
         raise TypeError("Octave activations must be a 2-D integer array.")
+    int8_info = np.iinfo(np.int8)
+    if np.any(activations < int8_info.min) or np.any(activations > int8_info.max):
+        raise ValueError("Octave activations must fit signed int8 [-128, 127].")
     if isinstance(input_features, bool) or not isinstance(input_features, int) or input_features < 1:
         raise ValueError("input_features must be a positive integer.")
     if activations.shape[1] != input_features:
