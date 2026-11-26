@@ -24,6 +24,10 @@ def build_contribution_table() -> np.ndarray:
 
 CONTRIBUTION_TABLE = build_contribution_table()
 
+# floor((INT64_MAX - abs(INT32_MIN)) / (3 * 127)); this bounds every
+# possible feature contribution plus any accepted signed-int32 bias.
+_MAX_SAFE_FEATURES_WITH_INT32_BIAS = 24208325550412840
+
 
 def additive_projection(
     activation_codes: np.ndarray,
@@ -43,14 +47,26 @@ def additive_projection(
         raise TypeError("Activation codes must be integer values.")
     if activations.ndim < 1:
         raise ValueError("Activation tensor must have a feature dimension.")
-    if weights.ndim != 2:
-        raise ValueError("Weight codes must have shape [out_features, in_features].")
+    if weights.ndim != 2 or min(weights.shape) < 1:
+        raise ValueError("Weight codes must have non-empty [out_features, in_features] shape.")
     if activations.shape[-1] != weights.shape[-1]:
         raise ValueError("Input feature count does not match weight feature count.")
     if np.any(activations < -127) or np.any(activations > 127):
         raise ValueError("Activation codes must be in [-127, 127].")
     if weights.dtype.kind not in "iu" or np.any(weights < 0) or np.any(weights > 4):
         raise ValueError("Weight codes must be integers in [0, 4].")
+
+    bias = None
+    if bias_accumulator is not None:
+        bias = np.asarray(bias_accumulator)
+        if bias.shape != (weights.shape[0],) or bias.dtype.kind not in "iu":
+            raise ValueError("Bias must be an integer vector matching out_features.")
+        int32 = np.iinfo(np.int32)
+        if np.any(bias < int32.min) or np.any(bias > int32.max):
+            raise ValueError("Bias accumulator values must fit in signed int32.")
+
+    if activations.shape[-1] > _MAX_SAFE_FEATURES_WITH_INT32_BIAS:
+        raise OverflowError("Projection worst-case accumulator exceeds signed int64 range.")
 
     encoded = activations.astype(np.int16) + 128
     weights = weights.astype(np.uint8, copy=False)
@@ -64,13 +80,7 @@ def additive_projection(
         ]
         accumulator = np.add(accumulator, contribution, dtype=np.int64)
 
-    if bias_accumulator is not None:
-        bias = np.asarray(bias_accumulator)
-        if bias.shape != (weights.shape[0],) or bias.dtype.kind not in "iu":
-            raise ValueError("Bias must be an integer vector matching out_features.")
-        int32 = np.iinfo(np.int32)
-        if np.any(bias < int32.min) or np.any(bias > int32.max):
-            raise ValueError("Bias accumulator values must fit in signed int32.")
+    if bias is not None:
         accumulator = np.add(accumulator, bias.astype(np.int64), dtype=np.int64)
     return accumulator
 

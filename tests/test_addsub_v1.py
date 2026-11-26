@@ -12,7 +12,9 @@ from qmini_addsub.data import (
     normalize_training_text,
     stable_split,
 )
-from qmini_addsub.model import AddSubLanguageModel, AddSubLinear, SparseTop1Experts
+from qmini_addsub.model import (
+    AddSubLanguageModel, AddSubLinear, GatedDiagonalStateSpace, SparseTop1Experts,
+)
 from qmini_addsub.optim import assert_finite_training_state, build_adamw, cosine_warmup_lr, reconcile_metrics_file
 from qmini_addsub.quantization import (
     codes_to_values,
@@ -1818,7 +1820,7 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     from tokenizers.pre_tokenizers import Whitespace
 
     from qmini_addsub.evaluate import evaluate_heldout_conversations
-    from qmini_addsub.train import CHECKPOINT_FORMAT
+    from qmini_addsub.sft import SFT_FORMAT
 
     special = [
         "<unk>", "<bos>", "<eos>", "<pad>",
@@ -1848,8 +1850,9 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     checkpoint_path = tmp_path / "trained.pt"
     torch.save(
         {
-            "format": CHECKPOINT_FORMAT,
+            "format": SFT_FORMAT,
             "step": 1,
+            "base_sha256": "1" * 64,
             "config": config.to_dict(),
             "model": model.state_dict(),
             "tokenizer_sha256": hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
@@ -1886,6 +1889,31 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
         encoding="utf-8",
     )
 
+    with pytest.raises(ValueError, match="positive integer"):
+        evaluate_heldout_conversations(
+            checkpoint_path=checkpoint_path,
+            tokenizer_path=tokenizer_path,
+            test_jsonl=test_path,
+            dataset_manifest_path=manifest_path,
+            output_dir=tmp_path / "invalid-token-limit",
+            device_name="cpu",
+            max_new_tokens=True,
+        )
+
+    non_sft_checkpoint = tmp_path / "pretraining-only.pt"
+    non_sft_payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    non_sft_payload["format"] = "qmini-addsub-training-v7"
+    torch.save(non_sft_payload, non_sft_checkpoint)
+    with pytest.raises(ValueError, match="current Q-Mini Add/Sub SFT checkpoint"):
+        evaluate_heldout_conversations(
+            checkpoint_path=non_sft_checkpoint,
+            tokenizer_path=tokenizer_path,
+            test_jsonl=test_path,
+            dataset_manifest_path=manifest_path,
+            output_dir=tmp_path / "rejected-pretraining-checkpoint",
+            device_name="cpu",
+        )
+
     output_dir = tmp_path / "evaluation"
     summary = evaluate_heldout_conversations(
         checkpoint_path=checkpoint_path,
@@ -1898,6 +1926,8 @@ def test_heldout_conversation_evaluator_runs_with_manifest_verified_checkpoint(t
     )
     assert summary["test_records"] == 1
     assert summary["checkpoint_sha256"] == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    assert summary["checkpoint_format"] == SFT_FORMAT
+    assert summary["base_checkpoint_sha256"] == "1" * 64
     assert summary["tokenizer_sha256"] == hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
     assert (output_dir / "heldout_responses.jsonl").is_file()
     assert (output_dir / "heldout_summary.json").is_file()
@@ -2279,3 +2309,88 @@ def test_generation_fourgram_guard_does_not_block_a_different_continuation():
     generated = [1, 2, 3, 4] * 4
     assert _would_exceed_fourgram_repeat(generated, 9) is False
 
+
+
+
+def test_pretraining_evaluation_windows_cover_both_stream_ends_without_duplicates():
+    from qmini_addsub.train import evaluation_window_starts
+
+    assert evaluation_window_starts(0) == [0]
+    assert evaluation_window_starts(2) == [0, 1, 2]
+    starts = evaluation_window_starts(100)
+    assert len(starts) == 64
+    assert starts[0] == 0
+    assert starts[-1] == 100
+    assert starts == sorted(set(starts))
+    with pytest.raises(ValueError, match="max_start"):
+        evaluation_window_starts(-1)
+
+
+def test_gated_diagonal_ssm_parallel_scan_matches_sequential_recurrence():
+    torch.manual_seed(20261126)
+    batch, length, width = 2, 7, 8
+    decay = torch.rand(batch, length, width) * 0.98 + 0.01
+    injection = torch.randn(batch, length, width)
+
+    parallel = GatedDiagonalStateSpace.parallel_scan(decay, injection)
+    state = torch.zeros(batch, width)
+    sequential = []
+    for time_index in range(length):
+        state = decay[:, time_index, :] * state + injection[:, time_index, :]
+        sequential.append(state)
+    torch.testing.assert_close(
+        parallel,
+        torch.stack(sequential, dim=1),
+        rtol=2e-5,
+        atol=2e-6,
+    )
+
+
+def test_gated_diagonal_ssm_full_sequence_matches_token_step_cache():
+    torch.manual_seed(20261127)
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=8,
+        d_hidden=16,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=8,
+        dropout=0.0,
+    )
+    module = GatedDiagonalStateSpace(config).eval()
+    inputs = torch.randn(2, 7, 8)
+    full_output = module(inputs)
+    state = torch.zeros(2, 8)
+    step_outputs = []
+    for time_index in range(inputs.shape[1]):
+        token_output, state = module.step(inputs[:, time_index:time_index + 1, :], state)
+        step_outputs.append(token_output)
+    step_output = torch.cat(step_outputs, dim=1)
+
+    torch.testing.assert_close(full_output, step_output, rtol=3e-5, atol=3e-6)
+    assert state.shape == (2, 8)
+    assert torch.isfinite(state).all()
+
+
+def test_gated_diagonal_ssm_training_gradients_are_finite():
+    torch.manual_seed(20261128)
+    config = AddSubConfig(
+        vocab_size=264,
+        d_model=8,
+        d_hidden=16,
+        n_layers=1,
+        n_experts=2,
+        kernel_size=3,
+        max_context=8,
+        dropout=0.0,
+    )
+    module = GatedDiagonalStateSpace(config).train()
+    inputs = torch.randn(2, 5, 8, requires_grad=True)
+    loss = module(inputs).square().mean()
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
+    for name, parameter in module.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name

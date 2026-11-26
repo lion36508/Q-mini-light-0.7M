@@ -495,6 +495,10 @@ def fine_tune_from_addsub_checkpoint(
             "data_manifest_sha256": hashes["data_manifest_sha256"],
             "run_contract": run_contract,
         }
+        # Current v7 metrics carry the exact parent checkpoint identity. Keep
+        # legacy v6 resume compatible with older metric rows that predate it.
+        if checkpoint_format == SFT_FORMAT:
+            expected_metric_identity["base_sha256"] = hashes["base_sha256"]
         reconcile_metrics_file(
             str(metrics_path), expected_metric_identity, start_step, "SFT"
         )
@@ -594,6 +598,7 @@ def fine_tune_from_addsub_checkpoint(
                 "test_sha256": hashes["test_sha256"],
                 "tokenizer_sha256": hashes["tokenizer_sha256"],
                 "data_manifest_sha256": hashes["data_manifest_sha256"],
+                "base_sha256": hashes["base_sha256"],
                 "run_contract": run_contract,
                 "schedule_total_steps": schedule_total_steps,
             }

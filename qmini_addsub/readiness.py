@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .sft import SFT_FORMAT
+
 
 def _file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
@@ -101,18 +103,22 @@ def assess_addsub_readiness(
     latest = metrics[-1]
     identity_keys = (
         "train_sha256", "valid_sha256", "test_sha256",
-        "tokenizer_sha256", "data_manifest_sha256",
+        "tokenizer_sha256", "data_manifest_sha256", "base_sha256",
     )
     identity = {key: latest.get(key) for key in identity_keys}
     for key, value in identity.items():
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             raise ValueError(f"Latest SFT metrics is missing a valid {key}.")
+    run_contract = latest.get("run_contract")
+    if not isinstance(run_contract, dict) or not run_contract:
+        raise ValueError("Latest SFT metrics is missing its immutable run_contract.")
     if len({identity["train_sha256"], identity["valid_sha256"], identity["test_sha256"]}) != 3:
         raise ValueError("SFT train, validation and test fingerprints must all be different.")
 
     same_run = [
         record for record in metrics
         if all(record.get(key) == value for key, value in identity.items())
+        and record.get("run_contract") == run_contract
         and "valid_response_loss" in record
     ]
     validation_losses = [
@@ -158,6 +164,10 @@ def assess_addsub_readiness(
 
     if heldout.get("format") != "qmini-addsub-heldout-eval-v1":
         raise ValueError("Held-out report must use qmini-addsub-heldout-eval-v1.")
+    if heldout.get("checkpoint_format") != SFT_FORMAT:
+        raise ValueError("Held-out report must come from a current Q-Mini Add/Sub SFT checkpoint.")
+    if heldout.get("base_checkpoint_sha256") != identity["base_sha256"]:
+        raise ValueError("Held-out report base checkpoint does not match the SFT metrics lineage.")
     for report_key, identity_key in (
         ("test_sha256", "test_sha256"),
         ("tokenizer_sha256", "tokenizer_sha256"),
