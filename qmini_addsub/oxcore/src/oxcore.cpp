@@ -628,18 +628,17 @@ ox_status ox_ssm_scan_q15_i32(
         }
     }
 
-    /* Conservative bound: |decay| <= 1 and each nearest-even scale can add
-       at most one state unit after rounding. Reject before writing any output. */
-    if (max_initial > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) ||
-        max_injection == std::numeric_limits<uint64_t>::max()) {
-        return OX_EOVERFLOW;
-    }
-    const uint64_t per_step_bound = max_injection + 1u;
+    /* Conservative bound: |decay| <= 1 and nearest-even rounding of a
+       nonnegative scale in [0,1] cannot increase the absolute integer state.
+       Reject before writing any output. */
     const uint64_t int32_limit =
         static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
-    if (per_step_bound != 0u &&
+    if (max_initial > int32_limit) {
+        return OX_EOVERFLOW;
+    }
+    if (max_injection != 0u &&
         static_cast<uint64_t>(time_steps) >
-            (int32_limit - max_initial) / per_step_bound) {
+            (int32_limit - max_initial) / max_injection) {
         return OX_EOVERFLOW;
     }
 
