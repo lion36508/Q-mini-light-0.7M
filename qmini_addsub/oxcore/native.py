@@ -15,6 +15,8 @@ from typing import Sequence
 
 _OX_OK = 0
 _OX_SKIP = 1
+_OX_EINVAL = 2
+_OX_ECAPACITY = 3
 _DTYPE_CODES = {"f32": 1, "i8": 2, "i32": 3, "i64": 4, "u8": 5}
 _DTYPE_CTYPES = {
     "f32": ctypes.c_float,
@@ -172,7 +174,12 @@ class OxCoreNative:
         return int(self._lib.oxcore_abi_version())
 
     def mirror63_pack(self, q: Sequence[int], octave: int = 0) -> int:
-        if len(q) != 3 or isinstance(octave, bool) or octave not in (0, 1):
+        if (
+            len(q) != 3
+            or isinstance(octave, bool)
+            or not isinstance(octave, int)
+            or octave not in (0, 1)
+        ):
             raise ValueError("Mirror-63 needs three balanced digits and octave 0 or 1.")
         output = ctypes.c_uint8()
         values = []
@@ -218,10 +225,14 @@ class OxCoreNative:
     def fwht_i64(self, values: Sequence[int]) -> list[int]:
         if not values:
             raise ValueError("FWHT input must be non-empty.")
-        try:
-            buffer = (ctypes.c_int64 * len(values))(*values)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("FWHT values must fit in signed int64.") from exc
+        checked = []
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("FWHT values must be integers.")
+            if not -(2**63) <= value <= 2**63 - 1:
+                raise ValueError("FWHT values must fit in signed int64.")
+            checked.append(value)
+        buffer = (ctypes.c_int64 * len(checked))(*checked)
         status = self._lib.ox_fwht_i64(buffer, len(values))
         self._check(status, "FWHT")
         return [int(value) for value in buffer]
@@ -306,7 +317,7 @@ class OxCoreNative:
             return True
         # A tensor-view predicate reports ordinary invalid/out-of-bounds
         # metadata as False. Numeric overflow remains an exceptional failure.
-        if status in (2, 3):  # OX_EINVAL, OX_ECAPACITY
+        if status in (_OX_EINVAL, _OX_ECAPACITY):
             return False
         self._check(status, "Tensor view validation")
         return False
