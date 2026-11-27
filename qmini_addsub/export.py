@@ -251,6 +251,17 @@ def load_addsub_export(
         raise ValueError("Export weight quantization format is not supported.")
     if scaled_archive and manifest.get("per_tensor_scale") is not True:
         raise ValueError("Scaled export is missing its scale declaration.")
+    if scaled_archive:
+        multiplier = manifest.get("scale_multiplier")
+        if (
+            isinstance(multiplier, bool)
+            or not isinstance(multiplier, (int, float))
+            or not np.isfinite(multiplier)
+            or float(multiplier) != WEIGHT_SCALE_MULTIPLIER
+        ):
+            raise ValueError("Scaled export multiplier does not match the active quantization contract.")
+    elif "scale_multiplier" in manifest and manifest.get("scale_multiplier") != 1.0:
+        raise ValueError("Legacy export multiplier declaration is invalid.")
     if not scaled_archive and manifest.get("per_tensor_scale") not in (None, False):
         raise ValueError("Legacy export scale declaration is invalid.")
     if manifest.get("weight_symbols") != list(WEIGHT_SYMBOLS):
