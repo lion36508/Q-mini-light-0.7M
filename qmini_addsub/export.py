@@ -16,6 +16,7 @@ from .model import AddSubLanguageModel, AddSubLinear
 from .quantization import (
     BITS_PER_WEIGHT,
     FORMAT_NAME,
+    WEIGHT_SCALE_MULTIPLIER,
     WEIGHT_SYMBOLS,
     codes_to_values,
     pack_3bit_codes,
@@ -169,7 +170,7 @@ def export_addsub_checkpoint(
         "reserved_codewords": [5, 6, 7],
         "bits_per_weight": BITS_PER_WEIGHT,
         "per_tensor_scale": use_scaled_format,
-        "scale_multiplier": 1.4 if use_scaled_format else 1.0,
+        "scale_multiplier": WEIGHT_SCALE_MULTIPLIER if use_scaled_format else 1.0,
         "packing": "little-endian continuous 3-bit codes; 0..4 valid, 5..7 reserved",
         "zero_symbol_code": 2,
         "source_checkpoint_sha256": sha256_file(source),
@@ -250,6 +251,17 @@ def load_addsub_export(
         raise ValueError("Export weight quantization format is not supported.")
     if scaled_archive and manifest.get("per_tensor_scale") is not True:
         raise ValueError("Scaled export is missing its scale declaration.")
+    if scaled_archive:
+        multiplier = manifest.get("scale_multiplier")
+        if (
+            isinstance(multiplier, bool)
+            or not isinstance(multiplier, (int, float))
+            or not np.isfinite(multiplier)
+            or float(multiplier) != WEIGHT_SCALE_MULTIPLIER
+        ):
+            raise ValueError("Scaled export multiplier does not match the active quantization contract.")
+    elif "scale_multiplier" in manifest and manifest.get("scale_multiplier") != 1.0:
+        raise ValueError("Legacy export multiplier declaration is invalid.")
     if not scaled_archive and manifest.get("per_tensor_scale") not in (None, False):
         raise ValueError("Legacy export scale declaration is invalid.")
     if manifest.get("weight_symbols") != list(WEIGHT_SYMBOLS):

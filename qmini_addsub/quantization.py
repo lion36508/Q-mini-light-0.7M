@@ -7,11 +7,20 @@ SYMBOL_COUNT=5
 BITS_PER_WEIGHT=3
 LEGACY_FORMAT_NAME="qmini-addsub-v1"
 FORMAT_NAME="qmini-addsub-v2-scaled-five-symbol"
-WEIGHT_SCALE_MULTIPLIER=1.4
-MIN_WEIGHT_SCALE=1e-8
+WEIGHT_SCALE_MULTIPLIER=1.0
+MIN_WEIGHT_SCALE=1e-5
 
 def weight_scale(weight:torch.Tensor)->torch.Tensor:
-    """Detached positive per-tensor scale for five-symbol QAT."""
+    """Detached positive per-tensor scale for five-symbol QAT.
+
+    The scale is the mean absolute weight (multiplier 1.0), floored at 1e-5
+    so an all-zero tensor still yields a finite scale. Because the deadzone
+    is relative to this scale, a small-magnitude tensor no longer has most of
+    its weights collapse to 0.0. A 1.4 multiplier widened the deadzone and
+    left ~22% of weights at zero with the extreme symbols underused; the
+    plain mean absolute weight keeps ~16% at zero and balances all five
+    symbols. The scale is detached: the backward pass treats it as a constant.
+    """
     if not isinstance(weight,torch.Tensor) or not weight.is_floating_point(): raise TypeError("Weight scale requires floating-point weights.")
     if weight.numel()==0: raise ValueError("Cannot scale an empty weight tensor.")
     if not bool(torch.isfinite(weight).all()): raise ValueError("Non-finite weights cannot be quantized.")
@@ -95,9 +104,19 @@ def quantize_to_codes(weight: np.ndarray, scale: float | None = None) -> np.ndar
             values = values / scale32
         if not np.isfinite(values).all():
             raise ValueError("Normalized weights overflowed float32 during quantization.")
+    # Match _quantize_normalized() exactly: nearest-neighbour argmin can
+    # choose a different side of a midpoint after float32 rounding, whereas
+    # the training path uses explicit <= threshold comparisons.
     clipped = np.clip(values, -1.5, 1.5)
-    levels = np.asarray(WEIGHT_SYMBOLS, dtype=np.float32)
-    return np.argmin(np.abs(clipped[..., None] - levels), axis=-1).astype(np.uint8)
+    codes = np.where(
+        clipped <= -1.0, 0,
+        np.where(
+            clipped <= -0.25, 1,
+            np.where(clipped <= 0.25, 2,
+                     np.where(clipped <= 1.0, 3, 4)),
+        ),
+    )
+    return codes.astype(np.uint8, copy=False)
 
 def codes_to_values(codes:np.ndarray)->np.ndarray:
     v=np.asarray(codes)

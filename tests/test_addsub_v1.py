@@ -1595,6 +1595,8 @@ def test_packed_addsub_export_round_trip_reconstructs_complete_reference_model(t
     with pytest.raises(ValueError, match="Tokenizer fingerprint"):
         load_addsub_export(export_path, tokenizer_path=wrong_tokenizer)
     assert manifest["format"] == "qmini-addsub-packed-weights-v2"
+    assert manifest["per_tensor_scale"] is True
+    assert manifest["scale_multiplier"] == 1.0
     assert export_result["parameter_count"] == original.parameter_count()
     assert export_result["quantized_tensors"] > 0
     assert export_result["auxiliary_tensors"] > 0
