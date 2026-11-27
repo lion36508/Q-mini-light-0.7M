@@ -388,7 +388,7 @@ def fine_tune_from_addsub_checkpoint(
         "batch_size": batch_size,
         "learning_rate": learning_rate,
         "matrix_weight_decay": 0.01,
-        "quantization": "scaled-five-symbol-v2",
+        "quantization": "scaled-five-symbol-v3",
         "system_prompt": SYSTEM_TEXT,
         "save_every": save_every,
         "seed": seed,

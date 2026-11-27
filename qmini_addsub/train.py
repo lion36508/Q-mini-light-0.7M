@@ -273,7 +273,7 @@ def train_from_scratch(
         "sequence_length": sequence_length,
         "learning_rate": learning_rate,
         "matrix_weight_decay": 0.01,
-        "quantization": "scaled-five-symbol-v2",
+        "quantization": "scaled-five-symbol-v3",
         "save_every": save_every,
         "validate_every": validate_every,
         "seed": seed,

@@ -16,6 +16,7 @@ from .model import AddSubLanguageModel, AddSubLinear
 from .quantization import (
     BITS_PER_WEIGHT,
     FORMAT_NAME,
+    WEIGHT_SCALE_MULTIPLIER,
     WEIGHT_SYMBOLS,
     codes_to_values,
     pack_3bit_codes,
@@ -169,7 +170,7 @@ def export_addsub_checkpoint(
         "reserved_codewords": [5, 6, 7],
         "bits_per_weight": BITS_PER_WEIGHT,
         "per_tensor_scale": use_scaled_format,
-        "scale_multiplier": 1.4 if use_scaled_format else 1.0,
+        "scale_multiplier": WEIGHT_SCALE_MULTIPLIER if use_scaled_format else 1.0,
         "packing": "little-endian continuous 3-bit codes; 0..4 valid, 5..7 reserved",
         "zero_symbol_code": 2,
         "source_checkpoint_sha256": sha256_file(source),
