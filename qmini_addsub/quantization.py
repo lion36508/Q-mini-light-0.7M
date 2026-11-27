@@ -104,9 +104,19 @@ def quantize_to_codes(weight: np.ndarray, scale: float | None = None) -> np.ndar
             values = values / scale32
         if not np.isfinite(values).all():
             raise ValueError("Normalized weights overflowed float32 during quantization.")
+    # Match _quantize_normalized() exactly: nearest-neighbour argmin can
+    # choose a different side of a midpoint after float32 rounding, whereas
+    # the training path uses explicit <= threshold comparisons.
     clipped = np.clip(values, -1.5, 1.5)
-    levels = np.asarray(WEIGHT_SYMBOLS, dtype=np.float32)
-    return np.argmin(np.abs(clipped[..., None] - levels), axis=-1).astype(np.uint8)
+    codes = np.where(
+        clipped <= -1.0, 0,
+        np.where(
+            clipped <= -0.25, 1,
+            np.where(clipped <= 0.25, 2,
+                     np.where(clipped <= 1.0, 3, 4)),
+        ),
+    )
+    return codes.astype(np.uint8, copy=False)
 
 def codes_to_values(codes:np.ndarray)->np.ndarray:
     v=np.asarray(codes)
